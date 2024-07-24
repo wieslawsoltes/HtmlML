@@ -10,6 +10,7 @@ public class h1 : TextBlock
 
     public h1()
     {
+        DockPanel.SetDock(this, Dock.Top);
         FontWeight = FontWeight.Bold;
         FontSize = 32;
     }
