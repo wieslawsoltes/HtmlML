@@ -4,7 +4,7 @@ using Avalonia.Controls;
 
 namespace HtmlML;
 
-public class body : StackPanel
+public class body : DockPanel
 {
     protected override Type StyleKeyOverride => typeof(StackPanel);
 

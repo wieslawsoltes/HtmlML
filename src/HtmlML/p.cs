@@ -10,6 +10,7 @@ public class p : TextBlock
     
     public p()
     {
+        DockPanel.SetDock(this, Dock.Top);
         FontWeight = FontWeight.Normal;
         FontSize = 16;
     }
