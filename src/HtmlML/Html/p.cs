@@ -1,7 +1,9 @@
 using System;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Media;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
@@ -38,6 +40,9 @@ public class p : TextBlock
         FontWeight = FontWeight.Normal;
         FontSize = 16;
     }
+
+    [Content]
+    public InlineCollection content => Inlines;
 
     public string? @class
     {

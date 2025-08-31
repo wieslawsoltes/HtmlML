@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls.Documents;
 using Avalonia.Media;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
@@ -22,6 +23,9 @@ public class code : Span
     {
         FontFamily = new FontFamily("monospace");
     }
+
+    [Content]
+    public InlineCollection content => Inlines;
 
     public string? @class
     {

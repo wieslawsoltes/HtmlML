@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls.Documents;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
@@ -21,6 +22,9 @@ public class strong : Span
     {
         FontWeight = Avalonia.Media.FontWeight.Bold;
     }
+
+    [Content]
+    public InlineCollection content => Inlines;
 
     public string? @class
     {
