@@ -1,11 +1,12 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
-public class aside : StackPanel
+public class aside : Border
 {
-    protected override System.Type StyleKeyOverride => typeof(StackPanel);
+    protected override System.Type StyleKeyOverride => typeof(Border);
 
     public static readonly DirectProperty<aside, string?> idProperty =
         NameProperty.AddOwner<aside>(o => o.Name, (o, v) => o.Name = v);
@@ -22,6 +23,8 @@ public class aside : StackPanel
     public static readonly StyledProperty<string?> titleProperty =
         HtmlElementBase.titleProperty.AddOwner<aside>();
 
+    private readonly StackPanel _host = new StackPanel() { Orientation = Avalonia.Layout.Orientation.Vertical };
+
     static aside()
     {
         classProperty.Changed.AddClassHandler<aside>((o, e) => HtmlElementBase.ApplyClasses(o, e.NewValue as string));
@@ -32,8 +35,8 @@ public class aside : StackPanel
 
     public aside()
     {
-        Orientation = Avalonia.Layout.Orientation.Vertical;
         DockPanel.SetDock(this, Dock.Top);
+        Child = _host;
     }
 
     public string? @class
@@ -59,4 +62,7 @@ public class aside : StackPanel
         get => GetValue(titleProperty);
         set => SetValue(titleProperty, value);
     }
+
+    [Content]
+    public Controls content => _host.Children;
 }
