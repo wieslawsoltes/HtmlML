@@ -16,30 +16,42 @@
     <!-- Inline JavaScript to demo canvas drawing -->
     <script type="text/javascript">
       <![CDATA[
-      var __draw_ctx = null;
-      var __draw_active = false;
-      var __global = (typeof globalThis !== 'undefined') ? globalThis : this;
-      __global.onPointerEvent = function(id, type, x, y) {
-        if (id !== 'draw') return;
-        if (!__draw_ctx) {
-          var canvas = document.getElementById('draw');
-          if (!canvas) return;
-          __draw_ctx = canvas.getContext('2d');
-          __draw_ctx.strokeStyle = '#202020';
-          __draw_ctx.lineWidth = 2;
-        }
-        if (type === 'pointerdown') {
-          __draw_active = true;
-          __draw_ctx.beginPath();
-          __draw_ctx.moveTo(x, y);
-        } else if (type === 'pointermove') {
-          if (!__draw_active) return;
-          __draw_ctx.lineTo(x, y);
-          __draw_ctx.stroke();
-        } else if (type === 'pointerup') {
-          __draw_active = false;
-        }
-      };
+      (() => {
+        const canvasId = 'draw';
+        let ctx = null;
+        let drawing = false;
+
+        const ensureCtx = () => {
+          if (ctx) return true;
+          const canvas = document.getElementById(canvasId);
+          if (!canvas) return false;
+          ctx = canvas.getContext('2d');
+          ctx.strokeStyle = '#202020';
+          ctx.lineWidth = 2;
+          return true;
+        };
+
+        globalThis.onPointerEvent = (id, type, x, y) => {
+          if (id !== canvasId) return;
+          if (!ensureCtx()) return;
+          switch (type) {
+            case 'pointerdown':
+              drawing = true;
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              break;
+            case 'pointermove':
+              if (!drawing) return;
+              ctx.lineTo(x, y);
+              ctx.stroke();
+              break;
+            case 'pointerup':
+            case 'pointercancel':
+              drawing = false;
+              break;
+          }
+        };
+      })();
       ]]>
     </script>
   </head>
@@ -102,7 +114,7 @@
     <section class="card" id="canvas-demo">
       <h2>Canvas Draw</h2>
       <p class="muted">Drag on the canvas to draw lines</p>
-      <canvas id="draw" width="600" height="300" class="card" style="background:#e0e0e0" />
+      <canvas id="draw" width="600" height="300" class="card" style="background:#ffffff" />
     </section>
 
   </body>
