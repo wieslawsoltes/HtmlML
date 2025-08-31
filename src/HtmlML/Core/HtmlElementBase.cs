@@ -97,6 +97,8 @@ public class HtmlElementBase : StyledElement
                             tc.Background = bg;
                         else if (element is canvas cv)
                             cv.Background = bg;
+                        else if (element is Avalonia.Controls.Documents.TextElement teBg)
+                            teBg.Background = bg;
                     }
                     break;
 
@@ -135,6 +137,17 @@ public class HtmlElementBase : StyledElement
 
     private static bool TryParseBrush(string s, out IBrush brush)
     {
+        s = s.Trim();
+        // Basic CSS color names and rgb/rgba support
+        if (CssRuntimeApplier.TryParseRgbFunctions(s, out var col))
+        {
+            brush = new SolidColorBrush(col);
+            return true;
+        }
+        if (CssRuntimeApplier.TryMapCssColorName(s, out var hex))
+        {
+            try { brush = Brush.Parse(hex); return true; } catch { }
+        }
         try
         {
             brush = Brush.Parse(s);

@@ -41,7 +41,25 @@ internal static class CssRuntimeApplier
                     ApplyDecls(ctrl, r.Decls);
                 }
             }
+
+            // Extend styling into inline TextElements for any TextBlock-like control
+            if (ctrl is TextBlock tb)
+            {
+                foreach (var te in TraverseInlines(tb))
+                {
+                    foreach (var r in rules)
+                    {
+                        if (MatchesInline(te, r))
+                        {
+                            ApplyDeclsInline(te, r.Decls);
+                        }
+                    }
+                }
+            }
         }
+
+        // Ensure inline style attributes take precedence over stylesheet rules
+        ReapplyInlineStyles(root);
     }
 
     private static List<Rule> ParseCss(string css)
@@ -188,6 +206,201 @@ internal static class CssRuntimeApplier
         return true;
     }
 
+    // Reapply inline styles declared via style="..." so they win over CSS rules
+    private static void ReapplyInlineStyles(Control root)
+    {
+        foreach (var ctrl in Traverse(root))
+        {
+            string? s = GetInlineStyleForControl(ctrl);
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                HtmlElementBase.ApplyStyles(ctrl, s);
+            }
+
+            if (ctrl is TextBlock tb)
+            {
+                foreach (var te in TraverseInlines(tb))
+                {
+                    var inlineStyle = GetInlineStyleForTextElement(te);
+                    if (!string.IsNullOrWhiteSpace(inlineStyle))
+                    {
+                        HtmlElementBase.ApplyStyles(te, inlineStyle);
+                    }
+                }
+            }
+        }
+    }
+
+    private static string? GetInlineStyleForControl(Control c)
+    {
+        return c switch
+        {
+            HtmlML.body v => v.style,
+            HtmlML.div v => v.style,
+            HtmlML.p v => v.style,
+            HtmlML.h1 v => v.style,
+            HtmlML.h2 v => v.style,
+            HtmlML.h3 v => v.style,
+            HtmlML.h4 v => v.style,
+            HtmlML.h5 v => v.style,
+            HtmlML.h6 v => v.style,
+            HtmlML.ul v => v.style,
+            HtmlML.ol v => v.style,
+            HtmlML.li v => v.style,
+            HtmlML.img v => v.style,
+            HtmlML.hr v => v.style,
+            HtmlML.section v => v.style,
+            HtmlML.header v => v.style,
+            HtmlML.footer v => v.style,
+            HtmlML.nav v => v.style,
+            HtmlML.article v => v.style,
+            HtmlML.aside v => v.style,
+            HtmlML.canvas v => v.style,
+            _ => null
+        };
+    }
+
+    private static string? GetInlineStyleForTextElement(Avalonia.Controls.Documents.TextElement te)
+    {
+        return te switch
+        {
+            HtmlML.span v => v.style,
+            HtmlML.strong v => v.style,
+            HtmlML.em v => v.style,
+            HtmlML.code v => v.style,
+            HtmlML.a v => v.style,
+            _ => null
+        };
+    }
+
+    // Inline matching/styling
+    private static IEnumerable<Avalonia.Controls.Documents.TextElement> TraverseInlines(TextBlock tb)
+    {
+        foreach (var inline in tb.Inlines)
+        {
+            foreach (var te in TraverseInlineRecursive(inline))
+                yield return te;
+        }
+    }
+
+    private static IEnumerable<Avalonia.Controls.Documents.TextElement> TraverseInlineRecursive(Avalonia.Controls.Documents.Inline inline)
+    {
+        if (inline is Avalonia.Controls.Documents.TextElement te)
+            yield return te;
+        if (inline is Avalonia.Controls.Documents.Span sp)
+        {
+            foreach (var child in sp.Inlines)
+            {
+                foreach (var te2 in TraverseInlineRecursive(child))
+                    yield return te2;
+            }
+        }
+    }
+
+    private static string GetInlineTypeToken(Avalonia.Controls.Documents.TextElement te)
+    {
+        var n = te.GetType().Name;
+        // Map our HtmlML inline types directly
+        switch (n)
+        {
+            case "span":
+            case "strong":
+            case "em":
+            case "code":
+            case "a":
+                return n;
+            default:
+                return string.Empty;
+        }
+    }
+
+    private static bool MatchesInline(Avalonia.Controls.Documents.TextElement te, Rule r)
+    {
+        if (r.Segments.Count == 0)
+            return false;
+        var last = r.Segments[^1];
+        if (!MatchesInlineSimple(te, last))
+            return false;
+
+        // Walk ancestors through owning TextBlock first, then Spans
+        int si = r.Segments.Count - 2;
+        Avalonia.Controls.Documents.Span? parentSpan = te.Parent as Avalonia.Controls.Documents.Span;
+        Control? parentControl = te.Parent as Control;
+        while (si >= 0)
+        {
+            var seg = r.Segments[si];
+            bool matched = false;
+            if (parentSpan is not null)
+            {
+                // inline ancestor
+                if (MatchesInlineSpanSimple(parentSpan, seg))
+                {
+                    si--; matched = true;
+                }
+                parentSpan = parentSpan.Parent as Avalonia.Controls.Documents.Span;
+                if (parentSpan is null && parentControl is null)
+                {
+                    parentControl = (te.Parent as Avalonia.Controls.Documents.Inline)?.Parent as Control;
+                }
+            }
+            else if (parentControl is not null)
+            {
+                if (MatchesSimple(parentControl, GetTypeToken(parentControl), seg))
+                {
+                    si--; matched = true;
+                }
+                parentControl = parentControl.Parent as Control;
+            }
+            else break;
+            if (!matched)
+            {
+                // keep climbing without consuming segment
+                continue;
+            }
+        }
+        return si < 0;
+    }
+
+    private static bool MatchesInlineSimple(Avalonia.Controls.Documents.TextElement te, SelectorSegment seg)
+    {
+        var token = GetInlineTypeToken(te);
+        if (!string.IsNullOrEmpty(seg.TypeToken) && !string.Equals(seg.TypeToken, token, StringComparison.Ordinal))
+            return false;
+        // id
+        var name = (te as Avalonia.StyledElement)?.Name;
+        if (!string.IsNullOrEmpty(seg.Id) && !string.Equals(name, seg.Id, StringComparison.Ordinal))
+            return false;
+        // classes
+        var classes = (te as Avalonia.StyledElement)?.Classes;
+        if (classes is not null)
+        {
+            foreach (var cls in seg.Classes)
+            {
+                if (!classes.Contains(cls)) return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool MatchesInlineSpanSimple(Avalonia.Controls.Documents.Span sp, SelectorSegment seg)
+    {
+        var token = GetInlineTypeToken(sp);
+        if (!string.IsNullOrEmpty(seg.TypeToken) && !string.Equals(seg.TypeToken, token, StringComparison.Ordinal))
+            return false;
+        var name = (sp as Avalonia.StyledElement)?.Name;
+        if (!string.IsNullOrEmpty(seg.Id) && !string.Equals(name, seg.Id, StringComparison.Ordinal))
+            return false;
+        var classes = (sp as Avalonia.StyledElement)?.Classes;
+        if (classes is not null)
+        {
+            foreach (var cls in seg.Classes)
+            {
+                if (!classes.Contains(cls)) return false;
+            }
+        }
+        return true;
+    }
+
     private static void ApplyDecls(Control c, List<(string name, string value)> decls)
     {
         foreach (var (name, value) in decls)
@@ -214,6 +427,14 @@ internal static class CssRuntimeApplier
                     break;
                 case "text-align":
                     if (c is TextBlock tba && TryParseTextAlign(value, out var ta)) tba.TextAlignment = ta;
+                    break;
+                case "text-decoration":
+                    if (c is TextBlock tbd)
+                    {
+                        var v = value.Trim().ToLowerInvariant();
+                        if (v.Contains("underline")) tbd.TextDecorations = Avalonia.Media.TextDecorations.Underline;
+                        else if (v.Contains("none")) tbd.TextDecorations = null;
+                    }
                     break;
                 case "margin":
                     if (TryParseThickness(value, out var m)) c.Margin = m;
@@ -244,6 +465,42 @@ internal static class CssRuntimeApplier
                     break;
                 case "display":
                     ApplyDisplay(c, value);
+                    break;
+            }
+        }
+    }
+
+    private static void ApplyDeclsInline(Avalonia.Controls.Documents.TextElement te, List<(string name, string value)> decls)
+    {
+        foreach (var (name, value) in decls)
+        {
+            switch (name.Trim().ToLowerInvariant())
+            {
+                case "color":
+                    if (TryParseBrush(value, out var fg)) te.Foreground = fg;
+                    break;
+                case "background":
+                case "background-color":
+                    if (TryParseBrush(value, out var bg)) te.Background = bg;
+                    break;
+                case "font-size":
+                    if (TryParseDouble(value, out var fs)) te.FontSize = fs;
+                    break;
+                case "font-weight":
+                    if (TryParseFontWeight(value, out var fw)) te.FontWeight = fw;
+                    break;
+                case "font-style":
+                    {
+                        var v = value.Trim().ToLowerInvariant();
+                        te.FontStyle = v == "italic" ? Avalonia.Media.FontStyle.Italic : Avalonia.Media.FontStyle.Normal;
+                    }
+                    break;
+                case "font-family":
+                    te.FontFamily = new FontFamily(value.Trim());
+                    break;
+                // text-decoration not supported on TextElement in this Avalonia version
+                // underline can still be applied at TextBlock level via block selector
+                case "text-decoration":
                     break;
             }
         }
@@ -316,7 +573,7 @@ internal static class CssRuntimeApplier
             case "em":
             case "code":
             case "a":
-                return "TextElement"; // will match nothing; combined with class-only selectors still work
+                return type.ToLowerInvariant();
             case "div":
             case "body":
             case "li":
@@ -338,7 +595,106 @@ internal static class CssRuntimeApplier
 
     private static bool TryParseBrush(string s, out IBrush brush)
     {
-        try { brush = Brush.Parse(s); return true; } catch { brush = Brushes.Transparent; return false; }
+        s = s.Trim();
+        // Named CSS colors
+        if (TryMapCssColorName(s, out var hex))
+        {
+            try { brush = Brush.Parse(hex); return true; } catch { }
+        }
+        // rgb()/rgba()
+        if (TryParseRgbFunctions(s, out var color))
+        {
+            brush = new SolidColorBrush(color);
+            return true;
+        }
+        try
+        {
+            brush = Brush.Parse(s);
+            return true;
+        }
+        catch
+        {
+            brush = Brushes.Transparent;
+            return false;
+        }
+    }
+
+    internal static bool TryMapCssColorName(string s, out string hex)
+    {
+        hex = string.Empty;
+        switch (s.ToLowerInvariant())
+        {
+            case "black": hex = "#000000"; return true;
+            case "white": hex = "#FFFFFF"; return true;
+            case "red": hex = "#FF0000"; return true;
+            case "lime": hex = "#00FF00"; return true;
+            case "blue": hex = "#0000FF"; return true;
+            case "yellow": hex = "#FFFF00"; return true;
+            case "cyan":
+            case "aqua": hex = "#00FFFF"; return true;
+            case "magenta":
+            case "fuchsia": hex = "#FF00FF"; return true;
+            case "gray":
+            case "grey": hex = "#808080"; return true;
+            case "silver": hex = "#C0C0C0"; return true;
+            case "maroon": hex = "#800000"; return true;
+            case "olive": hex = "#808000"; return true;
+            case "green": hex = "#008000"; return true;
+            case "teal": hex = "#008080"; return true;
+            case "navy": hex = "#000080"; return true;
+            case "purple": hex = "#800080"; return true;
+            case "orange": hex = "#FFA500"; return true;
+            default: return false;
+        }
+    }
+
+    internal static bool TryParseRgbFunctions(string s, out Avalonia.Media.Color color)
+    {
+        color = default;
+        try
+        {
+            if (s.StartsWith("rgb(", StringComparison.OrdinalIgnoreCase) && s.EndsWith(")"))
+            {
+                var inner = s.Substring(4, s.Length - 5);
+                var parts = inner.Split(',');
+                if (parts.Length == 3)
+                {
+                    byte r = ParseByte(parts[0]);
+                    byte g = ParseByte(parts[1]);
+                    byte b = ParseByte(parts[2]);
+                    color = Avalonia.Media.Color.FromRgb(r, g, b);
+                    return true;
+                }
+            }
+            else if (s.StartsWith("rgba(", StringComparison.OrdinalIgnoreCase) && s.EndsWith(")"))
+            {
+                var inner = s.Substring(5, s.Length - 6);
+                var parts = inner.Split(',');
+                if (parts.Length == 4)
+                {
+                    byte r = ParseByte(parts[0]);
+                    byte g = ParseByte(parts[1]);
+                    byte b = ParseByte(parts[2]);
+                    double a = double.Parse(parts[3].Trim(), CultureInfo.InvariantCulture);
+                    byte aa = (byte)Math.Round(a * 255);
+                    color = Avalonia.Media.Color.FromArgb(aa, r, g, b);
+                    return true;
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    private static byte ParseByte(string s)
+    {
+        s = s.Trim();
+        if (s.EndsWith("%", StringComparison.Ordinal))
+        {
+            var pct = double.Parse(s[..^1], CultureInfo.InvariantCulture) / 100.0;
+            return (byte)Math.Clamp((int)Math.Round(pct * 255), 0, 255);
+        }
+        return (byte)Math.Clamp(int.Parse(s, CultureInfo.InvariantCulture), 0, 255);
     }
 
     private static bool TryParseDouble(string s, out double d)
