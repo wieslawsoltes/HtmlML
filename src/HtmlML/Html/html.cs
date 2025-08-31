@@ -219,26 +219,32 @@ public class html : Window
         {
             if (Uri.TryCreate(href, UriKind.Absolute, out var uri))
             {
+                var effType = type;
+                if (string.IsNullOrWhiteSpace(effType) && uri.IsAbsoluteUri && uri.AbsolutePath.EndsWith(".css", StringComparison.OrdinalIgnoreCase))
+                    effType = "text/css";
                 if (uri.Scheme == "avares")
                 {
                     using var stream = AssetLoader.Open(uri);
                     using var reader = new StreamReader(stream);
                     var text = reader.ReadToEnd();
-                    TryParseAndApplyStyle(text, type);
+                    TryParseAndApplyStyle(text, effType);
                     return;
                 }
 
                 if (uri.IsFile && File.Exists(uri.LocalPath))
                 {
                     var text = File.ReadAllText(uri.LocalPath);
-                    TryParseAndApplyStyle(text, type);
+                    TryParseAndApplyStyle(text, effType);
                     return;
                 }
             }
             else if (File.Exists(href))
             {
                 var text = File.ReadAllText(href);
-                TryParseAndApplyStyle(text, type);
+                var effType = type;
+                if (string.IsNullOrWhiteSpace(effType) && href.EndsWith(".css", StringComparison.OrdinalIgnoreCase))
+                    effType = "text/css";
+                TryParseAndApplyStyle(text, effType);
                 return;
             }
         }
