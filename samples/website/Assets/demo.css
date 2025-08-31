@@ -1,0 +1,16 @@
+/* Demo CSS for HtmlML */
+
+/* Typography */
+h2 { color: #2A72D4; }
+.hero { font-size: 36px; color: #2A72D4; font-weight: bold; margin: 0 0 8px 0; }
+.muted { color: #888; font-size: 14px; }
+p { margin: 8px 0; }
+
+/* Layout */
+.card { background: #F8F9FB; margin: 8px 0; padding: 12px; }
+#intro { margin: 16px 0; }
+.app-body { background: #FFFFFF; }
+
+/* Media + rules */
+img { width: 200px; }
+hr.spaced { margin: 12px 0; }

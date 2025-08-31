@@ -14,8 +14,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "build", "build", "{DCB18142
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{8BFEF32D-8935-4277-8ACD-8463DF3814BB}"
 	ProjectSection(SolutionItems) = preProject
-		LICENSE.TXT = LICENSE.TXT
 		README.md = README.md
+		LICENSE = LICENSE
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{EF896A23-AA5E-45BA-B843-B1F02D600D81}"
