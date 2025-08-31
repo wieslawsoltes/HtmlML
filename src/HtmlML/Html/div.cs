@@ -2,12 +2,13 @@ using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
-public class div : DockPanel
+public class div : Border
 {
-    protected override Type StyleKeyOverride => typeof(DockPanel);
+    protected override Type StyleKeyOverride => typeof(Border);
 
     public static readonly DirectProperty<div, string?> idProperty =
         NameProperty.AddOwner<div>(o => o.Name, (o, v) => o.Name = v);
@@ -24,6 +25,8 @@ public class div : DockPanel
     public static readonly StyledProperty<string?> titleProperty =
         HtmlElementBase.titleProperty.AddOwner<div>();
 
+    private readonly DockPanel _host = new DockPanel();
+
     static div()
     {
         classProperty.Changed.AddClassHandler<div>((o, e) => HtmlElementBase.ApplyClasses(o, e.NewValue as string));
@@ -31,6 +34,14 @@ public class div : DockPanel
         disabledProperty.Changed.AddClassHandler<div>((o, e) => HtmlElementBase.ApplyDisabled(o, e.NewValue is bool b && b));
         titleProperty.Changed.AddClassHandler<div>((o, e) => HtmlElementBase.ApplyTitle(o, e.NewValue as string));
     }
+
+    public div()
+    {
+        Child = _host;
+    }
+
+    [Content]
+    public Controls content => _host.Children;
 
     public string? @class
     {

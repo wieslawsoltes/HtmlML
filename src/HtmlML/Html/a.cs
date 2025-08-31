@@ -9,6 +9,9 @@ public class a : Span
     public static readonly StyledProperty<string?> hrefProperty =
         Avalonia.AvaloniaProperty.Register<a, string?>(nameof(href));
 
+    public static readonly DirectProperty<a, string?> idProperty =
+        StyledElement.NameProperty.AddOwner<a>(o => o.Name, (o, v) => o.Name = v);
+
     public static readonly StyledProperty<string?> classProperty =
         HtmlElementBase.classProperty.AddOwner<a>();
 
@@ -31,6 +34,12 @@ public class a : Span
 
     [Content]
     public InlineCollection content => Inlines;
+
+    public string? id
+    {
+        get => Name;
+        set => Name = value;
+    }
 
     public string? @class
     {

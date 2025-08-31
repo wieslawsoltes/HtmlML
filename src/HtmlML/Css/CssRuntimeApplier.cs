@@ -156,6 +156,10 @@ internal static class CssRuntimeApplier
         {
             foreach (var x in Traverse(qc)) yield return x;
         }
+        else if (root is Decorator dec && dec.Child is Control child)
+        {
+            foreach (var x in Traverse(child)) yield return x;
+        }
     }
 
     private static string GetTypeToken(Control c)
@@ -416,6 +420,7 @@ internal static class CssRuntimeApplier
                     {
                         if (c is Panel p) p.Background = bg;
                         else if (c is TemplatedControl tc) tc.Background = bg;
+                        else if (c is Border bd) bd.Background = bg;
                         else if (c is canvas canv) canv.Background = bg;
                     }
                     break;
@@ -441,6 +446,7 @@ internal static class CssRuntimeApplier
                     break;
                 case "padding":
                     if (c is ContentControl contentCtrl && TryParseThickness(value, out var pad)) contentCtrl.Padding = pad;
+                    else if (c is Border bor && TryParseThickness(value, out var pad2)) bor.Padding = pad2;
                     break;
                 case "width":
                     if (TryParseDouble(value, out var w)) c.Width = w;
@@ -456,9 +462,14 @@ internal static class CssRuntimeApplier
                     break;
                 case "border-color":
                     if (c is TemplatedControl tcc && TryParseBrush(value, out var bb)) tcc.BorderBrush = bb;
+                    else if (c is Border bbc && TryParseBrush(value, out var bbb)) bbc.BorderBrush = bbb;
                     break;
                 case "border-width":
                     if (c is TemplatedControl tcw && TryParseThickness(value, out var bt)) tcw.BorderThickness = bt;
+                    else if (c is Border btw && TryParseThickness(value, out var bt2)) btw.BorderThickness = bt2;
+                    break;
+                case "border-radius":
+                    if (c is Border crb && TryParseCornerRadius(value, out var cr)) crb.CornerRadius = cr;
                     break;
                 case "visibility":
                     ApplyVisibility(c, value);
@@ -508,15 +519,29 @@ internal static class CssRuntimeApplier
 
     private static void ApplyBorder(Control c, string value)
     {
-        if (c is not TemplatedControl tc) return;
         // very simple: try to find a color and a width token
-        if (TryParseBrush(value, out var brush)) tc.BorderBrush = brush;
+        if (c is TemplatedControl tc)
+        {
+            if (TryParseBrush(value, out var brush)) tc.BorderBrush = brush;
+        }
+        else if (c is Border bd)
+        {
+            if (TryParseBrush(value, out var brush)) bd.BorderBrush = brush;
+        }
         // extract first length
         var parts = value.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
         foreach (var p in parts)
         {
-            if (TryParseThickness(p, out var th)) { tc.BorderThickness = th; break; }
-            if (TryParseDouble(p, out var d)) { tc.BorderThickness = new Thickness(d); break; }
+            if (TryParseThickness(p, out var th))
+            {
+                if (c is TemplatedControl tc2) { tc2.BorderThickness = th; break; }
+                if (c is Border bd2) { bd2.BorderThickness = th; break; }
+            }
+            if (TryParseDouble(p, out var d))
+            {
+                if (c is TemplatedControl tc3) { tc3.BorderThickness = new Thickness(d); break; }
+                if (c is Border bd3) { bd3.BorderThickness = new Thickness(d); break; }
+            }
         }
     }
 
@@ -769,4 +794,35 @@ internal static class CssRuntimeApplier
         return s;
     }
     private static double ParseDouble(string s) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : 0;
+
+    private static bool TryParseCornerRadius(string s, out CornerRadius cr)
+    {
+        var parts = s.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+                     .Select(x => NormalizeNumber(x))
+                     .ToArray();
+        double tl, tr, br, bl;
+        switch (parts.Length)
+        {
+            case 1:
+                tl = tr = br = bl = ParseDouble(parts[0]);
+                break;
+            case 2:
+                tl = br = ParseDouble(parts[0]);
+                tr = bl = ParseDouble(parts[1]);
+                break;
+            case 3:
+                tl = ParseDouble(parts[0]);
+                tr = bl = ParseDouble(parts[1]);
+                br = ParseDouble(parts[2]);
+                break;
+            default:
+                tl = ParseDouble(parts.ElementAtOrDefault(0) ?? "0");
+                tr = ParseDouble(parts.ElementAtOrDefault(1) ?? "0");
+                br = ParseDouble(parts.ElementAtOrDefault(2) ?? "0");
+                bl = ParseDouble(parts.ElementAtOrDefault(3) ?? "0");
+                break;
+        }
+        cr = new CornerRadius(tl, tr, br, bl);
+        return true;
+    }
 }
