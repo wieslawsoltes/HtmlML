@@ -1,17 +1,124 @@
 <html xmlns="https://github.com/avaloniaui"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-      x:Class="wwwroot.index">
-
+      x:Class="wwwroot.index"
+      title="HtmlML Demo">
   <head>
-    <title>Page Title</title>
+    <title>HtmlML Demo</title>
+    <!-- Linked CSS via <link rel="stylesheet" href="...css" type="text/css"/> -->
+    <link rel="stylesheet" href="avares://website/Assets/demo.css" type="text/css" />
+    <!-- Inline CSS via <style type="text/css"> -->
+    <style type="text/css">
+      <![CDATA[
+      .hero { color: red; }
+      .card { margin: 8px 0; }
+      ]]>
+    </style>
+    <!-- Inline JavaScript to demo canvas drawing -->
+    <script type="text/javascript">
+      <![CDATA[
+      var __draw_ctx = null;
+      var __draw_active = false;
+      var __global = (typeof globalThis !== 'undefined') ? globalThis : this;
+      __global.onPointerEvent = function(id, type, x, y) {
+        if (id !== 'draw') return;
+        if (!__draw_ctx) {
+          var canvas = document.getElementById('draw');
+          if (!canvas) return;
+          __draw_ctx = canvas.getContext('2d');
+          __draw_ctx.strokeStyle = '#202020';
+          __draw_ctx.lineWidth = 2;
+        }
+        if (type === 'pointerdown') {
+          __draw_active = true;
+          __draw_ctx.beginPath();
+          __draw_ctx.moveTo(x, y);
+        } else if (type === 'pointermove') {
+          if (!__draw_active) return;
+          __draw_ctx.lineTo(x, y);
+          __draw_ctx.stroke();
+        } else if (type === 'pointerup') {
+          __draw_active = false;
+        }
+      };
+      ]]>
+    </script>
   </head>
 
-  <body>
+  <body scroll="auto" class="app-body">
 
-    <div>
-      <h1>This is a Heading</h1>
-      <p>This is a paragraph.</p>
-    </div>
+    <header class="card">
+      <h1 class="hero" title="Heading tooltip">HtmlML Demo</h1>
+      <p class="muted">Demonstrates elements, classes, and styles.</p>
+      <nav>
+        <p>
+          <p.Inlines>
+            <a href="https://github.com/wieslawsoltes/HtmlML"><Run Text="GitHub"/></a>
+            <Run Text=" | "/>
+            <a href="https://avaloniaui.net/"><Run Text="Avalonia"/></a>
+          </p.Inlines>
+        </p>
+      </nav>
+    </header>
+
+    <section class="card" id="intro">
+      <h2>Headings</h2>
+      <h3>Subheading</h3>
+      <h4>H4 title</h4>
+      <h5>H5 title</h5>
+      <h6>H6 title</h6>
+      <p>
+        <p.Inlines>
+          <Run Text="Text with "/>
+          <strong><Run Text="bold"/></strong>
+          <Run Text=", "/>
+          <em><Run Text="italic"/></em>
+          <Run Text=", "/>
+          <code><Run Text="code"/></code>
+          <Run Text=", and a "/>
+          <a href="https://example.com"><Run Text="link"/></a>
+          <Run Text="."/>
+        </p.Inlines>
+      </p>
+    </section>
+
+    <section class="card" id="lists">
+      <h2>Lists</h2>
+      <ul>
+        <li><p>Unordered item one</p></li>
+        <li><p>Unordered item two</p></li>
+      </ul>
+      <ol>
+        <li><p>First</p></li>
+        <li><p>Second</p></li>
+      </ol>
+    </section>
+
+    <section class="card" id="media">
+      <h2>Image</h2>
+      <img src="avares://website/Assets/logo.png" alt="Logo" title="Image tooltip" />
+      <p class="muted">(Provide Assets/logo.png to see the image)</p>
+    </section>
+
+    <hr class="spaced" />
+
+    <article class="card">
+      <h2>Article</h2>
+      <p title="Tooltip" disabled="true">Disabled paragraph with tooltip.</p>
+    </article>
+
+    <aside class="card">
+      <p style="text-align:center;color:#666">Aside content</p>
+    </aside>
+
+    <footer class="card">
+      <p>Footer</p>
+    </footer>
+
+    <section class="card" id="canvas-demo">
+      <h2>Canvas Draw</h2>
+      <p class="muted">Drag on the canvas to draw lines</p>
+      <canvas id="draw" width="600" height="300" class="card" style="background:#e0e0e0" />
+    </section>
 
   </body>
 
