@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls.Documents;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
@@ -27,6 +28,9 @@ public class a : Span
     }
 
     public a() { }
+
+    [Content]
+    public InlineCollection content => Inlines;
 
     public string? @class
     {

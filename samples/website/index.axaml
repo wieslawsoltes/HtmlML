@@ -51,11 +51,8 @@
       <p class="muted">Demonstrates elements, classes, and styles.</p>
       <nav>
         <p>
-          <p.Inlines>
-            <a href="https://github.com/wieslawsoltes/HtmlML"><Run Text="GitHub"/></a>
-            <Run Text=" | "/>
-            <a href="https://avaloniaui.net/"><Run Text="Avalonia"/></a>
-          </p.Inlines>
+          <a href="https://github.com/wieslawsoltes/HtmlML">GitHub</a> | 
+          <a href="https://avaloniaui.net/">Avalonia</a>
         </p>
       </nav>
     </header>
@@ -66,19 +63,7 @@
       <h4>H4 title</h4>
       <h5>H5 title</h5>
       <h6>H6 title</h6>
-      <p>
-        <p.Inlines>
-          <Run Text="Text with "/>
-          <strong><Run Text="bold"/></strong>
-          <Run Text=", "/>
-          <em><Run Text="italic"/></em>
-          <Run Text=", "/>
-          <code><Run Text="code"/></code>
-          <Run Text=", and a "/>
-          <a href="https://example.com"><Run Text="link"/></a>
-          <Run Text="."/>
-        </p.Inlines>
-      </p>
+      <p>Text with <strong>bold</strong>, <em>italic</em>, <code>code</code>, and a <a href="https://example.com">link</a>.</p>
     </section>
 
     <section class="card" id="lists">

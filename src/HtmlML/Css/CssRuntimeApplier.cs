@@ -13,11 +13,16 @@ namespace HtmlML;
 
 internal static class CssRuntimeApplier
 {
-    private sealed class Rule
+    private sealed class SelectorSegment
     {
-        public string? TypeToken; // Avalonia target token like "TextBlock", "DockPanel"
+        public string? TypeToken;
         public string? Id;
         public List<string> Classes = new();
+    }
+
+    private sealed class Rule
+    {
+        public List<SelectorSegment> Segments = new();
         public List<(string name, string value)> Decls = new();
     }
 
@@ -29,12 +34,12 @@ internal static class CssRuntimeApplier
 
         foreach (var ctrl in Traverse(root))
         {
-            var token = GetTypeToken(ctrl);
             foreach (var r in rules)
             {
-                if (!Matches(ctrl, token, r))
-                    continue;
-                ApplyDecls(ctrl, r.Decls);
+                if (Matches(ctrl, r))
+                {
+                    ApplyDecls(ctrl, r.Decls);
+                }
             }
         }
     }
@@ -54,15 +59,16 @@ internal static class CssRuntimeApplier
                     var selectors = sr.SelectorText.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0);
                     foreach (var sel in selectors)
                     {
-                        var rs = ParseSelector(sel);
-                        if (rs is null) continue;
+                        var segments = ParseSelectorSegments(sel);
+                        if (segments is null || segments.Count == 0) continue;
+                        var ruleObj = new Rule { Segments = segments };
                         foreach (var prop in sr.Style)
                         {
                             var name = prop.Name;
                             var val = sr.Style.GetPropertyValue(name) ?? string.Empty;
-                            rs.Decls.Add((name, val));
+                            ruleObj.Decls.Add((name, val));
                         }
-                        list.Add(rs);
+                        list.Add(ruleObj);
                     }
                 }
             }
@@ -74,55 +80,38 @@ internal static class CssRuntimeApplier
         return list;
     }
 
-    private static Rule? ParseSelector(string cssSelector)
+    private static List<SelectorSegment>? ParseSelectorSegments(string cssSelector)
     {
-        // Only support first simple selector (ignore descendants/combinators)
-        var firstSpace = cssSelector.IndexOfAny(new[] { ' ', '>', '+', '~' });
-        if (firstSpace >= 0)
-            cssSelector = cssSelector.Substring(0, firstSpace);
-
-        string type = string.Empty;
-        var classes = new List<string>();
-        string id = string.Empty;
-
+        var segments = new List<SelectorSegment>();
         int i = 0;
         while (i < cssSelector.Length)
         {
-            char c = cssSelector[i];
-            if (c == '.')
-            {
-                i++;
-                var cls = ReadIdent(cssSelector, ref i);
-                if (!string.IsNullOrWhiteSpace(cls)) classes.Add(cls);
-            }
-            else if (c == '#')
-            {
-                i++;
-                id = ReadIdent(cssSelector, ref i);
-            }
-            else if (c == '[')
-            {
-                // skip attribute selector
-                i++;
-                while (i < cssSelector.Length && cssSelector[i] != ']') i++;
-                if (i < cssSelector.Length) i++;
-            }
-            else if (c == ':')
-            {
-                // skip pseudo
-                i++;
-                while (i < cssSelector.Length && (char.IsLetter(cssSelector[i]) || cssSelector[i] == '-')) i++;
-            }
-            else
-            {
-                type = ReadIdent(cssSelector, ref i);
-            }
-        }
+            // skip whitespace/combinators between segments
+            while (i < cssSelector.Length && (char.IsWhiteSpace(cssSelector[i]) || cssSelector[i] == '>' || cssSelector[i] == '+' || cssSelector[i] == '~')) i++;
+            if (i >= cssSelector.Length) break;
+            int start = i;
+            while (i < cssSelector.Length && !char.IsWhiteSpace(cssSelector[i]) && cssSelector[i] != '>' && cssSelector[i] != '+' && cssSelector[i] != '~' && cssSelector[i] != ',') i++;
+            var part = cssSelector.Substring(start, i - start);
 
-        var token = MapTypeToAvalonia(type);
-        if (string.IsNullOrEmpty(token) && classes.Count == 0 && string.IsNullOrEmpty(id))
-            return null;
-        return new Rule { TypeToken = token, Id = id, Classes = classes };
+            string type = string.Empty;
+            var classes = new List<string>();
+            string id = string.Empty;
+            int j = 0;
+            while (j < part.Length)
+            {
+                char c = part[j];
+                if (c == '.') { j++; var cls = ReadIdent(part, ref j); if (!string.IsNullOrWhiteSpace(cls)) classes.Add(cls); }
+                else if (c == '#') { j++; id = ReadIdent(part, ref j); }
+                else if (c == '[') { j++; while (j < part.Length && part[j] != ']') j++; if (j < part.Length) j++; }
+                else if (c == ':') { j++; while (j < part.Length && (char.IsLetter(part[j]) || part[j] == '-')) j++; }
+                else { type = ReadIdent(part, ref j); }
+            }
+            var token = MapTypeToAvalonia(type);
+            if (string.IsNullOrEmpty(token) && classes.Count == 0 && string.IsNullOrEmpty(id))
+                continue;
+            segments.Add(new SelectorSegment { TypeToken = token, Id = id, Classes = classes });
+        }
+        return segments;
     }
 
     private static string ReadIdent(string s, ref int i)
@@ -165,15 +154,34 @@ internal static class CssRuntimeApplier
         return c.GetType().Name;
     }
 
-    private static bool Matches(Control c, string token, Rule r)
+    private static bool Matches(Control c, Rule r)
     {
-        if (!string.IsNullOrEmpty(r.TypeToken) && !string.Equals(r.TypeToken, token, StringComparison.Ordinal))
+        if (r.Segments.Count == 0)
             return false;
-        if (!string.IsNullOrEmpty(r.Id))
+        // Match last segment on current control
+        if (!MatchesSimple(c, GetTypeToken(c), r.Segments[^1]))
+            return false;
+        // Walk ancestors for previous segments (descendant semantics)
+        int si = r.Segments.Count - 2;
+        var parent = c.Parent as Control;
+        while (si >= 0 && parent is not null)
         {
-            if (!string.Equals(c.Name, r.Id, StringComparison.Ordinal)) return false;
+            if (MatchesSimple(parent, GetTypeToken(parent), r.Segments[si]))
+                si--;
+            parent = parent.Parent as Control;
         }
-        foreach (var cls in r.Classes)
+        return si < 0;
+    }
+
+    private static bool MatchesSimple(Control c, string token, SelectorSegment seg)
+    {
+        if (!string.IsNullOrEmpty(seg.TypeToken) && !string.Equals(seg.TypeToken, token, StringComparison.Ordinal))
+            return false;
+        if (!string.IsNullOrEmpty(seg.Id))
+        {
+            if (!string.Equals(c.Name, seg.Id, StringComparison.Ordinal)) return false;
+        }
+        foreach (var cls in seg.Classes)
         {
             if (!c.Classes.Contains(cls)) return false;
         }
@@ -219,7 +227,73 @@ internal static class CssRuntimeApplier
                 case "height":
                     if (TryParseDouble(value, out var h)) c.Height = h;
                     break;
+                case "line-height":
+                    if (c is TextBlock tbl && TryParseDouble(value, out var lh)) tbl.LineHeight = lh;
+                    break;
+                case "border":
+                    ApplyBorder(c, value);
+                    break;
+                case "border-color":
+                    if (c is TemplatedControl tcc && TryParseBrush(value, out var bb)) tcc.BorderBrush = bb;
+                    break;
+                case "border-width":
+                    if (c is TemplatedControl tcw && TryParseThickness(value, out var bt)) tcw.BorderThickness = bt;
+                    break;
+                case "visibility":
+                    ApplyVisibility(c, value);
+                    break;
+                case "display":
+                    ApplyDisplay(c, value);
+                    break;
             }
+        }
+    }
+
+    private static void ApplyBorder(Control c, string value)
+    {
+        if (c is not TemplatedControl tc) return;
+        // very simple: try to find a color and a width token
+        if (TryParseBrush(value, out var brush)) tc.BorderBrush = brush;
+        // extract first length
+        var parts = value.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var p in parts)
+        {
+            if (TryParseThickness(p, out var th)) { tc.BorderThickness = th; break; }
+            if (TryParseDouble(p, out var d)) { tc.BorderThickness = new Thickness(d); break; }
+        }
+    }
+
+    private static void ApplyVisibility(Control c, string value)
+    {
+        var v = value.Trim().ToLowerInvariant();
+        if (v == "hidden")
+        {
+            c.Opacity = 0;
+            c.IsHitTestVisible = false;
+        }
+        else if (v == "visible")
+        {
+            c.Opacity = 1;
+            c.IsHitTestVisible = true;
+        }
+    }
+
+    private static void ApplyDisplay(Control c, string value)
+    {
+        var v = value.Trim().ToLowerInvariant();
+        if (v == "none")
+        {
+            c.Opacity = 0;
+            c.IsHitTestVisible = false;
+            c.Width = 0;
+            c.Height = 0;
+            c.Margin = new Thickness(0);
+        }
+        else
+        {
+            // best effort restore
+            c.Opacity = 1;
+            c.IsHitTestVisible = true;
         }
     }
 

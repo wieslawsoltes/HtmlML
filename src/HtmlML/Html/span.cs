@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls.Documents;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
@@ -16,6 +17,9 @@ public class span : Span
         classProperty.Changed.AddClassHandler<span>((o, e) => HtmlElementBase.ApplyClasses(o, e.NewValue as string));
         styleProperty.Changed.AddClassHandler<span>((o, e) => HtmlElementBase.ApplyStyles(o, e.NewValue as string));
     }
+
+    [Content]
+    public InlineCollection content => Inlines;
 
     public string? @class
     {

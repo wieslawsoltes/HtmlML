@@ -3,11 +3,12 @@
 /* Typography */
 h2 { color: #2A72D4; }
 .hero { font-size: 36px; color: #2A72D4; font-weight: bold; margin: 0 0 8px 0; }
-.muted { color: #888; font-size: 14px; }
+.muted { color: #888; font-size: 14px; line-height: 22px; }
 p { margin: 8px 0; }
 
 /* Layout */
-.card { background: #F8F9FB; margin: 8px 0; padding: 12px; }
+.card { background: #F8F9FB; margin: 8px 0; padding: 12px; border: 1px solid #DCDCDC; }
+.card p { margin: 6px 0; }
 #intro { margin: 16px 0; }
 .app-body { background: #FFFFFF; }
 
