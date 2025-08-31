@@ -6,6 +6,8 @@ namespace HtmlML;
 
 public class em : Span
 {
+    public static readonly DirectProperty<em, string?> idProperty =
+        StyledElement.NameProperty.AddOwner<em>(o => o.Name, (o, v) => o.Name = v);
     public static readonly StyledProperty<string?> classProperty =
         HtmlElementBase.classProperty.AddOwner<em>();
 
@@ -25,6 +27,12 @@ public class em : Span
 
     [Content]
     public InlineCollection content => Inlines;
+
+    public string? id
+    {
+        get => Name;
+        set => Name = value;
+    }
 
     public string? @class
     {

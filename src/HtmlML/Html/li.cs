@@ -2,12 +2,13 @@ using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Metadata;
 
 namespace HtmlML;
 
-public class li : DockPanel
+public class li : Border
 {
-    protected override Type StyleKeyOverride => typeof(DockPanel);
+    protected override Type StyleKeyOverride => typeof(Border);
 
     public static readonly DirectProperty<li, string?> idProperty =
         NameProperty.AddOwner<li>(o => o.Name, (o, v) => o.Name = v);
@@ -24,6 +25,7 @@ public class li : DockPanel
     public static readonly StyledProperty<string?> titleProperty =
         HtmlElementBase.titleProperty.AddOwner<li>();
 
+    private readonly DockPanel _host = new DockPanel();
     private readonly TextBlock _bullet;
 
     static li()
@@ -36,15 +38,15 @@ public class li : DockPanel
 
     public li()
     {
+        Child = _host;
         _bullet = new TextBlock
         {
             Text = "•",
             Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top
         };
-
-        SetDock(_bullet, Dock.Left);
-        Children.Add(_bullet);
+        DockPanel.SetDock(_bullet, Dock.Left);
+        _host.Children.Add(_bullet);
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -55,13 +57,13 @@ public class li : DockPanel
 
     private void UpdateBullet()
     {
-        if (Parent is ol ordered)
+        if (_host.Parent is ol ordered)
         {
             // Determine position among siblings
             var index = 0;
-            for (var i = 0; i < ordered.Children.Count; i++)
+            for (var i = 0; i < ordered.content.Count; i++)
             {
-                if (ReferenceEquals(ordered.Children[i], this))
+                if (ReferenceEquals(ordered.content[i], this))
                 {
                     index = i + 1;
                     break;
@@ -104,4 +106,7 @@ public class li : DockPanel
         get => Name;
         set => Name = value;
     }
+    [Content]
+    public Controls content => _host.Children;
+
 }
