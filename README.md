@@ -1,5 +1,7 @@
 # HtmlML
 
+[![HtmlML NuGet](https://img.shields.io/nuget/vpre/HtmlML.svg)](https://www.nuget.org/packages/HtmlML/) [![JavaScript.Avalonia NuGet](https://img.shields.io/nuget/vpre/JavaScript.Avalonia.svg)](https://www.nuget.org/packages/JavaScript.Avalonia/)
+
 HtmlML brings HTML-inspired markup and scripting capabilities to [Avalonia](https://avaloniaui.net/). The repository is split into two reusable libraries that can be consumed together or independently:
 
 - **HtmlML** – a markup layer that renders HTML-like tags inside Avalonia applications, complete with styling and canvas support.
