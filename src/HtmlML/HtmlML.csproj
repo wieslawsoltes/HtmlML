@@ -10,11 +10,16 @@
   <PropertyGroup>
     <Description>An HTML markup support for Avalonia.</Description>
     <PackageId>HtmlML</PackageId>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageTags>html;axaml;xaml;markup;avalonia;avaloniaui</PackageTags>
   </PropertyGroup>
   <PropertyGroup>
     <NoWarn>$(NoWarn);CS8981</NoWarn>
+  </PropertyGroup>
+  <PropertyGroup>
+    <RepositoryUrl>https://github.com/wieslawsoltes/HtmlML</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.4" />
