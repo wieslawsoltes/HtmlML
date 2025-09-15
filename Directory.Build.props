@@ -1,5 +1,7 @@
 <Project>
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <NoWarn>$(NoWarn);NU1507</NoWarn>
     <VersionPrefix>11.3.4</VersionPrefix>
     <VersionSuffix>alpha.1</VersionSuffix>
     <Authors>Wiesław Šoltés</Authors>
