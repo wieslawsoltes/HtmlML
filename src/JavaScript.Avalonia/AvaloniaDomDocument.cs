@@ -5,7 +5,11 @@ using System.Linq;
 using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Styling;
+using Jint;
+using Jint.Native;
 
 namespace JavaScript.Avalonia;
 
@@ -231,6 +235,8 @@ public class AvaloniaDomDocument
 
 public class AvaloniaDomElement
 {
+    private readonly Dictionary<string, List<EventSubscription>> _eventHandlers = new(StringComparer.OrdinalIgnoreCase);
+
     protected JintAvaloniaHost Host { get; }
 
     public Control Control { get; }
@@ -239,6 +245,54 @@ public class AvaloniaDomElement
     {
         Host = host ?? throw new ArgumentNullException(nameof(host));
         Control = control ?? throw new ArgumentNullException(nameof(control));
+    }
+
+    public virtual void addEventListener(string type, JsValue handler)
+    {
+        var normalized = NormalizeEventName(type);
+        if (string.IsNullOrEmpty(normalized) || IsNullish(handler))
+        {
+            return;
+        }
+
+        var subscription = EventSubscription.Create(this, normalized, handler);
+        if (subscription is null)
+        {
+            return;
+        }
+
+        if (!_eventHandlers.TryGetValue(normalized, out var list))
+        {
+            list = new List<EventSubscription>();
+            _eventHandlers[normalized] = list;
+        }
+
+        list.Add(subscription);
+    }
+
+    public virtual void removeEventListener(string type, JsValue handler)
+    {
+        var normalized = NormalizeEventName(type);
+        if (string.IsNullOrEmpty(normalized) || !_eventHandlers.TryGetValue(normalized, out var list))
+        {
+            return;
+        }
+
+        for (var i = 0; i < list.Count; i++)
+        {
+            var subscription = list[i];
+            if (subscription.Callback.Equals(handler))
+            {
+                subscription.Dispose();
+                list.RemoveAt(i);
+                break;
+            }
+        }
+
+        if (list.Count == 0)
+        {
+            _eventHandlers.Remove(normalized);
+        }
     }
 
     public virtual AvaloniaDomElement? appendChild(AvaloniaDomElement child)
@@ -409,6 +463,206 @@ public class AvaloniaDomElement
                 tb.Text = value;
             }
         }
+    }
+
+    private static bool IsNullish(JsValue value) => value.IsNull() || value.IsUndefined();
+
+    private static string NormalizeEventName(string? type)
+        => string.IsNullOrWhiteSpace(type) ? string.Empty : type.Trim().ToLowerInvariant();
+
+    private void HandlePointerEvent(JsValue callback, PointerEventArgs args)
+    {
+        var data = new PointerEventInfo
+        {
+            x = args.GetPosition(Control).X,
+            y = args.GetPosition(Control).Y,
+            button = GetPointerButton(args, Control),
+            handled = args.Handled
+        };
+
+        try
+        {
+            Host.Engine.Invoke(callback, data);
+        }
+        catch
+        {
+        }
+
+        if (data.handled)
+        {
+            args.Handled = true;
+        }
+    }
+
+    private void HandleKeyEvent(JsValue callback, KeyEventArgs args)
+    {
+        var data = new KeyEventInfo
+        {
+            key = args.Key.ToString(),
+            handled = args.Handled
+        };
+
+        try
+        {
+            Host.Engine.Invoke(callback, data);
+        }
+        catch
+        {
+        }
+
+        if (data.handled)
+        {
+            args.Handled = true;
+        }
+    }
+
+    private void HandleTextInputEvent(JsValue callback, TextInputEventArgs args)
+    {
+        var data = new TextInputEventInfo
+        {
+            text = args.Text,
+            handled = args.Handled
+        };
+
+        try
+        {
+            Host.Engine.Invoke(callback, data);
+        }
+        catch
+        {
+        }
+
+        if (data.handled)
+        {
+            args.Handled = true;
+        }
+    }
+
+    private static string? GetPointerButton(PointerEventArgs args, Control control)
+    {
+        try
+        {
+            return args.GetCurrentPoint(control).Properties.PointerUpdateKind.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private sealed class EventSubscription : IDisposable
+    {
+        private readonly Action _unsubscribe;
+        private bool _disposed;
+
+        private EventSubscription(JsValue callback, Action unsubscribe)
+        {
+            Callback = callback;
+            _unsubscribe = unsubscribe;
+        }
+
+        public JsValue Callback { get; }
+
+        public static EventSubscription? Create(AvaloniaDomElement element, string eventName, JsValue callback)
+        {
+            var control = element.Control;
+            switch (eventName)
+            {
+                case "pointerdown":
+                case "mousedown":
+                    EventHandler<PointerPressedEventArgs> down = (s, e) => element.HandlePointerEvent(callback, e);
+                    control.PointerPressed += down;
+                    return new EventSubscription(callback, () => control.PointerPressed -= down);
+                case "pointermove":
+                case "mousemove":
+                    EventHandler<PointerEventArgs> move = (s, e) => element.HandlePointerEvent(callback, e);
+                    control.PointerMoved += move;
+                    return new EventSubscription(callback, () => control.PointerMoved -= move);
+                case "pointerup":
+                case "mouseup":
+                    EventHandler<PointerReleasedEventArgs> up = (s, e) => element.HandlePointerEvent(callback, e);
+                    control.PointerReleased += up;
+                    return new EventSubscription(callback, () => control.PointerReleased -= up);
+                case "pointerenter":
+                case "mouseenter":
+                    EventHandler<PointerEventArgs> enter = (s, e) => element.HandlePointerEvent(callback, e);
+                    control.PointerEntered += enter;
+                    return new EventSubscription(callback, () => control.PointerEntered -= enter);
+                case "pointerleave":
+                case "mouseleave":
+                    EventHandler<PointerEventArgs> leave = (s, e) => element.HandlePointerEvent(callback, e);
+                    control.PointerExited += leave;
+                    return new EventSubscription(callback, () => control.PointerExited -= leave);
+                case "click":
+                    if (control is Button button)
+                    {
+                        EventHandler<RoutedEventArgs> handler = (s, e) =>
+                        {
+                            try
+                            {
+                                element.Host.Engine.Invoke(callback);
+                            }
+                            catch
+                            {
+                            }
+                        };
+                        button.Click += handler;
+                        return new EventSubscription(callback, () => button.Click -= handler);
+                    }
+                    else
+                    {
+                        EventHandler<PointerReleasedEventArgs> click = (s, e) => element.HandlePointerEvent(callback, e);
+                        control.PointerReleased += click;
+                        return new EventSubscription(callback, () => control.PointerReleased -= click);
+                    }
+                case "keydown":
+                    EventHandler<KeyEventArgs> keyDown = (s, e) => element.HandleKeyEvent(callback, e);
+                    control.KeyDown += keyDown;
+                    return new EventSubscription(callback, () => control.KeyDown -= keyDown);
+                case "keyup":
+                    EventHandler<KeyEventArgs> keyUp = (s, e) => element.HandleKeyEvent(callback, e);
+                    control.KeyUp += keyUp;
+                    return new EventSubscription(callback, () => control.KeyUp -= keyUp);
+                case "textinput":
+                case "input":
+                    EventHandler<TextInputEventArgs> textInput = (s, e) => element.HandleTextInputEvent(callback, e);
+                    control.TextInput += textInput;
+                    return new EventSubscription(callback, () => control.TextInput -= textInput);
+                default:
+                    return null;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _unsubscribe();
+            _disposed = true;
+        }
+    }
+
+    public sealed class PointerEventInfo
+    {
+        public double x { get; set; }
+        public double y { get; set; }
+        public string? button { get; set; }
+        public bool handled { get; set; }
+    }
+
+    public sealed class KeyEventInfo
+    {
+        public string? key { get; set; }
+        public bool handled { get; set; }
+    }
+
+    public sealed class TextInputEventInfo
+    {
+        public string? text { get; set; }
+        public bool handled { get; set; }
     }
 
     protected virtual bool TryGetAttribute(string name, out string? value)
