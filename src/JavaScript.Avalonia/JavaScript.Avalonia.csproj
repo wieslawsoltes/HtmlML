@@ -9,18 +9,13 @@
   <PropertyGroup>
     <Description>JavaScript integration helpers for Avalonia applications.</Description>
     <PackageId>JavaScript.Avalonia</PackageId>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageTags>avalonia;javascript;jint</PackageTags>
   </PropertyGroup>
   <PropertyGroup>
-    <Version>0.1.0</Version>
-    <Authors>Wieslaw Soltes</Authors>
-    <Company>HtmlML</Company>
     <RepositoryUrl>https://github.com/wieslawsoltes/HtmlML</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageProjectUrl>https://github.com/wieslawsoltes/HtmlML</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Initial extraction of Avalonia JavaScript host helpers from HtmlML.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
   </PropertyGroup>
   <ItemGroup>
