@@ -27,6 +27,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "website", "samples\website\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JavaScript.Avalonia", "src\JavaScript.Avalonia\JavaScript.Avalonia.csproj", "{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JavaScriptHostSample", "samples\JavaScriptHostSample\JavaScriptHostSample.csproj", "{273D657E-6DCB-45BA-A843-248EC73ECA48}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -45,10 +47,15 @@ Global
 		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{273D657E-6DCB-45BA-A843-248EC73ECA48}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{273D657E-6DCB-45BA-A843-248EC73ECA48}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{273D657E-6DCB-45BA-A843-248EC73ECA48}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{273D657E-6DCB-45BA-A843-248EC73ECA48}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{2444E3AE-BE57-4F85-9DF1-A6031284EFA4} = {74F70724-F48B-4556-AF1B-996572B9395B}
 		{E4BB92BB-C4A1-4D8C-8A4C-C05F9DB2A407} = {EF896A23-AA5E-45BA-B843-B1F02D600D81}
 		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8} = {74F70724-F48B-4556-AF1B-996572B9395B}
+		{273D657E-6DCB-45BA-A843-248EC73ECA48} = {EF896A23-AA5E-45BA-B843-B1F02D600D81}
 	EndGlobalSection
 EndGlobal
