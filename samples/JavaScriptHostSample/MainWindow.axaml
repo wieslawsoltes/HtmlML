@@ -1,0 +1,11 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="JavaScriptHostSample.MainWindow"
+        Width="420" Height="220"
+        Title="JavaScript Host Sample">
+  <StackPanel Margin="16" Spacing="12">
+    <TextBlock FontSize="20" FontWeight="SemiBold" Text="JavaScript Host Sample" />
+    <TextBlock x:Name="OutputText" Name="OutputText" TextWrapping="Wrap" Text="Waiting for script..." />
+    <Button x:Name="RunButton" Name="RunButton" Width="140" Content="Run Script" HorizontalAlignment="Left" />
+  </StackPanel>
+</Window>
