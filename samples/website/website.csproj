@@ -15,13 +15,13 @@
     <AvaloniaResource Include="Assets\*" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
-    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" />
-    <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" />
+    <PackageReference Include="Avalonia.Desktop" />
     <!-- Ensure consistent CSS dependencies to avoid downgrade warnings -->
-    <PackageReference Include="AngleSharp" Version="1.3.0" />
-    <PackageReference Include="AngleSharp.Css" Version="1.0.0-beta.157" />
+    <PackageReference Include="AngleSharp" />
+    <PackageReference Include="AngleSharp.Css" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\HtmlML\HtmlML.csproj" />
