@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Avalonia;
@@ -14,16 +13,20 @@ namespace JavaScript.Avalonia;
 
 public class JintAvaloniaHost
 {
+    private readonly Func<JintAvaloniaHost, AvaloniaDomDocument>? _documentFactory;
+
     public TopLevel TopLevel { get; }
     public Engine Engine { get; }
+    public AvaloniaDomDocument Document { get; }
 
     private int _rafSeq;
     private readonly Dictionary<int, JsValue> _rafCallbacks = new();
     private bool _rafScheduled;
 
-    public JintAvaloniaHost(TopLevel topLevel)
+    public JintAvaloniaHost(TopLevel topLevel, Func<JintAvaloniaHost, AvaloniaDomDocument>? documentFactory = null)
     {
         TopLevel = topLevel ?? throw new ArgumentNullException(nameof(topLevel));
+        _documentFactory = documentFactory;
         Engine = new Engine(options =>
         {
             ConfigureEngineOptions(options);
@@ -31,6 +34,16 @@ public class JintAvaloniaHost
 
         Engine.SetValue("console", CreateConsoleObject());
         Engine.SetValue("window", CreateWindowObject());
+
+        Document = documentFactory?.Invoke(this) ?? CreateDocument();
+        Engine.SetValue("document", Document);
+        try
+        {
+            Engine.Execute("if (typeof window !== 'undefined') { window.document = document; if (typeof globalThis !== 'undefined') { globalThis.document = document; if (typeof window.setTimeout === 'function') { globalThis.setTimeout = window.setTimeout.bind(window); } if (typeof window.requestAnimationFrame === 'function') { globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window); } if (typeof window.cancelAnimationFrame === 'function') { globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window); } } }");
+        }
+        catch
+        {
+        }
     }
 
     protected virtual void ConfigureEngineOptions(Options options)
@@ -41,6 +54,9 @@ public class JintAvaloniaHost
     protected virtual object CreateConsoleObject() => new ConsoleJs();
 
     protected virtual object CreateWindowObject() => new WindowJs(this);
+
+    protected virtual AvaloniaDomDocument CreateDocument()
+        => new AvaloniaDomDocument(this);
 
     public void ExecuteScriptText(string code)
     {
@@ -149,7 +165,7 @@ public class JintAvaloniaHost
 
     public class ConsoleJs
     {
-        public virtual void log(object? value) => Debug.WriteLine(value);
+        public virtual void log(object? value) => Console.WriteLine(value);
     }
 
     public class WindowJs
