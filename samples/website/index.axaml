@@ -51,6 +51,77 @@
               break;
           }
         };
+
+        /* DOM-like demo: build a dynamic section and tweak classes */
+        const card = document.createElement('section');
+        card.setAttribute('class', 'card');
+        const title = document.createElement('h2');
+        title.textContent = 'DOM API Demo';
+        const para = document.createElement('p');
+        para.textContent = 'This section was created from JavaScript.';
+        card.appendChild(title);
+        card.appendChild(para);
+        /* Append to body */
+        const body = document.body;
+        body.appendChild(card);
+
+        /* Query and tweak list */
+        const firstList = document.querySelector('ul');
+        if (firstList) {
+          const item = document.createElement('li');
+          const p = document.createElement('p');
+          p.textContent = 'Item added via JS';
+          item.appendChild(p);
+          firstList.appendChild(item);
+        }
+
+        /* Style anchors via classList */
+        const links = document.querySelectorAll('a');
+        for (const el of links) {
+          el.classListAdd('muted');
+        }
+
+        /* setTimeout demo */
+        window.setTimeout(() => {
+          const p2 = document.createElement('p');
+          p2.textContent = 'Added after 1s via setTimeout';
+          card.appendChild(p2);
+        }, 1000);
+        /* requestAnimationFrame demo - animate a moving bar on a dynamic canvas */
+        (() => {
+          const anim = document.createElement('canvas');
+          anim.setAttribute('id', 'anim');
+          anim.setAttribute('width', '600');
+          anim.setAttribute('height', '120');
+          anim.setAttribute('class', 'card');
+          anim.setAttribute('style', 'background:#f0f0f0');
+          const section = document.createElement('section');
+          section.setAttribute('class', 'card');
+          const h2 = document.createElement('h2'); h2.textContent = 'Animation';
+          const p = document.createElement('p'); p.setAttribute('class','muted'); p.textContent = 'Simple JS animation using requestAnimationFrame';
+          section.appendChild(h2); section.appendChild(p); section.appendChild(anim);
+          document.body.appendChild(section);
+
+          /* Delay until canvas is attached so getElementById returns canvas wrapper */
+          const start = () => {
+            const animCanvas = document.getElementById('anim');
+            if (!animCanvas) { window.setTimeout(start, 0); return; }
+            const ctx2 = animCanvas.getContext('2d');
+            const w = 600, h = 120;
+            const loop = (ts) => {
+              const t = ts * 0.004;
+              ctx2.clearRect(0, 0, w, h);
+              ctx2.beginPath();
+              ctx2.moveTo(20, h/2);
+              const x = 20 + (Math.sin(t) * 0.5 + 0.5) * (w - 40);
+              ctx2.lineTo(x, h/2);
+              ctx2.stroke();
+              window.requestAnimationFrame(loop);
+            };
+            window.requestAnimationFrame(loop);
+          };
+          window.requestAnimationFrame(start);
+        })();
       })();
       ]]>
     </script>
