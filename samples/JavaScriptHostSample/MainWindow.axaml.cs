@@ -55,6 +55,16 @@ window.requestAnimationFrame(() => {
     output.textContent = 'requestAnimationFrame triggered.';
   }
 });
+
+const runButton = document.getElementById('RunButton');
+if (runButton && typeof runButton.addEventListener === 'function') {
+  runButton.addEventListener('click', () => console.log('JavaScript click handler fired.'));
+}
+
+if (document.body && typeof document.body.addEventListener === 'function') {
+  document.body.addEventListener('pointerdown', evt =>
+    console.log(`pointerdown at ${evt.x ?? 'n/a'}, ${evt.y ?? 'n/a'}`));
+}
 """);
     }
 
