@@ -208,6 +208,10 @@ public class html : Window
         {
             RegisterAllCanvases(ctrl);
         }
+        else if (root is Decorator dec && dec.Child is Control child)
+        {
+            RegisterAllCanvases(child);
+        }
     }
 
     private void LoadStylesheet(string? href, string? type)
