@@ -375,7 +375,9 @@ public class JintHost
                 case "title":
                     Avalonia.Controls.ToolTip.SetTip(Control, value); return;
             }
-            var prop = Control.GetType().GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public);
+            var type = Control.GetType();
+            var prop = type.GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+                       ?? type.GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public);
             if (prop is not null && prop.CanWrite)
             {
                 try
