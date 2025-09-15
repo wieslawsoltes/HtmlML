@@ -1,5 +1,6 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
+# 
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HtmlML", "src\HtmlML\HtmlML.csproj", "{2444E3AE-BE57-4F85-9DF1-A6031284EFA4}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "build", "build", "{DCB18142-CBED-4F62-8B5A-A9A889AC4AC6}"
@@ -24,6 +25,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{74F70724-F48
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "website", "samples\website\website.csproj", "{E4BB92BB-C4A1-4D8C-8A4C-C05F9DB2A407}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JavaScript.Avalonia", "src\JavaScript.Avalonia\JavaScript.Avalonia.csproj", "{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,9 +41,14 @@ Global
 		{E4BB92BB-C4A1-4D8C-8A4C-C05F9DB2A407}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E4BB92BB-C4A1-4D8C-8A4C-C05F9DB2A407}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E4BB92BB-C4A1-4D8C-8A4C-C05F9DB2A407}.Release|Any CPU.Build.0 = Release|Any CPU
+		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{2444E3AE-BE57-4F85-9DF1-A6031284EFA4} = {74F70724-F48B-4556-AF1B-996572B9395B}
 		{E4BB92BB-C4A1-4D8C-8A4C-C05F9DB2A407} = {EF896A23-AA5E-45BA-B843-B1F02D600D81}
+		{96A3DA36-AC2A-4F1E-859E-FCDDF1973FA8} = {74F70724-F48B-4556-AF1B-996572B9395B}
 	EndGlobalSection
 EndGlobal

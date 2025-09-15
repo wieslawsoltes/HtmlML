@@ -1,206 +1,147 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Platform;
+using Avalonia.Styling;
 using Jint;
+using JavaScript.Avalonia;
 using Jint.Native;
-using Avalonia.Threading;
-using System.Reflection;
-using System.Diagnostics;
+using Jint.Runtime;
 
 namespace HtmlML;
 
-public class JintHost
+public class JintHost : JintAvaloniaHost
 {
     private readonly html _window;
-    public Engine Engine { get; }
-
     private readonly Dictionary<string, CanvasJsElement> _canvasById = new();
 
-    public JintHost(html window)
+    public JintHost(html window) : base(window)
     {
         _window = window;
-        Engine = new Engine(options =>
+
+        var document = new DocumentJs(this);
+        Engine.SetValue("document", document);
+        try
         {
-            options.Strict();
-        });
-
-        // console.log
-        Engine.SetValue("console", new ConsoleJs());
-
-        // document/window API
-        Engine.SetValue("document", new DocumentJs(this));
-        Engine.SetValue("window", new WindowJs(this));
-    }
-
-    // requestAnimationFrame infrastructure (uses Avalonia TopLevel.RequestAnimationFrame)
-    private int _rafSeq = 0;
-    private readonly Dictionary<int, JsValue> _rafCallbacks = new();
-    private bool _rafScheduled;
-
-    internal int RequestAnimationFrame(JsValue callback)
-    {
-        if (callback.IsUndefined() || callback.IsNull()) return 0;
-        var id = ++_rafSeq;
-        _rafCallbacks[id] = callback;
-        EnsureRafScheduled();
-        return id;
-    }
-
-    internal void CancelAnimationFrame(int id)
-    {
-        _rafCallbacks.Remove(id);
-    }
-
-    private void EnsureRafScheduled()
-    {
-        if (_rafScheduled) return;
-        _rafScheduled = true;
-        _window.RequestAnimationFrame(ts => RafTick(ts));
-    }
-
-    private void RafTick(TimeSpan ts)
-    {
-        _rafScheduled = false;
-        var now = ts.TotalMilliseconds;
-        if (_rafCallbacks.Count == 0)
-            return;
-        var list = _rafCallbacks.Values.ToArray();
-        _rafCallbacks.Clear();
-        foreach (var cb in list)
-        {
-            try { Engine.Invoke(cb, now); } catch { }
+            Engine.Execute("if (typeof window !== 'undefined') { window.document = document; }");
         }
-        // In case new callbacks were queued during execution, schedule next frame
-        if (_rafCallbacks.Count > 0)
-            EnsureRafScheduled();
+        catch
+        {
+            // Ignore configuration errors
+        }
     }
 
     public void RegisterCanvas(canvas c)
     {
         var id = c.Name;
         if (string.IsNullOrWhiteSpace(id))
+        {
             return;
+        }
+
         _canvasById[id] = new CanvasJsElement(this, c);
     }
 
     public void DispatchPointer(string id, string type, double x, double y)
     {
-        if (id is null) return;
+        if (id is null)
+        {
+            return;
+        }
+
         if (_canvasById.TryGetValue(id, out var el))
         {
             if (el.Dispatch(type, x, y))
+            {
                 return;
+            }
         }
-        // Either no registered canvas wrapper or it had no listeners; use global fallback
-        try { Engine.Invoke("onPointerEvent", id, type, x, y); } catch { }
-    }
 
-    public void ExecuteScriptText(string code)
-    {
-        if (string.IsNullOrWhiteSpace(code)) return;
         try
         {
-            Engine.Execute(code);
+            Engine.Invoke("onPointerEvent", id, type, x, y);
         }
-        catch (Exception)
+        catch
         {
-            // Ignore malformed script; do not crash the app
+            // Ignore missing handler
         }
-    }
-
-    public void ExecuteScriptUri(Uri uri)
-    {
-        if (uri.Scheme == "avares")
-        {
-            using var stream = AssetLoader.Open(uri);
-            using var reader = new StreamReader(stream);
-            var code = reader.ReadToEnd();
-            Engine.Execute(code);
-            return;
-        }
-        if (uri.IsFile && File.Exists(uri.LocalPath))
-        {
-            var code = File.ReadAllText(uri.LocalPath);
-            Engine.Execute(code);
-        }
-    }
-
-    public sealed class ConsoleJs
-    {
-        public void log(object? value) => System.Diagnostics.Debug.WriteLine(value);
-    }
-
-    public sealed class WindowJs
-    {
-        private readonly JintHost _host;
-        public WindowJs(JintHost host) { _host = host; }
-
-        public void setTimeout(JsValue callback, int ms)
-        {
-            if (callback.IsUndefined() || callback.IsNull()) return;
-            DispatcherTimer.RunOnce(() =>
-            {
-                try { _host.Engine.Invoke(callback, Array.Empty<object>()); } catch { }
-            }, TimeSpan.FromMilliseconds(ms));
-        }
-
-        public int requestAnimationFrame(JsValue callback)
-            => _host.RequestAnimationFrame(callback);
-
-        public void cancelAnimationFrame(int id)
-            => _host.CancelAnimationFrame(id);
     }
 
     public sealed class DocumentJs
     {
         private readonly JintHost _host;
-        public DocumentJs(JintHost host) { _host = host; }
+
+        public DocumentJs(JintHost host)
+        {
+            _host = host;
+        }
 
         public object? getElementById(string id)
         {
-            if (string.IsNullOrWhiteSpace(id)) return null;
-            // Prefer canvas wrappers when matching canvas IDs
-            if (_host._canvasById.TryGetValue(id, out var cel)) return cel;
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return null;
+            }
+
+            if (_host._canvasById.TryGetValue(id, out var cel))
+            {
+                return cel;
+            }
+
             var root = _host._window.Content as Control;
-            if (root is null) return null;
+            if (root is null)
+            {
+                return null;
+            }
+
             foreach (var c in Traverse(root))
             {
                 if (c.Name == id)
                 {
-                    if (c is HtmlML.canvas can)
+                    if (c is canvas can)
                     {
-                        // Ensure a single wrapper instance per canvas ID
                         if (_host._canvasById.TryGetValue(id, out var existing))
+                        {
                             return existing;
+                        }
+
                         var wrapper = new CanvasJsElement(_host, can);
                         _host._canvasById[id] = wrapper;
                         return wrapper;
                     }
+
                     return new DomElement(_host, c);
                 }
             }
+
             return null;
         }
 
         public object? querySelector(string selector)
         {
             var all = querySelectorAll(selector) as object[];
-            return (all is { Length: > 0 }) ? all![0] : null;
+            return all is { Length: > 0 } ? all![0] : null;
         }
 
         public object[] querySelectorAll(string selector)
         {
             var root = _host._window.Content as Control;
-            if (root is null) return Array.Empty<object>();
+            if (root is null)
+            {
+                return Array.Empty<object>();
+            }
+
             var list = new List<object>();
             foreach (var c in Traverse(root))
             {
-                if (MatchesSelector(c, selector)) list.Add(new DomElement(_host, c));
+                if (MatchesSelector(c, selector))
+                {
+                    list.Add(new DomElement(_host, c));
+                }
             }
+
             return list.ToArray();
         }
 
@@ -215,28 +156,41 @@ public class JintHost
             get
             {
                 var root = _host._window.Content as Control;
-                if (root is null) return null;
+                if (root is null)
+                {
+                    return null;
+                }
+
                 foreach (var c in Traverse(root))
                 {
-                    if (c is HtmlML.body) return new DomElement(_host, c);
+                    if (c is body)
+                    {
+                        return new DomElement(_host, c);
+                    }
                 }
+
                 return null;
             }
         }
 
         private static bool MatchesSelector(Control c, string selector)
         {
-            if (string.IsNullOrWhiteSpace(selector)) return false;
+            if (string.IsNullOrWhiteSpace(selector))
+            {
+                return false;
+            }
+
             selector = selector.Trim();
             if (selector.StartsWith("#"))
             {
                 return string.Equals((c as StyledElement)?.Name, selector.Substring(1), StringComparison.Ordinal);
             }
+
             if (selector.StartsWith("."))
             {
                 return (c as StyledElement)?.Classes.Contains(selector.Substring(1)) == true;
             }
-            // type match against our HtmlML tag names or control types
+
             var n = c.GetType().Name.ToLowerInvariant();
             return n == selector.ToLowerInvariant();
         }
@@ -244,21 +198,33 @@ public class JintHost
         private static IEnumerable<Control> Traverse(Control root)
         {
             yield return root;
+
             if (root is Panel panel)
             {
                 foreach (var child in panel.Children)
                 {
                     if (child is Control c)
-                        foreach (var x in Traverse(c)) yield return x;
+                    {
+                        foreach (var x in Traverse(c))
+                        {
+                            yield return x;
+                        }
+                    }
                 }
             }
             else if (root is ContentControl cc && cc.Content is Control qc)
             {
-                foreach (var x in Traverse(qc)) yield return x;
+                foreach (var x in Traverse(qc))
+                {
+                    yield return x;
+                }
             }
             else if (root is Decorator dec && dec.Child is Control child)
             {
-                foreach (var x in Traverse(child)) yield return x;
+                foreach (var x in Traverse(child))
+                {
+                    yield return x;
+                }
             }
         }
 
@@ -309,17 +275,23 @@ public class JintHost
 
         public DomElement? appendChild(DomElement child)
         {
-            if (child is null) return null;
+            if (child is null)
+            {
+                return null;
+            }
+
             if (TryGetControlsCollection(Control, out var list))
             {
                 list.Add(child.Control);
                 return child;
             }
+
             if (Control is ContentControl cc)
             {
                 cc.Content = child.Control;
                 return child;
             }
+
             return null;
         }
 
@@ -332,11 +304,17 @@ public class JintHost
             }
             else if (parent is Decorator dec)
             {
-                if (dec.Child == Control) dec.Child = null;
+                if (dec.Child == Control)
+                {
+                    dec.Child = null;
+                }
             }
             else if (parent is ContentControl cc)
             {
-                if (Equals(cc.Content, Control)) cc.Content = null;
+                if (Equals(cc.Content, Control))
+                {
+                    cc.Content = null;
+                }
             }
         }
 
@@ -350,6 +328,7 @@ public class JintHost
                 case "style": return GetStyleString(Control);
                 case "title": return Avalonia.Controls.ToolTip.GetTip(Control)?.ToString();
             }
+
             var prop = Control.GetType().GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public);
             return prop?.GetValue(Control)?.ToString();
         }
@@ -360,21 +339,32 @@ public class JintHost
             switch (name)
             {
                 case "id":
-                    if (Control is StyledElement se) se.Name = value; return;
+                    if (Control is StyledElement se)
+                    {
+                        se.Name = value;
+                    }
+                    return;
                 case "class":
                     if (Control is StyledElement se2)
                     {
                         se2.Classes.Clear();
                         if (!string.IsNullOrWhiteSpace(value))
+                        {
                             foreach (var cls in value.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                            {
                                 se2.Classes.Add(cls);
+                            }
+                        }
                     }
                     return;
                 case "style":
-                    HtmlElementBase.ApplyStyles(Control, value); return;
+                    HtmlElementBase.ApplyStyles(Control, value);
+                    return;
                 case "title":
-                    Avalonia.Controls.ToolTip.SetTip(Control, value); return;
+                    Avalonia.Controls.ToolTip.SetTip(Control, value);
+                    return;
             }
+
             var type = Control.GetType();
             var prop = type.GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
                        ?? type.GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public);
@@ -383,26 +373,48 @@ public class JintHost
                 try
                 {
                     object? converted = value;
-                    if (prop.PropertyType == typeof(double) && double.TryParse(value, out var d)) converted = d;
+                    if (prop.PropertyType == typeof(double) && double.TryParse(value, out var d))
+                    {
+                        converted = d;
+                    }
+
                     prop.SetValue(Control, converted);
                 }
-                catch { }
+                catch
+                {
+                    // Ignore conversion errors
+                }
             }
         }
 
         public void classListAdd(string cls)
         {
-            if (Control is StyledElement se && !string.IsNullOrWhiteSpace(cls)) se.Classes.Add(cls);
+            if (Control is StyledElement se && !string.IsNullOrWhiteSpace(cls))
+            {
+                se.Classes.Add(cls);
+            }
         }
+
         public void classListRemove(string cls)
         {
-            if (Control is StyledElement se && !string.IsNullOrWhiteSpace(cls)) se.Classes.Remove(cls);
+            if (Control is StyledElement se && !string.IsNullOrWhiteSpace(cls))
+            {
+                se.Classes.Remove(cls);
+            }
         }
+
         public void classListToggle(string cls)
         {
             if (Control is StyledElement se && !string.IsNullOrWhiteSpace(cls))
             {
-                if (se.Classes.Contains(cls)) se.Classes.Remove(cls); else se.Classes.Add(cls);
+                if (se.Classes.Contains(cls))
+                {
+                    se.Classes.Remove(cls);
+                }
+                else
+                {
+                    se.Classes.Add(cls);
+                }
             }
         }
 
@@ -410,18 +422,24 @@ public class JintHost
         {
             get
             {
-                if (Control is TextBlock tb) return tb.Text;
+                if (Control is TextBlock tb)
+                {
+                    return tb.Text;
+                }
+
                 return null;
             }
             set
             {
-                if (Control is TextBlock tb) tb.Text = value;
+                if (Control is TextBlock tb)
+                {
+                    tb.Text = value;
+                }
             }
         }
 
         private static bool TryGetControlsCollection(Control parent, out Controls controls)
         {
-            // Look for a public property named 'content' of type Controls
             var prop = parent.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public)
                 .FirstOrDefault(p => p.PropertyType == typeof(Controls) && string.Equals(p.Name, "content", StringComparison.OrdinalIgnoreCase));
             if (prop != null)
@@ -429,16 +447,18 @@ public class JintHost
                 controls = (Controls)prop.GetValue(parent)!;
                 return true;
             }
+
             if (parent is Panel panel)
             {
                 controls = panel.Children;
                 return true;
             }
+
             controls = null!;
             return false;
         }
 
-        private static string GetStyleString(Control c) => string.Empty; // not tracked
+        private static string GetStyleString(Control c) => string.Empty;
     }
 
     public sealed class CanvasJsElement
@@ -463,47 +483,84 @@ public class JintHost
 
         public void addEventListener(string type, JsValue handler)
         {
-            if (handler.IsUndefined() || handler.IsNull()) return;
+            if (IsNullish(handler))
+            {
+                return;
+            }
+
             switch (type)
             {
-                case "pointerdown": _down.Add(handler); break;
-                case "pointermove": _move.Add(handler); break;
-                case "pointerup": _up.Add(handler); break;
+                case "pointerdown":
+                    _down.Add(handler);
+                    break;
+                case "pointermove":
+                    _move.Add(handler);
+                    break;
+                case "pointerup":
+                    _up.Add(handler);
+                    break;
             }
         }
 
         public void removeEventListener(string type, JsValue handler)
         {
-            if (handler.IsUndefined() || handler.IsNull()) return;
+            if (IsNullish(handler))
+            {
+                return;
+            }
+
             switch (type)
             {
-                case "pointerdown": _down.Remove(handler); break;
-                case "pointermove": _move.Remove(handler); break;
-                case "pointerup": _up.Remove(handler); break;
+                case "pointerdown":
+                    _down.Remove(handler);
+                    break;
+                case "pointermove":
+                    _move.Remove(handler);
+                    break;
+                case "pointerup":
+                    _up.Remove(handler);
+                    break;
             }
+        }
+
+        private static bool IsNullish(JsValue value)
+        {
+            return value.IsUndefined() || value.IsNull();
         }
 
         internal bool Dispatch(string type, double x, double y)
         {
-            // First dispatch to any registered event listeners for this canvas
             List<JsValue>? handlers = null;
             switch (type)
             {
-                case "pointerdown": handlers = _down; break;
-                case "pointermove": handlers = _move; break;
+                case "pointerdown":
+                    handlers = _down;
+                    break;
+                case "pointermove":
+                    handlers = _move;
+                    break;
                 case "pointerup":
-                case "pointercancel": handlers = _up; break;
+                case "pointercancel":
+                    handlers = _up;
+                    break;
             }
 
             if (handlers is { Count: > 0 })
             {
                 var evt = new JsPointerEvent { x = x, y = y };
-                // Make a copy to avoid modification during iteration
                 var list = handlers.ToArray();
                 foreach (var cb in list)
                 {
-                    try { _host.Engine.Invoke(cb, evt); } catch { }
+                    try
+                    {
+                        _host.Engine.Invoke(cb, evt);
+                    }
+                    catch
+                    {
+                        // Ignore callback errors
+                    }
                 }
+
                 return true;
             }
 

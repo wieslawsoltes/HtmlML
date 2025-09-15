@@ -22,4 +22,8 @@
     <PackageReference Include="AngleSharp.Css" Version="1.0.0-beta.157" />
     <PackageReference Include="Jint" Version="4.4.1" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\JavaScript.Avalonia\JavaScript.Avalonia.csproj" />
+  </ItemGroup>
 </Project>
+
