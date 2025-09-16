@@ -136,4 +136,71 @@ public class JintAvaloniaHostTests
 
         host.ExecuteScriptText("console.log('log'); console.info('info'); console.warn('warn'); console.error('error'); console.table({ value: 1 });");
     }
+
+    [AvaloniaFact]
+    public void Require_LoadsModuleFromFile()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var modulePath = Path.Combine(tempDir, "lib.js");
+            File.WriteAllText(modulePath, "module.exports = { value: 123 };");
+
+            host.ScriptBaseDirectory = tempDir;
+            host.ExecuteScriptText("const lib = require('./lib.js'); globalThis.moduleResult = lib.value;");
+
+            Assert.Equal(123d, Convert.ToDouble(host.Engine.GetValue("moduleResult").ToObject()));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void Require_ExecutesModuleOnlyOnce()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var modulePath = Path.Combine(tempDir, "counter.js");
+            File.WriteAllText(modulePath, "globalThis.requireCount = (globalThis.requireCount || 0) + 1; module.exports = { count: globalThis.requireCount };");
+
+            host.ScriptBaseDirectory = tempDir;
+            host.ExecuteScriptText("const first = require('./counter.js'); const second = require('./counter.js'); globalThis.firstCount = first.count; globalThis.secondCount = second.count;");
+
+            Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("firstCount").ToObject()));
+            Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("secondCount").ToObject()));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void ImportScripts_ExecutesScript()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var scriptPath = Path.Combine(tempDir, "script.js");
+            File.WriteAllText(scriptPath, "globalThis.loadedValue = (globalThis.loadedValue || 0) + 1;");
+
+            host.ScriptBaseDirectory = tempDir;
+            host.ExecuteScriptText("window.importScripts('./script.js');");
+
+            Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("loadedValue").ToObject()));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
 }

@@ -328,6 +328,33 @@ document.addEventListener('DOMContentLoaded', () => {
 const items = document.querySelectorAll('TextBlock');
 console.table(items.map(i => i.textContent));
 """),
+            new Preset(
+                "External library",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16">
+  <StackPanel Spacing="12">
+    <TextBlock Name="status" FontSize="18" FontWeight="SemiBold" Text="Loading external library..." />
+    <TextBlock Text="This preset fetches day.js from a CDN using require() and shows the formatted time." TextWrapping="Wrap" />
+    <Button Name="refresh" Content="Refresh timestamp" HorizontalAlignment="Left" />
+  </StackPanel>
+</Border>
+""",
+                """
+const status = document.getElementById('status');
+const refresh = document.getElementById('refresh');
+
+function updateTime() {
+  try {
+    const dayjs = require('https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js');
+    status.textContent = `Loaded dayjs@${dayjs.version} – ${dayjs().format('YYYY-MM-DD HH:mm:ss')}`;
+  } catch (err) {
+    status.textContent = `Failed to load dayjs: ${err}`;
+  }
+}
+
+refresh.addEventListener('click', () => updateTime());
+updateTime();
+"""),
         };
     }
 
