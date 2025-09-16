@@ -26,6 +26,7 @@ Together they enable you to describe user interfaces with familiar HTML semantic
 | `src/JavaScript.Avalonia` | Generic JavaScript host with DOM/event bridge for Avalonia. |
 | `samples/website` | HtmlML showcase demonstrating markup, styling, and canvas scripting. |
 | `samples/JavaScriptHostSample` | Plain Avalonia desktop app using `JavaScript.Avalonia` without HtmlML. |
+| `samples/JavaScriptPlayground` | Interactive playground with editable XAML, live preview, and JavaScript console for `JavaScript.Avalonia`. |
 
 ## Getting Started
 
@@ -49,6 +50,9 @@ dotnet run --project samples/website/website.csproj
 
 # Standalone JavaScript host sample
 dotnet run --project samples/JavaScriptHostSample/JavaScriptHostSample.csproj
+
+# JavaScript.Avalonia playground
+dotnet run --project samples/JavaScriptPlayground/JavaScriptPlayground.csproj
 ```
 
 ### Consuming the libraries
