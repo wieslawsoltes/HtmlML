@@ -132,6 +132,21 @@ if (button && label) {
 }
 ```
 
+### Loading external scripts
+
+`JintAvaloniaHost` includes a lightweight module loader that can pull in local files, Avalonia assets (`avares://`), or HTTP resources. By default it resolves relative paths against `AppContext.BaseDirectory`, but you can change this via `ScriptBaseDirectory`.
+
+```javascript
+// CommonJS-style modules
+const math = require('./modules/math.js');
+const result = math.add(2, 3);
+
+// Execute a script for its side effects (e.g. UMD builds)
+window.importScripts('./vendor/charting.js');
+```
+
+Modules are executed once per host and cached; repeated `require` calls return the same `module.exports` instance.
+
 ### Event payloads
 
 Handlers receive simple objects that expose `handled` flags for two-way communication:
