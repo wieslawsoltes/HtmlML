@@ -355,6 +355,57 @@ function updateTime() {
 refresh.addEventListener('click', () => updateTime());
 updateTime();
 """),
+
+            new Preset(
+                "External library (relative time)",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16">
+  <StackPanel Spacing="12">
+    <TextBlock Name="statusAdvanced" FontSize="18" FontWeight="SemiBold" Text="Loading timeline..." />
+    <TextBlock Text="Requires dayjs and its relativeTime plugin, loaded from jsDelivr." TextWrapping="Wrap" />
+    <Button Name="refreshAdvanced" Content="Refresh timeline" HorizontalAlignment="Left" />
+    <StackPanel Name="eventList" Spacing="4" />
+  </StackPanel>
+</Border>
+""",
+                """
+const status = document.getElementById('statusAdvanced');
+const refresh = document.getElementById('refreshAdvanced');
+const eventList = document.getElementById('eventList');
+
+function updateTimeline() {
+  try {
+    const dayjs = require('https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js');
+    const relativeTime = require('https://cdn.jsdelivr.net/npm/dayjs@1/plugin/relativeTime.js');
+    dayjs.extend(relativeTime);
+
+    const events = [
+      { label: 'Kick-off', offset: -3 },
+      { label: 'Design freeze', offset: -1 },
+      { label: 'Beta release', offset: 4 },
+      { label: 'Launch', offset: 12 }
+    ];
+
+    for (const child of eventList.children) {
+      child.remove();
+    }
+
+    const now = dayjs();
+    for (const evt of events) {
+      const block = document.createElement('TextBlock');
+      block.textContent = `${evt.label}: ${now.add(evt.offset, 'day').fromNow()}`;
+      eventList.appendChild(block);
+    }
+
+    status.textContent = `Timeline refreshed at ${now.format('YYYY-MM-DD HH:mm:ss')}`;
+  } catch (error) {
+    status.textContent = `Failed to load timeline data: ${error}`;
+  }
+}
+
+refresh.addEventListener('click', () => updateTimeline());
+updateTimeline();
+"""),
         };
     }
 
