@@ -1,5 +1,8 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -7,7 +10,9 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Input.Raw;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Jint.Native;
+using JavaScript.Avalonia;
 using Xunit;
 
 namespace JavaScript.Avalonia.Tests;
@@ -238,7 +243,7 @@ public class AvaloniaDomDocumentTests
         var handled = false;
         var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
-            var info = Assert.IsType<AvaloniaDomElement.PointerEventInfo>(arg);
+            var info = Assert.IsType<PointerEventInfo>(arg);
             Assert.Equal("LeftButtonPressed", info.button);
             info.handled = true;
             handled = true;
@@ -276,7 +281,7 @@ public class AvaloniaDomDocumentTests
         var handled = false;
         var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
-            var info = Assert.IsType<AvaloniaDomElement.KeyEventInfo>(arg);
+            var info = Assert.IsType<KeyEventInfo>(arg);
             Assert.Equal("A", info.key);
             info.handled = true;
             handled = true;
@@ -311,22 +316,241 @@ public class AvaloniaDomDocumentTests
         string? observed = null;
         var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
-            var info = Assert.IsType<AvaloniaDomElement.TextInputEventInfo>(arg);
+            var info = Assert.IsType<TextInputEventInfo>(arg);
             observed = info.text;
             info.handled = true;
         }));
 
+        element.addEventListener("textinput", callback);
+
+        var field = typeof(AvaloniaDomElement).GetField("_eventHandlers", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var handlers = (System.Collections.IDictionary)field!.GetValue(element)!;
+        var list = (System.Collections.IList)handlers["textinput"]!;
+        var subscription = list[0];
+
         var args = new TextInputEventArgs
         {
+            RoutedEvent = InputElement.TextInputEvent,
+            Source = textBox,
             Text = "abc"
         };
 
         var method = typeof(AvaloniaDomElement).GetMethod("HandleTextInputEvent", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(method);
-
-        method!.Invoke(element, new object[] { callback, args });
+        method!.Invoke(element, new[] { subscription, args });
 
         Assert.Equal("abc", observed);
         Assert.True(args.Handled);
+
+        element.removeEventListener("textinput", callback);
+    }
+
+    [AvaloniaFact]
+    public async Task DocumentReadyState_TransitionsAndEvent()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callback = JsValue.FromObject(host.Engine, new Action(() => tcs.TrySetResult(true)));
+        host.Document.addEventListener("DOMContentLoaded", callback);
+
+        Assert.Equal("loading", host.Document.readyState);
+
+        Dispatcher.UIThread.RunJobs();
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal("complete", host.Document.readyState);
+        host.Document.removeEventListener("DOMContentLoaded", callback);
+    }
+
+    [AvaloniaFact]
+    public void FormsImagesLinks_ReturnExpectedElements()
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(new SampleForm());
+        panel.Children.Add(new Image());
+        panel.Children.Add(new HyperlinkButton());
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        Assert.Single(host.Document.forms);
+        Assert.Single(host.Document.images);
+        Assert.Single(host.Document.links);
+    }
+
+    [AvaloniaFact]
+    public void GetElementsByClassNameAndTagName_ReturnsMatches()
+    {
+        var panel = new StackPanel();
+        var first = new TextBlock();
+        first.Classes.Add("tagged");
+        var second = new TextBlock();
+        second.Classes.Add("tagged");
+        panel.Children.Add(first);
+        panel.Children.Add(second);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var byClass = host.Document.getElementsByClassName("tagged");
+        var byTag = host.Document.getElementsByTagName("TextBlock");
+
+        Assert.Equal(2, byClass.Length);
+        Assert.Equal(2, byTag.Length);
+    }
+
+    [AvaloniaFact]
+    public void Dataset_AllowsPropertyAccess()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var element = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+
+        element.setAttribute("data-user-id", "42");
+        element.dataset.set("statusFlag", "active");
+
+        host.Engine.SetValue("el", element);
+        host.Engine.Execute("var datasetUser = el.dataset.userId; var datasetStatus = el.dataset.statusFlag;");
+
+        Assert.Equal("42", element.getAttribute("data-user-id"));
+        Assert.Equal("active", element.getAttribute("data-status-flag"));
+        Assert.Equal("42", Convert.ToString(host.Engine.GetValue("datasetUser").ToObject(), CultureInfo.InvariantCulture));
+        Assert.Equal("active", Convert.ToString(host.Engine.GetValue("datasetStatus").ToObject(), CultureInfo.InvariantCulture));
+
+        Assert.True(element.dataset.delete("statusFlag"));
+        Assert.Null(element.getAttribute("data-status-flag"));
+    }
+
+    [AvaloniaFact]
+    public void StyleManipulation_SetsControlProperties()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var element = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+        var border = Assert.IsType<Border>(element.Control);
+
+        host.Engine.SetValue("el", element);
+        host.Engine.Execute("el.style.setProperty('width', '75'); el.style.height = '25';");
+
+        Assert.Equal(75, border.Width);
+        Assert.Equal(25, border.Height);
+
+        element.setAttribute("style", "width: 100; height: 40;");
+        Assert.Equal(100, border.Width);
+        Assert.Equal(40, border.Height);
+        Assert.Contains("width: 100", element.getAttribute("style"));
+    }
+
+    [AvaloniaFact]
+    public void ClassList_SupportsMultipleTokens()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var element = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+        var border = Assert.IsType<Border>(element.Control);
+
+        host.Engine.SetValue("el", element);
+        host.Engine.Execute("el.classList.add('one', 'two'); el.classList.toggle('two'); el.classList.toggle('three', true);");
+
+        Assert.Contains("one", border.Classes);
+        Assert.DoesNotContain("two", border.Classes);
+        Assert.Contains("three", border.Classes);
+    }
+
+    [AvaloniaFact]
+    public void BoundingClientRect_ReflectsControlBounds()
+    {
+        var panel = new StackPanel();
+        var border = new Border();
+        panel.Children.Add(border);
+        border.Measure(new Size(100, 50));
+        border.Arrange(new Rect(5, 6, 100, 50));
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var element = HostTestUtilities.GetElement(host.Document.querySelector("Border"));
+        var rect = Assert.IsType<DomRect>(element.getBoundingClientRect());
+
+        Assert.Equal(100, rect.width);
+        Assert.Equal(50, rect.height);
+        Assert.Equal(5, element.offsetLeft);
+        Assert.Equal(6, element.offsetTop);
+    }
+
+    [AvaloniaFact]
+    public void ParentChildNavigation_ProvidesHierarchy()
+    {
+        var panel = new StackPanel();
+        var border = new Border();
+        panel.Children.Add(border);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var parent = HostTestUtilities.GetElement(host.Document.querySelector("StackPanel"));
+        var child = HostTestUtilities.GetElement(host.Document.querySelector("Border"));
+
+        Assert.Same(parent, child.parentElement);
+        Assert.Equal(1, parent.childElementCount);
+        Assert.Same(child, parent.firstElementChild);
+        Assert.Null(child.previousElementSibling);
+    }
+
+    [AvaloniaFact]
+    public void EventListenerOnce_RemovesHandlerAfterInvocation()
+    {
+        var panel = new StackPanel();
+        var button = new Button();
+        panel.Children.Add(button);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+        var element = HostTestUtilities.GetElement(host.Document.querySelector("Button"));
+
+        var count = 0;
+        var callback = JsValue.FromObject(host.Engine, new Action(() => count++));
+        var options = JsValue.FromObject(host.Engine, new { once = true });
+        element.addEventListener("click", callback, options);
+
+        button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        Assert.Equal(1, count);
+    }
+
+    [AvaloniaFact]
+    public void StopPropagation_PreventsParentHandler()
+    {
+        var panel = new StackPanel();
+        var border = new Border();
+        panel.Children.Add(border);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+        var parentElement = HostTestUtilities.GetElement(host.Document.querySelector("StackPanel"));
+        var childElement = HostTestUtilities.GetElement(host.Document.querySelector("Border"));
+
+        var parentCalls = 0;
+        var childCalls = 0;
+
+        var parentCallback = JsValue.FromObject(host.Engine, new Action<object>(_ => parentCalls++));
+        var childCallback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            childCalls++;
+            var info = Assert.IsType<PointerEventInfo>(arg);
+            info.stopPropagation();
+        }));
+
+        parentElement.addEventListener("pointerdown", parentCallback);
+        childElement.addEventListener("pointerdown", childCallback);
+
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var args = new PointerPressedEventArgs(
+            border,
+            pointer,
+            border,
+            new Point(0, 0),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None);
+
+        border.RaiseEvent(args);
+
+        Assert.Equal(1, childCalls);
+        Assert.Equal(0, parentCalls);
+
+        childElement.removeEventListener("pointerdown", childCallback);
+        parentElement.removeEventListener("pointerdown", parentCallback);
+    }
+
+    private sealed class SampleForm : Control
+    {
     }
 }
