@@ -112,7 +112,7 @@ public class JintHost : JintAvaloniaHost
         {
             if (string.Equals(tag, "canvas", StringComparison.OrdinalIgnoreCase))
             {
-                return new HtmlDomElement(_host, new canvas());
+                return new CanvasJsElement(_host, new canvas());
             }
 
             return base.createElement(tag);
@@ -157,7 +157,7 @@ public class JintHost : JintAvaloniaHost
             return base.CreateControl(tag);
         }
 
-        protected override object WrapControl(Control control)
+        protected override AvaloniaDomElement WrapControl(Control control)
         {
             if (control is canvas canv)
             {
@@ -180,7 +180,7 @@ public class JintHost : JintAvaloniaHost
         }
     }
 
-    private sealed class HtmlDomElement : AvaloniaDomElement
+    private class HtmlDomElement : AvaloniaDomElement
     {
         public HtmlDomElement(JintHost host, Control control)
             : base(host, control)
@@ -199,27 +199,29 @@ public class JintHost : JintAvaloniaHost
         }
     }
 
-    public sealed class CanvasJsElement
+    private sealed class CanvasJsElement : HtmlDomElement
     {
         private readonly JintHost _host;
-        private readonly canvas _canvas;
 
         private readonly List<JsValue> _down = new();
         private readonly List<JsValue> _move = new();
         private readonly List<JsValue> _up = new();
 
         public CanvasJsElement(JintHost host, canvas c)
+            : base(host, c)
         {
             _host = host;
-            _canvas = c;
         }
 
         public canvas.Canvas2DContext getContext(string type)
         {
-            return _canvas.GetContext(type);
+            return ((canvas)Control).GetContext(type);
         }
 
-        public void addEventListener(string type, JsValue handler)
+        public override void addEventListener(string type, JsValue handler)
+            => addEventListener(type, handler, JsValue.Undefined);
+
+        public override void addEventListener(string type, JsValue handler, JsValue options)
         {
             if (IsNullish(handler))
             {
@@ -237,10 +239,13 @@ public class JintHost : JintAvaloniaHost
                 case "pointerup":
                     _up.Add(handler);
                     break;
+                default:
+                    base.addEventListener(type, handler, options);
+                    break;
             }
         }
 
-        public void removeEventListener(string type, JsValue handler)
+        public override void removeEventListener(string type, JsValue handler)
         {
             if (IsNullish(handler))
             {
@@ -258,7 +263,33 @@ public class JintHost : JintAvaloniaHost
                 case "pointerup":
                     _up.Remove(handler);
                     break;
+                default:
+                    base.removeEventListener(type, handler);
+                    break;
             }
+        }
+
+        public override void setAttribute(string name, string? value)
+        {
+            if (string.Equals(name, "id", StringComparison.OrdinalIgnoreCase))
+            {
+                var oldId = ((canvas)Control).Name;
+                base.setAttribute(name, value);
+
+                if (!string.IsNullOrWhiteSpace(oldId) && oldId != ((canvas)Control).Name)
+                {
+                    _host._canvasById.Remove(oldId);
+                }
+
+                var newId = ((canvas)Control).Name;
+                if (!string.IsNullOrWhiteSpace(newId))
+                {
+                    _host._canvasById[newId] = this;
+                }
+                return;
+            }
+
+            base.setAttribute(name, value);
         }
 
         private static bool IsNullish(JsValue value)

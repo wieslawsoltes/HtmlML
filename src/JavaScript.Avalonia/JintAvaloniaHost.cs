@@ -39,11 +39,13 @@ public class JintAvaloniaHost
         Engine.SetValue("document", Document);
         try
         {
-            Engine.Execute("if (typeof window !== 'undefined') { window.document = document; if (typeof globalThis !== 'undefined') { globalThis.document = document; if (typeof window.setTimeout === 'function') { globalThis.setTimeout = window.setTimeout.bind(window); } if (typeof window.requestAnimationFrame === 'function') { globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window); } if (typeof window.cancelAnimationFrame === 'function') { globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window); } } }");
+            Engine.Execute("if (typeof window !== 'undefined') { window.document = document; if (typeof globalThis !== 'undefined') { globalThis.document = document; if (typeof window.setTimeout === 'function') { globalThis.setTimeout = window.setTimeout.bind(window); } if (typeof window.clearTimeout === 'function') { globalThis.clearTimeout = window.clearTimeout.bind(window); } if (typeof window.setInterval === 'function') { globalThis.setInterval = window.setInterval.bind(window); } if (typeof window.clearInterval === 'function') { globalThis.clearInterval = window.clearInterval.bind(window); } if (typeof window.requestAnimationFrame === 'function') { globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window); } if (typeof window.cancelAnimationFrame === 'function') { globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window); } } }");
         }
         catch
         {
         }
+
+        Document.ScheduleReadyStateCompletion();
     }
 
     protected virtual void ConfigureEngineOptions(Options options)
@@ -166,39 +168,112 @@ public class JintAvaloniaHost
     public class ConsoleJs
     {
         public virtual void log(object? value) => Console.WriteLine(value);
+
+        public virtual void info(object? value) => Console.WriteLine(value);
+
+        public virtual void warn(object? value) => Console.WriteLine(value);
+
+        public virtual void error(object? value) => Console.Error.WriteLine(value);
+
+        public virtual void table(object? value)
+        {
+            if (value is null)
+            {
+                Console.WriteLine("null");
+                return;
+            }
+
+            Console.WriteLine(value);
+        }
     }
 
     public class WindowJs
     {
         private readonly JintAvaloniaHost _host;
+        private int _timerSeq;
+        private readonly Dictionary<int, DispatcherTimer> _timeouts = new();
+        private readonly Dictionary<int, DispatcherTimer> _intervals = new();
 
         public WindowJs(JintAvaloniaHost host)
         {
             _host = host;
         }
 
-        public void setTimeout(JsValue callback, int ms)
+        public int setTimeout(JsValue callback, int ms)
         {
             if (callback.IsUndefined() || callback.IsNull())
             {
-                return;
+                return 0;
             }
 
-            DispatcherTimer.RunOnce(() =>
+            var id = ++_timerSeq;
+            var timer = new DispatcherTimer
             {
-                try
-                {
-                    _host.Engine.Invoke(callback, Array.Empty<object>());
-                }
-                catch
-                {
-                    // Ignore callback errors
-                }
-            }, TimeSpan.FromMilliseconds(ms));
+                Interval = TimeSpan.FromMilliseconds(Math.Max(ms, 0))
+            };
+
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                _timeouts.Remove(id);
+                InvokeTimerCallback(callback);
+            };
+
+            _timeouts[id] = timer;
+            timer.Start();
+            return id;
+        }
+
+        public void clearTimeout(int id)
+        {
+            if (_timeouts.Remove(id, out var timer))
+            {
+                timer.Stop();
+            }
+        }
+
+        public int setInterval(JsValue callback, int ms)
+        {
+            if (callback.IsUndefined() || callback.IsNull())
+            {
+                return 0;
+            }
+
+            var id = ++_timerSeq;
+            var timer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(Math.Max(ms, 0))
+            };
+
+            timer.Tick += (_, _) => InvokeTimerCallback(callback);
+
+            _intervals[id] = timer;
+            timer.Start();
+            return id;
+        }
+
+        public void clearInterval(int id)
+        {
+            if (_intervals.Remove(id, out var timer))
+            {
+                timer.Stop();
+            }
         }
 
         public int requestAnimationFrame(JsValue callback) => _host.RequestAnimationFrame(callback);
 
         public void cancelAnimationFrame(int id) => _host.CancelAnimationFrame(id);
+
+        private void InvokeTimerCallback(JsValue callback)
+        {
+            try
+            {
+                _host.Engine.Invoke(callback, Array.Empty<object>());
+            }
+            catch
+            {
+                // Ignore callback errors
+            }
+        }
     }
 }
