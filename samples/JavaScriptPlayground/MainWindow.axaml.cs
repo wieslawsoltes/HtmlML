@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -10,6 +9,9 @@ using Avalonia.Threading;
 using JavaScript.Avalonia;
 using Jint.Native;
 using Avalonia.Interactivity;
+using AvaloniaEdit.Document;
+using AvaloniaEdit.TextMate;
+using TextMateSharp.Grammars;
 
 namespace JavaScriptPlayground;
 
@@ -17,6 +19,9 @@ public partial class MainWindow : Window
 {
     private readonly List<Preset> _presets;
     private JintAvaloniaHost? _host;
+    private readonly TextDocument _xamlDocument = new();
+    private readonly TextDocument _scriptDocument = new();
+    private readonly RegistryOptions _registryOptions = new(ThemeName.LightPlus);
 
     public MainWindow()
     {
@@ -24,6 +29,8 @@ public partial class MainWindow : Window
 #if DEBUG
         this.AttachDevTools();
 #endif
+
+        ConfigureEditors();
 
         _presets = CreatePresets();
         PresetCombo.ItemsSource = _presets;
@@ -51,8 +58,8 @@ public partial class MainWindow : Window
 
     private void ApplyPreset(Preset preset)
     {
-        XamlEditor.Text = preset.Xaml;
-        ScriptEditor.Text = preset.Script;
+        _xamlDocument.Text = preset.Xaml;
+        _scriptDocument.Text = preset.Script;
         LoadXaml(AutoRunCheckBox.IsChecked == true);
     }
 
@@ -78,7 +85,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            var loaded = AvaloniaRuntimeXamlLoader.Load(XamlEditor.Text);
+            var xaml = _xamlDocument.Text ?? string.Empty;
+            var loaded = AvaloniaRuntimeXamlLoader.Load(xaml);
             if (loaded is not Control control)
             {
                 throw new InvalidOperationException("Root element must derive from Control.");
@@ -104,6 +112,32 @@ public partial class MainWindow : Window
         _host = new JintAvaloniaHost(this, host => new PlaygroundDomDocument(host, this));
     }
 
+    private void ConfigureEditors()
+    {
+        XamlEditor.Document = _xamlDocument;
+        ScriptEditor.Document = _scriptDocument;
+
+        var xamlTextMate = XamlEditor.InstallTextMate(_registryOptions);
+        var scriptTextMate = ScriptEditor.InstallTextMate(_registryOptions);
+        ApplyGrammar(xamlTextMate, ".xaml");
+        ApplyGrammar(scriptTextMate, ".js");
+    }
+
+    private void ApplyGrammar(dynamic installation, string extension)
+    {
+        var language = _registryOptions.GetLanguageByExtension(extension);
+        if (language is null)
+        {
+            return;
+        }
+
+        var scope = _registryOptions.GetScopeByLanguageId(language.Id);
+        if (scope is not null)
+        {
+            installation.SetGrammar(scope);
+        }
+    }
+
     private void RunScript(bool resetHost)
     {
         if (resetHost || _host is null)
@@ -119,7 +153,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var script = ScriptEditor.Text;
+            var script = _scriptDocument.Text;
             if (!string.IsNullOrWhiteSpace(script))
             {
                 _host.ExecuteScriptText(script);

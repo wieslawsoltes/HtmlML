@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         x:Class="JavaScriptPlayground.MainWindow"
         Width="1200"
         Height="800"
@@ -29,13 +30,19 @@
           <Border Background="#f7f7f7" Padding="8" BorderBrush="#ddd" BorderThickness="0,0,0,1">
             <TextBlock Text="XAML" FontWeight="Bold" />
           </Border>
-          <ScrollViewer Grid.Row="1" Margin="8">
-            <TextBox x:Name="XamlEditor"
-                     AcceptsReturn="True"
-                     AcceptsTab="True"
-                     FontFamily="Consolas, Courier New, monospace"
-                     TextWrapping="NoWrap" />
-          </ScrollViewer>
+          <Border Grid.Row="1" Margin="8" BorderBrush="#e0e0e0" BorderThickness="1">
+            <avaloniaEdit:TextEditor x:Name="XamlEditor"
+                           ShowLineNumbers="True"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Stretch"
+                           HorizontalScrollBarVisibility="Auto"
+                           VerticalScrollBarVisibility="Auto"
+                           FontFamily="Consolas, Courier New, monospace"
+                           Foreground="#202020"
+                           Background="#ffffff"
+                           Padding="8"
+                           MinHeight="200" />
+          </Border>
         </Grid>
       </Border>
 
@@ -57,13 +64,19 @@
           <Border Background="#f7f7f7" Padding="8" BorderBrush="#ddd" BorderThickness="0,0,0,1">
             <TextBlock Text="JavaScript" FontWeight="Bold" />
           </Border>
-          <ScrollViewer Grid.Row="1" Margin="8">
-            <TextBox x:Name="ScriptEditor"
-                     AcceptsReturn="True"
-                     AcceptsTab="True"
-                     FontFamily="Consolas, Courier New, monospace"
-                     TextWrapping="NoWrap" />
-          </ScrollViewer>
+          <Border Grid.Row="1" Margin="8" BorderBrush="#e0e0e0" BorderThickness="1">
+            <avaloniaEdit:TextEditor x:Name="ScriptEditor"
+                           ShowLineNumbers="True"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Stretch"
+                           HorizontalScrollBarVisibility="Auto"
+                           VerticalScrollBarVisibility="Auto"
+                           FontFamily="Consolas, Courier New, monospace"
+                           Foreground="#202020"
+                           Background="#ffffff"
+                           Padding="8"
+                           MinHeight="200" />
+          </Border>
         </Grid>
       </Border>
     </Grid>
