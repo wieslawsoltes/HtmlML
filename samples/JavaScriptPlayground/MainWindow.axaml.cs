@@ -925,6 +925,150 @@ randomBtn.addEventListener('click', () => {
 });
 
 renderAndReport('Initial curve generated with bezier-js. Drag the red points to edit.');
+
+"""
+            ),
+            new Preset(
+                "Canvas 2D + rough.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#ffffff" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas 2D with rough.js" FontWeight="SemiBold" Foreground="#111827" />
+    <Border Name="roughSurface" Width="540" Height="300" Background="#f8fafc" BorderBrush="#e2e8f0" BorderThickness="1" CornerRadius="4" />
+    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+      <TextBlock Text="Roughness:" VerticalAlignment="Center" />
+      <Slider Name="roughnessSlider" Minimum="0.5" Maximum="3.0" Value="1.0" Width="160" />
+      <Button Name="roughRender" Content="Render scene" />
+      <Button Name="roughPalette" Content="New palette" />
+    </StackPanel>
+    <TextBlock Name="roughStatus" Foreground="#475569" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('roughSurface');
+const ctx = surface.getContext('2d');
+const slider = document.getElementById('roughnessSlider');
+const renderBtn = document.getElementById('roughRender');
+const paletteBtn = document.getElementById('roughPalette');
+const status = document.getElementById('roughStatus');
+
+let roughModule;
+try {
+  const mod = require('https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.cjs.js');
+  roughModule = mod?.canvas ? mod : (mod?.default?.canvas ? mod.default : mod);
+  if (typeof roughModule?.canvas !== 'function') {
+    throw new Error('rough.js canvas factory not found');
+  }
+} catch (error) {
+  const message = `Failed to load rough.js: ${error}`;
+  if (status) {
+    status.textContent = message;
+  }
+  console.error(message);
+  throw error;
+}
+
+const palettes = [
+  ['#fde68a', '#f97316', '#1f2937'],
+  ['#fbcfe8', '#ec4899', '#312e81'],
+  ['#bfdbfe', '#1d4ed8', '#0f172a'],
+  ['#dcfce7', '#16a34a', '#064e3b'],
+  ['#fee2e2', '#ef4444', '#7f1d1d']
+];
+let paletteIndex = 0;
+
+const getRoughness = () => {
+  const value = parseFloat(slider?.Value ?? slider?.value ?? '1');
+  return Number.isFinite(value) ? value : 1;
+};
+
+const pickPalette = () => {
+  paletteIndex = Math.floor(Math.random() * palettes.length);
+  return palettes[paletteIndex];
+};
+
+let currentPalette = pickPalette();
+
+function renderScene(message) {
+  const w = surface.offsetWidth;
+  const h = surface.offsetHeight;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, w, h);
+
+  const rough = roughModule.canvas(surface);
+  const roughness = getRoughness();
+  const [fill1, stroke1, accent] = currentPalette;
+
+  rough.rectangle(36, 28, 180, 120, {
+    roughness,
+    fill: fill1,
+    stroke: stroke1,
+    fillStyle: 'hachure',
+    strokeWidth: 2
+  });
+
+  rough.circle(320, 110, 120, {
+    roughness,
+    fill: accent,
+    fillStyle: 'zigzag',
+    stroke: stroke1,
+    strokeWidth: 2
+  });
+
+  rough.linearPath([
+    [60, 220],
+    [160, 260],
+    [260, 200],
+    [360, 260],
+    [460, 200]
+  ], {
+    roughness: roughness * 0.8,
+    stroke: stroke1,
+    bowing: 1.2,
+    strokeWidth: 3
+  });
+
+  rough.rectangle(280, 180, 180, 90, {
+    roughness: roughness * 1.1,
+    fill: fill1,
+    fillStyle: 'cross-hatch',
+    stroke: accent,
+    strokeWidth: 2
+  });
+
+  if (status) {
+    const text = message ?? `Rendered with roughness ${roughness.toFixed(2)}`;
+    status.textContent = text;
+  }
+}
+
+const refreshFromSlider = () => {
+  renderScene(`Rendered with roughness ${getRoughness().toFixed(2)}`);
+};
+
+renderBtn.addEventListener('click', () => renderScene('Manual render using rough.js'));
+
+paletteBtn.addEventListener('click', () => {
+  currentPalette = pickPalette();
+  renderScene('Random palette applied');
+});
+
+slider.addEventListener('pointerup', refreshFromSlider);
+slider.addEventListener('pointermove', evt => {
+  if (evt.buttons) {
+    refreshFromSlider();
+  }
+});
+
+slider.addEventListener('keydown', refreshFromSlider);
+slider.addEventListener('wheel', evt => {
+  evt.preventDefault?.();
+  refreshFromSlider();
+}, { passive: false });
+
+renderScene('Sketch scene rendered with rough.js — adjust the slider or change palette');
 """
             ),
             new Preset(
