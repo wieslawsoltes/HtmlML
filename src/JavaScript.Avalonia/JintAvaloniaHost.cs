@@ -48,6 +48,7 @@ public class JintAvaloniaHost
         Engine.SetValue("document", Document);
         RegisterModuleSystem();
         RegisterEventConstructors();
+        RegisterMutationObserver();
         try
         {
             Engine.Execute("if (typeof window !== 'undefined') { window.document = document; if (typeof globalThis !== 'undefined') { globalThis.document = document; if (typeof window.setTimeout === 'function') { globalThis.setTimeout = window.setTimeout.bind(window); } if (typeof window.clearTimeout === 'function') { globalThis.clearTimeout = window.clearTimeout.bind(window); } if (typeof window.setInterval === 'function') { globalThis.setInterval = window.setInterval.bind(window); } if (typeof window.clearInterval === 'function') { globalThis.clearInterval = window.clearInterval.bind(window); } if (typeof window.requestAnimationFrame === 'function') { globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window); } if (typeof window.cancelAnimationFrame === 'function') { globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window); } if (typeof window.importScripts === 'function') { globalThis.importScripts = window.importScripts.bind(window); } if (typeof window.require === 'function') { globalThis.require = window.require.bind(window); } } }");
@@ -82,6 +83,53 @@ public class JintAvaloniaHost
         try
         {
             Engine.Execute("if (typeof window !== 'undefined') { window.require = require; }");
+        }
+        catch
+        {
+        }
+    }
+
+    private void RegisterMutationObserver()
+    {
+        Engine.SetValue("__createMutationObserverInternal", new Func<JsValue, object>(callback => Document.CreateMutationObserver(callback)));
+
+        const string script = @"(function(){
+  if (typeof globalThis === 'undefined') {
+    return;
+  }
+  var factory = globalThis.__createMutationObserverInternal;
+  if (typeof factory !== 'function') {
+    return;
+  }
+  function MutationObserver(callback) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('MutationObserver callback must be a function');
+    }
+    var impl = factory(callback);
+    impl.__setJsObserver(this);
+    Object.defineProperty(this, '__impl', { value: impl, enumerable: false, configurable: false, writable: false });
+  }
+  MutationObserver.prototype.observe = function(target, options) {
+    this.__impl.observe(target, options);
+  };
+  MutationObserver.prototype.disconnect = function() {
+    this.__impl.disconnect();
+  };
+  MutationObserver.prototype.takeRecords = function() {
+    return this.__impl.takeRecords();
+  };
+  globalThis.MutationObserver = MutationObserver;
+  if (typeof window !== 'undefined') {
+    window.MutationObserver = MutationObserver;
+  }
+  try {
+    delete globalThis.__createMutationObserverInternal;
+  } catch (e) {}
+})();";
+
+        try
+        {
+            Engine.Execute(script);
         }
         catch
         {
