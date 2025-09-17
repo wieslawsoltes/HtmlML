@@ -106,6 +106,19 @@ public class AvaloniaDomDocument
         return WrapControl(control);
     }
 
+    public virtual object? createTextNode(string data)
+    {
+        var textBlock = CreateTextNodeControl(data ?? string.Empty);
+        if (_elementWrappers.TryGetValue(textBlock, out var existing))
+        {
+            return existing;
+        }
+
+        var node = new AvaloniaDomTextNode(Host, textBlock);
+        _elementWrappers.Add(textBlock, node);
+        return node;
+    }
+
     public virtual object? body
     {
         get
@@ -286,6 +299,9 @@ public class AvaloniaDomDocument
             return null;
         }
     }
+
+    private static TextBlock CreateTextNodeControl(string text)
+        => new() { Text = text };
 
     protected static IEnumerable<Control> Traverse(Control root)
     {
@@ -631,26 +647,7 @@ public class AvaloniaDomElement
     }
 
     public virtual AvaloniaDomElement? appendChild(AvaloniaDomElement child)
-    {
-        if (child is null)
-        {
-            return null;
-        }
-
-        if (TryGetControlsCollection(Control, out var list))
-        {
-            list.Add(child.Control);
-            return child;
-        }
-
-        if (Control is ContentControl cc)
-        {
-            cc.Content = child.Control;
-            return child;
-        }
-
-        return null;
-    }
+        => InsertChild(child, reference: null, placeBefore: false);
 
     public virtual void remove()
     {
@@ -673,6 +670,106 @@ public class AvaloniaDomElement
                 cc.Content = null;
             }
         }
+    }
+
+    public virtual AvaloniaDomElement? insertBefore(AvaloniaDomElement newChild, AvaloniaDomElement? referenceChild)
+    {
+        if (referenceChild is null)
+        {
+            return appendChild(newChild);
+        }
+
+        return InsertChild(newChild, referenceChild, placeBefore: true);
+    }
+
+    public virtual AvaloniaDomElement? removeChild(AvaloniaDomElement child)
+    {
+        if (child is null)
+        {
+            return null;
+        }
+
+        if (TryGetControlsCollection(Control, out var list))
+        {
+            return list.Remove(child.Control) ? child : null;
+        }
+
+        if (Control is ContentControl cc)
+        {
+            if (ReferenceEquals(cc.Content, child.Control))
+            {
+                cc.Content = null;
+                return child;
+            }
+
+            return null;
+        }
+
+        if (Control is Decorator decorator)
+        {
+            if (ReferenceEquals(decorator.Child, child.Control))
+            {
+                decorator.Child = null;
+                return child;
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    public virtual AvaloniaDomElement? replaceChild(AvaloniaDomElement newChild, AvaloniaDomElement oldChild)
+    {
+        if (newChild is null || oldChild is null)
+        {
+            return null;
+        }
+
+        if (ReferenceEquals(newChild.Control, oldChild.Control))
+        {
+            return oldChild;
+        }
+
+        if (TryGetControlsCollection(Control, out var list))
+        {
+            var index = list.IndexOf(oldChild.Control);
+            if (index < 0)
+            {
+                return null;
+            }
+
+            DetachFromParent(newChild.Control);
+            list.RemoveAt(index);
+            list.Insert(index, newChild.Control);
+            return oldChild;
+        }
+
+        if (Control is ContentControl cc)
+        {
+            if (!ReferenceEquals(cc.Content, oldChild.Control))
+            {
+                return null;
+            }
+
+            DetachFromParent(newChild.Control);
+            cc.Content = newChild.Control;
+            return oldChild;
+        }
+
+        if (Control is Decorator decorator)
+        {
+            if (!ReferenceEquals(decorator.Child, oldChild.Control))
+            {
+                return null;
+            }
+
+            DetachFromParent(newChild.Control);
+            decorator.Child = newChild.Control;
+            return oldChild;
+        }
+
+        return null;
     }
 
     public virtual string? getAttribute(string name)
@@ -940,6 +1037,78 @@ public class AvaloniaDomElement
         return null;
     }
 
+    private AvaloniaDomElement? InsertChild(AvaloniaDomElement? child, AvaloniaDomElement? reference, bool placeBefore)
+    {
+        if (child is null)
+        {
+            return null;
+        }
+
+        if (TryGetControlsCollection(Control, out var list))
+        {
+            if (reference is null)
+            {
+                DetachFromParent(child.Control);
+                list.Add(child.Control);
+                return child;
+            }
+
+            var index = list.IndexOf(reference.Control);
+            if (index < 0)
+            {
+                return null;
+            }
+
+            DetachFromParent(child.Control);
+            var targetIndex = placeBefore ? index : Math.Min(index + 1, list.Count);
+            list.Insert(targetIndex, child.Control);
+            return child;
+        }
+
+        if (Control is ContentControl cc)
+        {
+            if (reference is not null && !ReferenceEquals(cc.Content, reference.Control))
+            {
+                return null;
+            }
+
+            DetachFromParent(child.Control);
+            cc.Content = child.Control;
+            return child;
+        }
+
+        if (Control is Decorator decorator)
+        {
+            if (reference is not null && !ReferenceEquals(decorator.Child, reference.Control))
+            {
+                return null;
+            }
+
+            DetachFromParent(child.Control);
+            decorator.Child = child.Control;
+            return child;
+        }
+
+        return null;
+    }
+
+    private static void DetachFromParent(Control control)
+    {
+        var parent = control.Parent;
+        switch (parent)
+        {
+            case Panel panel:
+                panel.Children.Remove(control);
+                break;
+            case Decorator decorator when decorator.Child == control:
+                decorator.Child = null;
+                break;
+            case ContentControl cc when ReferenceEquals(cc.Content, control):
+                cc.Content = null;
+                break;
+        }
+    }
+
     private PointerEventInfo CreatePointerEventInfo(PointerEventArgs args) => new(args, Control);
 
     private KeyEventInfo CreateKeyEventInfo(KeyEventArgs args) => new(args);
@@ -1185,6 +1354,34 @@ public class AvaloniaDomElement
             _unsubscribe();
             _disposed = true;
         }
+    }
+}
+
+public sealed class AvaloniaDomTextNode : AvaloniaDomElement
+{
+    public AvaloniaDomTextNode(JintAvaloniaHost host, TextBlock control)
+        : base(host, control)
+    {
+    }
+
+    private TextBlock TextBlock => (TextBlock)Control;
+
+    public string data
+    {
+        get => TextBlock.Text ?? string.Empty;
+        set => TextBlock.Text = value ?? string.Empty;
+    }
+
+    public string nodeValue
+    {
+        get => data;
+        set => data = value ?? string.Empty;
+    }
+
+    public override string? textContent
+    {
+        get => data;
+        set => data = value ?? string.Empty;
     }
 }
 
