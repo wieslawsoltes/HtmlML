@@ -979,8 +979,13 @@ const palettes = [
 let paletteIndex = 0;
 
 const getRoughness = () => {
-  const value = parseFloat(slider?.Value ?? slider?.value ?? '1');
-  return Number.isFinite(value) ? value : 1;
+  if (!slider) {
+    return 1;
+  }
+
+  const raw = slider.Value ?? slider.value ?? slider.getAttribute?.('value') ?? slider.getAttribute?.('Value');
+  const numeric = typeof raw === 'number' ? raw : parseFloat(raw ?? '1');
+  return Number.isFinite(numeric) ? numeric : 1;
 };
 
 const pickPalette = () => {
@@ -1067,6 +1072,9 @@ slider.addEventListener('wheel', evt => {
   evt.preventDefault?.();
   refreshFromSlider();
 }, { passive: false });
+
+slider.addEventListener('valuechanged', refreshFromSlider);
+slider.addEventListener('input', refreshFromSlider);
 
 renderScene('Sketch scene rendered with rough.js — adjust the slider or change palette');
 """
