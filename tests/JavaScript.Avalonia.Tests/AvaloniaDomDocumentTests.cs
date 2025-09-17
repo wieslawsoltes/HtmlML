@@ -101,6 +101,148 @@ public class AvaloniaDomDocumentTests
     }
 
     [AvaloniaFact]
+    public void CreateTextNode_ProducesTextBlockWrapper()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+
+        var node = Assert.IsType<AvaloniaDomTextNode>(host.Document.createTextNode("Hello"));
+
+        Assert.Equal("Hello", node.data);
+        Assert.Equal("Hello", node.textContent);
+        Assert.IsType<TextBlock>(node.Control);
+    }
+
+    [AvaloniaFact]
+    public void CreateTextNode_AppendsToContainer()
+    {
+        var panel = new StackPanel();
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var body = HostTestUtilities.GetElement(host.Document.body);
+        var node = Assert.IsType<AvaloniaDomTextNode>(host.Document.createTextNode("Sample"));
+
+        var appended = body.appendChild(node);
+
+        Assert.Same(node, appended);
+        var textBlock = Assert.IsType<TextBlock>(node.Control);
+        Assert.Contains(textBlock, panel.Children);
+        Assert.Equal("Sample", textBlock.Text);
+    }
+
+    [AvaloniaFact]
+    public void CreateTextNode_PreservesLiteralCharacters()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        const string literal = "<StackPanel /> & text";
+
+        var node = Assert.IsType<AvaloniaDomTextNode>(host.Document.createTextNode(literal));
+
+        Assert.Equal(literal, node.data);
+        Assert.Equal(literal, ((TextBlock)node.Control).Text);
+    }
+
+    [AvaloniaFact]
+    public void InsertBefore_InsertsAtCorrectPosition()
+    {
+        var panel = new StackPanel();
+        var first = new TextBlock { Name = "first" };
+        var second = new TextBlock { Name = "second" };
+        panel.Children.Add(first);
+        panel.Children.Add(second);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var container = HostTestUtilities.GetElement(host.Document.body);
+        var newChild = HostTestUtilities.GetElement(host.Document.createElement("TextBlock"));
+        var reference = HostTestUtilities.GetElement(host.Document.getElementById("second"));
+
+        var inserted = container.insertBefore(newChild, reference);
+
+        Assert.Same(newChild, inserted);
+        Assert.Equal(3, panel.Children.Count);
+        Assert.Same(first, panel.Children[0]);
+        Assert.Same(newChild.Control, panel.Children[1]);
+        Assert.Same(second, panel.Children[2]);
+    }
+
+    [AvaloniaFact]
+    public void InsertBefore_AppendsWhenReferenceIsNull()
+    {
+        var panel = new StackPanel();
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var container = HostTestUtilities.GetElement(host.Document.body);
+        var first = HostTestUtilities.GetElement(host.Document.createElement("TextBlock"));
+        var second = HostTestUtilities.GetElement(host.Document.createElement("TextBlock"));
+
+        container.insertBefore(first, null);
+        container.insertBefore(second, null);
+
+        Assert.Equal(2, panel.Children.Count);
+        Assert.Same(first.Control, panel.Children[0]);
+        Assert.Same(second.Control, panel.Children[1]);
+    }
+
+    [AvaloniaFact]
+    public void RemoveChild_RemovesFromVisualTree()
+    {
+        var panel = new StackPanel();
+        var childControl = new TextBlock();
+        panel.Children.Add(childControl);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var container = HostTestUtilities.GetElement(host.Document.body);
+        var child = HostTestUtilities.GetElement(host.Document.querySelector("TextBlock"));
+
+        var removed = container.removeChild(child);
+
+        Assert.Same(child, removed);
+        Assert.Empty(panel.Children);
+    }
+
+    [AvaloniaFact]
+    public void ReplaceChild_ReplacesExistingChild()
+    {
+        var panel = new StackPanel();
+        var oldControl = new TextBlock { Name = "old" };
+        panel.Children.Add(oldControl);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var container = HostTestUtilities.GetElement(host.Document.body);
+        var oldChild = HostTestUtilities.GetElement(host.Document.getElementById("old"));
+        var newChild = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+
+        var result = container.replaceChild(newChild, oldChild);
+
+        Assert.Same(oldChild, result);
+        Assert.Single(panel.Children);
+        Assert.Same(newChild.Control, panel.Children[0]);
+        Assert.DoesNotContain(oldControl, panel.Children);
+    }
+
+    [AvaloniaFact]
+    public void AppendChild_ReparentsExistingChild()
+    {
+        var root = new StackPanel();
+        var source = new StackPanel { Name = "source" };
+        var target = new StackPanel { Name = "target" };
+        var moved = new TextBlock { Name = "moved" };
+        source.Children.Add(moved);
+        root.Children.Add(source);
+        root.Children.Add(target);
+        var (host, _) = HostTestUtilities.CreateHost(root);
+
+        var targetElement = HostTestUtilities.GetElement(host.Document.getElementById("target"));
+        var child = HostTestUtilities.GetElement(host.Document.getElementById("moved"));
+
+        var appended = targetElement.appendChild(child);
+
+        Assert.Same(child, appended);
+        Assert.Single(target.Children);
+        Assert.Empty(source.Children);
+        Assert.Same(moved, target.Children[0]);
+    }
+
+    [AvaloniaFact]
     public void AppendChild_AddsToPanel()
     {
         var panel = new StackPanel();

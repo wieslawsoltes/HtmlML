@@ -1,6 +1,8 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Jint.Native;
@@ -135,6 +137,49 @@ public class JintAvaloniaHostTests
         var (host, _) = HostTestUtilities.CreateHost();
 
         host.ExecuteScriptText("console.log('log'); console.info('info'); console.warn('warn'); console.error('error'); console.table({ value: 1 });");
+    }
+
+    [AvaloniaFact]
+    public void CreateTextNode_IsAvailableToScripts()
+    {
+        var panel = new StackPanel();
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        host.ExecuteScriptText("const node = document.createTextNode('from js'); document.body.appendChild(node); node.data = 'updated';");
+
+        Assert.Single(panel.Children);
+        var textBlock = Assert.IsType<TextBlock>(panel.Children[0]);
+        Assert.Equal("updated", textBlock.Text);
+    }
+
+    [AvaloniaFact]
+    public void ChildManipulation_Apis_WorkFromJavaScript()
+    {
+        var panel = new StackPanel();
+        var first = new TextBlock { Name = "first" };
+        var second = new TextBlock { Name = "second" };
+        panel.Children.Add(first);
+        panel.Children.Add(second);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        host.ExecuteScriptText("""
+const body = document.body;
+const first = document.getElementById('first');
+const second = document.getElementById('second');
+const middle = document.createElement('TextBlock');
+middle.setAttribute('name', 'middle');
+
+body.insertBefore(middle, second);
+body.removeChild(first);
+
+const replacement = document.createElement('Border');
+body.replaceChild(replacement, second);
+""");
+
+        Assert.Equal(2, panel.Children.Count);
+        var middle = Assert.IsType<TextBlock>(panel.Children[0]);
+        Assert.Equal("middle", middle.Name);
+        Assert.IsType<Border>(panel.Children[1]);
     }
 
     [AvaloniaFact]

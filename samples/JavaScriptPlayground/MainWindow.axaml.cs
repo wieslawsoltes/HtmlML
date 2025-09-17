@@ -201,6 +201,100 @@ button.addEventListener('click', () => {
 header.textContent = 'JavaScript.Avalonia – Playground';
 """),
             new Preset(
+                "Text nodes",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16">
+  <StackPanel Spacing="8">
+    <TextBlock Text="document.createTextNode demo" FontWeight="SemiBold" />
+    <StackPanel Name="textContainer" Spacing="4" />
+    <Button Name="updateText" Content="Update text node" HorizontalAlignment="Left" />
+  </StackPanel>
+</Border>
+""",
+                """
+const container = document.getElementById('textContainer');
+const update = document.getElementById('updateText');
+
+const greeting = document.createTextNode('Hello from createTextNode');
+const literals = document.createTextNode('<StackPanel /> stays literal & safe');
+
+container.appendChild(greeting);
+container.appendChild(literals);
+
+update.addEventListener('click', () => {
+  greeting.data = `Updated at ${new Date().toLocaleTimeString()}`;
+  const history = document.createTextNode(`History entry ${container.childElementCount + 1}`);
+  container.appendChild(history);
+});
+"""),
+            new Preset(
+                "Child manipulation",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16">
+  <StackPanel Spacing="8">
+    <TextBlock Text="appendChild / insertBefore / removeChild / replaceChild" FontWeight="SemiBold" />
+    <StackPanel Name="list" Spacing="4">
+      <TextBlock Text="Alpha" />
+      <TextBlock Text="Charlie" />
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="insert" Content="Insert Bravo" />
+      <Button Name="replace" Content="Replace Charlie" />
+      <Button Name="remove" Content="Remove Alpha" />
+      <Button Name="append" Content="Append Delta" />
+    </StackPanel>
+  </StackPanel>
+</Border>
+""",
+                """
+const list = document.getElementById('list');
+const buttons = {
+  insert: document.getElementById('insert'),
+  replace: document.getElementById('replace'),
+  remove: document.getElementById('remove'),
+  append: document.getElementById('append')
+};
+
+const nodes = {
+  alpha: list.children[0],
+  charlie: list.children[1],
+  bravo: document.createElement('TextBlock'),
+  delta: document.createElement('TextBlock')
+};
+
+nodes.bravo.textContent = 'Bravo';
+nodes.delta.textContent = 'Delta';
+
+buttons.insert.addEventListener('click', () => {
+  if (!nodes.bravo.parentElement) {
+    list.insertBefore(nodes.bravo, nodes.charlie);
+  }
+});
+
+buttons.replace.addEventListener('click', () => {
+  const wrapper = document.createElement('Border');
+  wrapper.setAttribute('Padding', '4');
+  wrapper.setAttribute('Background', '#f5f5f5');
+  const label = document.createElement('TextBlock');
+  label.textContent = 'Charlie (wrapped)';
+  wrapper.appendChild(label);
+  list.replaceChild(wrapper, nodes.charlie);
+  nodes.charlie = wrapper;
+});
+
+buttons.remove.addEventListener('click', () => {
+  if (nodes.alpha && nodes.alpha.parentElement) {
+    list.removeChild(nodes.alpha);
+  }
+});
+
+buttons.append.addEventListener('click', () => {
+  if (!nodes.delta.parentElement) {
+    list.appendChild(nodes.delta);
+  }
+});
+"""),
+            new Preset(
                 "ClassList & Dataset",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16">
