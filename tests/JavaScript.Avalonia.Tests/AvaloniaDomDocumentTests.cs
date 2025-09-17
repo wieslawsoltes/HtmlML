@@ -11,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Input.Raw;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.Media;
 using Jint.Native;
 using JavaScript.Avalonia;
 using Xunit;
@@ -320,6 +321,36 @@ public class AvaloniaDomDocumentTests
         Assert.Equal(42, border.Height);
         Assert.Equal(border.Width.ToString(CultureInfo.CurrentCulture), element.getAttribute("width"));
         Assert.Equal(border.Height.ToString(CultureInfo.CurrentCulture), element.getAttribute("height"));
+    }
+
+    [AvaloniaFact]
+    public void SetAttribute_ParsesBrushAndThickness()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var element = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+
+        element.setAttribute("background", "#ff0000");
+        element.setAttribute("padding", "4,8");
+        element.setAttribute("borderBrush", "#0000ff");
+
+        var border = Assert.IsType<Border>(element.Control);
+        var brush = Assert.IsAssignableFrom<ISolidColorBrush>(border.Background);
+        Assert.Equal(Colors.Red, brush.Color);
+        Assert.Equal(new Thickness(4, 8, 4, 8), border.Padding);
+        Assert.IsAssignableFrom<ISolidColorBrush>(border.BorderBrush);
+    }
+
+    [AvaloniaFact]
+    public void StyleSetProperty_UsesAvaloniaConversion()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var element = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+
+        element.style.setProperty("background", "#00ff00");
+
+        var border = Assert.IsType<Border>(element.Control);
+        var brush = Assert.IsAssignableFrom<ISolidColorBrush>(border.Background);
+        Assert.Equal(Colors.Lime, brush.Color);
     }
 
     [AvaloniaFact]

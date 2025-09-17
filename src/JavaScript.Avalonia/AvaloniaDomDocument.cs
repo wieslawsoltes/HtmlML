@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Dynamic;
 using System.Globalization;
 using System.Linq;
@@ -10,6 +11,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Jint;
@@ -506,7 +508,7 @@ internal readonly struct EventListenerOptions
             return false;
         }
 
-        return TypeConverter.ToBoolean(value);
+        return Jint.Runtime.TypeConverter.ToBoolean(value);
     }
 }
 
@@ -959,6 +961,11 @@ public class AvaloniaDomElement
 
     private void SetControlProperty(string propertyName, string? value)
     {
+        if (TrySetAvaloniaProperty(propertyName, value))
+        {
+            return;
+        }
+
         var type = Control.GetType();
         var prop = type.GetProperty(propertyName, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
                    ?? type.GetProperty(propertyName, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public);
@@ -977,8 +984,78 @@ public class AvaloniaDomElement
         }
     }
 
+    private bool TrySetAvaloniaProperty(string propertyName, string? value)
+    {
+        var type = Control.GetType();
+        var registered = FindAvaloniaProperty(type, propertyName);
+        if (registered is null)
+        {
+            return false;
+        }
+
+        if (value is null)
+        {
+            Control.ClearValue(registered);
+            return true;
+        }
+
+        var converted = ConvertToPropertyValue(registered.PropertyType, value);
+
+        try
+        {
+            Control.SetValue(registered, converted);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static object? ConvertToPropertyValue(Type propertyType, string? value)
     {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (propertyType == typeof(string))
+        {
+            return value;
+        }
+
+        if (TryConvertFromString(propertyType, value, out var convertedFromString))
+        {
+            return convertedFromString;
+        }
+
+        if (propertyType == typeof(Thickness) || propertyType == typeof(Thickness?))
+        {
+            if (TryParseThickness(value, out var thickness))
+            {
+                return thickness;
+            }
+        }
+
+        if (propertyType == typeof(Color) || propertyType == typeof(Color?))
+        {
+            if (Color.TryParse(value, out var color))
+            {
+                return color;
+            }
+        }
+
+        if (typeof(IBrush).IsAssignableFrom(propertyType))
+        {
+            try
+            {
+                return Brush.Parse(value);
+            }
+            catch
+            {
+            }
+        }
+
         if (propertyType == typeof(double) && double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d))
         {
             return d;
@@ -995,6 +1072,98 @@ public class AvaloniaDomElement
         }
 
         return value;
+    }
+
+    private static bool TryConvertFromString(Type propertyType, string value, out object? converted)
+    {
+        var converter = TypeDescriptor.GetConverter(propertyType);
+        if (converter is not null && converter.CanConvertFrom(typeof(string)))
+        {
+            try
+            {
+                converted = converter.ConvertFrom(null, CultureInfo.InvariantCulture, value);
+                return true;
+            }
+            catch
+            {
+            }
+        }
+
+        converted = null;
+        return false;
+    }
+
+    private static bool TryParseThickness(string value, out Thickness thickness)
+    {
+        thickness = default;
+        var separators = new[] { ',', ' ' };
+        var parts = value.Split(separators, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            return false;
+        }
+
+        static bool TryParseDouble(string token, out double result)
+            => double.TryParse(token, NumberStyles.Any, CultureInfo.InvariantCulture, out result);
+
+        switch (parts.Length)
+        {
+            case 1 when TryParseDouble(parts[0], out var uniform):
+                thickness = new Thickness(uniform);
+                return true;
+            case 2 when TryParseDouble(parts[0], out var horizontal) && TryParseDouble(parts[1], out var vertical):
+                thickness = new Thickness(horizontal, vertical, horizontal, vertical);
+                return true;
+            case 4 when TryParseDouble(parts[0], out var left)
+                        && TryParseDouble(parts[1], out var top)
+                        && TryParseDouble(parts[2], out var right)
+                        && TryParseDouble(parts[3], out var bottom):
+                thickness = new Thickness(left, top, right, bottom);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static AvaloniaProperty? FindAvaloniaProperty(Type controlType, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName) || controlType is null)
+        {
+            return null;
+        }
+
+        var registry = AvaloniaPropertyRegistry.Instance;
+
+        for (var type = controlType; type is not null && typeof(AvaloniaObject).IsAssignableFrom(type); type = type.BaseType)
+        {
+            var property = registry.FindRegistered(type, propertyName);
+            if (property is not null)
+            {
+                return property;
+            }
+
+            var info = type.GetProperty(propertyName, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public | BindingFlags.FlattenHierarchy | BindingFlags.Static);
+            if (info is not null)
+            {
+                property = registry.FindRegistered(type, info.Name);
+                if (property is not null)
+                {
+                    return property;
+                }
+            }
+
+            var pascal = CssStyleDeclaration.ToPropertyName(propertyName);
+            if (!string.Equals(pascal, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                property = registry.FindRegistered(type, pascal);
+                if (property is not null)
+                {
+                    return property;
+                }
+            }
+        }
+
+        return null;
     }
 
     private IEnumerable<AvaloniaDomElement> GetChildElements()
