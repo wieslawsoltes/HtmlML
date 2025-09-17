@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -17,7 +18,9 @@ using Avalonia.Media;
 using Jint.Native;
 using Jint.Runtime;
 using JavaScript.Avalonia;
+using HtmlML;
 using Xunit;
+using Xunit.Sdk;
 using Pointer = Avalonia.Input.Pointer;
 
 namespace JavaScript.Avalonia.Tests;
@@ -1211,6 +1214,196 @@ public class AvaloniaDomDocumentTests
         Assert.Equal(6, control.BorderThickness.Top);
         var brush = Assert.IsAssignableFrom<ISolidColorBrush>(control.BorderBrush);
         Assert.Equal(Color.FromArgb(255, 0, 128, 255), brush.Color);
+    }
+
+    [AvaloniaFact]
+    public void MutationObserver_ChildListRecordsAddAndRemove()
+    {
+        var stack = new StackPanel();
+        var (host, _) = HostTestUtilities.CreateHost(stack);
+        var target = HostTestUtilities.GetElement(host.Document.body);
+        var child = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+
+        host.Engine.SetValue("target", target);
+        host.Engine.Execute(@"
+globalThis.__records = [];
+var observer = new MutationObserver(function(records) {
+  records.forEach(function(r) {
+    __records.push({ type: r.type, added: r.addedNodes.length, removed: r.removedNodes.length });
+  });
+});
+observer.observe(target, { childList: true });
+globalThis.__observer = observer;
+");
+
+        target.appendChild(child);
+        target.removeChild(child);
+
+        Dispatcher.UIThread.RunJobs();
+
+        var json = host.Engine.Evaluate("JSON.stringify(__records)").ToString();
+        var records = JsonSerializer.Deserialize<List<MutationRecordSummary>>(json)!;
+
+        Assert.Equal(2, records.Count);
+        Assert.Contains(records, r => r.type == "childList" && r.added == 1 && r.removed == 0);
+        Assert.Contains(records, r => r.type == "childList" && r.added == 0 && r.removed == 1);
+    }
+
+    [AvaloniaFact]
+    public void MutationObserver_AttributesCaptureOldValue()
+    {
+        var border = new Border();
+        var (host, _) = HostTestUtilities.CreateHost(border);
+        var target = HostTestUtilities.GetElement(host.Document.body);
+
+        host.Engine.SetValue("target", target);
+        host.Engine.Execute(@"
+globalThis.__attrRecords = [];
+var attrObserver = new MutationObserver(function(records) {
+  records.forEach(function(r) {
+    __attrRecords.push({
+      type: r.type,
+      attributeName: r.attributeName,
+      oldValue: r.oldValue
+    });
+  });
+});
+attrObserver.observe(target, { attributes: true, attributeOldValue: true });
+globalThis.__attrObserver = attrObserver;
+");
+
+        target.setAttribute("data-state", "one");
+        target.setAttribute("data-state", "two");
+
+        Dispatcher.UIThread.RunJobs();
+
+        var json = host.Engine.Evaluate("JSON.stringify(__attrRecords)").ToString();
+        var records = JsonSerializer.Deserialize<List<MutationRecordSummary>>(json)!;
+
+        Assert.NotEmpty(records);
+        var last = records[^1];
+        Assert.Equal("attributes", last.type);
+        Assert.Equal("data-state", last.attributeName);
+        Assert.Equal("one", last.oldValue);
+    }
+
+    [AvaloniaFact]
+    public void MutationObserver_SubtreeCapturesDescendantChanges()
+    {
+        var stack = new StackPanel();
+        var (host, _) = HostTestUtilities.CreateHost(stack);
+        var parent = HostTestUtilities.GetElement(host.Document.body);
+        var child = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+        parent.appendChild(child);
+
+        host.Engine.SetValue("parent", parent);
+        host.Engine.SetValue("child", child);
+        host.Engine.Execute(@"
+globalThis.__subtreeRecords = [];
+var subtreeObserver = new MutationObserver(function(records) {
+  records.forEach(function(r) {
+    __subtreeRecords.push({
+      type: r.type,
+      attributeName: r.attributeName,
+      targetTag: r.target.tagName
+    });
+  });
+});
+subtreeObserver.observe(parent, { attributes: true, subtree: true });
+globalThis.__subtreeObserver = subtreeObserver;
+");
+
+        child.setAttribute("data-flag", "enabled");
+
+        Dispatcher.UIThread.RunJobs();
+
+        var json = host.Engine.Evaluate("JSON.stringify(__subtreeRecords)").ToString();
+        var records = JsonSerializer.Deserialize<List<MutationRecordSummary>>(json)!;
+
+        Assert.Single(records);
+        var record = records[0];
+        Assert.Equal("attributes", record.type);
+        Assert.Equal("data-flag", record.attributeName);
+        Assert.Equal("BORDER", record.targetTag);
+    }
+
+    [AvaloniaFact]
+    public void MutationObserver_TakeRecordsClearsPendingQueue()
+    {
+        var stack = new StackPanel();
+        var (host, _) = HostTestUtilities.CreateHost(stack);
+        var target = HostTestUtilities.GetElement(host.Document.body);
+        var child = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+
+        host.Engine.SetValue("target", target);
+        host.Engine.Execute(@"
+globalThis.__takeCount = 0;
+var takeObserver = new MutationObserver(function() {
+  __takeCount++;
+});
+takeObserver.observe(target, { childList: true });
+globalThis.__takeObserver = takeObserver;
+");
+
+        target.appendChild(child);
+
+        var pending = Convert.ToInt32(host.Engine.Evaluate("__takeObserver.takeRecords().length").ToObject());
+        Dispatcher.UIThread.RunJobs();
+        var callbackCount = Convert.ToInt32(host.Engine.Evaluate("__takeCount").ToObject());
+        var remaining = Convert.ToInt32(host.Engine.Evaluate("__takeObserver.takeRecords().length").ToObject());
+
+        Assert.Equal(1, pending);
+        Assert.Equal(0, callbackCount);
+        Assert.Equal(0, remaining);
+    }
+
+    [AvaloniaFact]
+    public void WebsiteScript_AppendsAnimationSection()
+    {
+        var window = new html();
+        var body = new body();
+        window.Content = body;
+        window.body = body;
+        var host = new JintHost(window);
+
+        const string script = """
+try {
+  const section = document.createElement('section');
+  section.setAttribute('class', 'card');
+  section.setAttribute('style', 'padding:12px');
+  const anim = document.createElement('canvas');
+  anim.setAttribute('id', 'anim');
+  anim.setAttribute('width', '600');
+  anim.setAttribute('height', '120');
+  anim.setAttribute('class', 'card');
+  anim.setAttribute('style', 'background:#f0f0f0');
+  section.appendChild(anim);
+  document.body.appendChild(section);
+} catch (e) {
+  globalThis.__err = e.toString();
+}
+""";
+
+        host.Engine.Execute("globalThis.__err = null;");
+        host.ExecuteScriptText(script);
+        var errorObj = host.Engine.Evaluate("__err === null || __err === undefined ? null : __err.toString()").ToObject();
+        if (errorObj is string errorStr)
+        {
+            throw new XunitException($"Script error: {errorStr}");
+        }
+
+        var animElement = Assert.IsAssignableFrom<AvaloniaDomElement>(host.Document.getElementById("anim"));
+        Assert.IsAssignableFrom<Control>(animElement.Control);
+    }
+
+    private sealed class MutationRecordSummary
+    {
+        public string? type { get; set; }
+        public int added { get; set; }
+        public int removed { get; set; }
+        public string? attributeName { get; set; }
+        public string? oldValue { get; set; }
+        public string? targetTag { get; set; }
     }
 
     private sealed class SampleForm : Control

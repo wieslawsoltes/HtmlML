@@ -35,6 +35,8 @@ public class AvaloniaDomDocument
     private string _readyState = "loading";
     private readonly DomHeadElement _head;
     private readonly DomDocumentElement _documentElement;
+    private readonly List<DomMutationObserver> _mutationObservers = new();
+    private bool _mutationDeliveryScheduled;
 
     protected JintAvaloniaHost Host { get; }
 
@@ -50,6 +52,8 @@ public class AvaloniaDomDocument
         => Host.TopLevel.Content as Control;
 
     public virtual string readyState => _readyState;
+
+    internal Engine Engine => Host.Engine;
 
     public virtual object? getElementById(string id)
     {
@@ -170,6 +174,29 @@ public class AvaloniaDomDocument
         }
 
         return CssComputedStyle.Empty;
+    }
+
+    internal DomMutationObserver CreateMutationObserver(JsValue callback)
+    {
+        if (callback.IsNull() || callback.IsUndefined())
+        {
+            throw new ArgumentNullException(nameof(callback));
+        }
+
+        return new DomMutationObserver(this, callback);
+    }
+
+    internal void RegisterMutationObserver(DomMutationObserver observer)
+    {
+        if (!_mutationObservers.Contains(observer))
+        {
+            _mutationObservers.Add(observer);
+        }
+    }
+
+    internal void UnregisterMutationObserver(DomMutationObserver observer)
+    {
+        _mutationObservers.Remove(observer);
     }
 
     public virtual object[] forms => GetCollection(IsFormControl);
@@ -421,6 +448,90 @@ public class AvaloniaDomDocument
 
         var typeName = control.GetType().Name;
         return string.Equals(typeName, selector, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal void NotifyAttributeChanged(AvaloniaDomElement target, string attributeName, string? oldValue, string? newValue)
+    {
+        if (!HasActiveMutationObservers())
+        {
+            return;
+        }
+
+        if (string.Equals(oldValue, newValue, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var record = DomMutationRecord.CreateForAttribute(target, attributeName, oldValue);
+        QueueMutationRecord(record);
+    }
+
+    internal void NotifyChildListMutation(
+        AvaloniaDomElement target,
+        IReadOnlyList<AvaloniaDomElement>? addedNodes,
+        IReadOnlyList<AvaloniaDomElement>? removedNodes,
+        AvaloniaDomElement? previousSibling,
+        AvaloniaDomElement? nextSibling)
+    {
+        if (!HasActiveMutationObservers())
+        {
+            return;
+        }
+
+        var hasAdded = addedNodes is { Count: > 0 };
+        var hasRemoved = removedNodes is { Count: > 0 };
+        if (!hasAdded && !hasRemoved)
+        {
+            return;
+        }
+
+        var record = DomMutationRecord.CreateForChildList(target, addedNodes, removedNodes, previousSibling, nextSibling);
+        QueueMutationRecord(record);
+    }
+
+    private bool HasActiveMutationObservers() => _mutationObservers.Count > 0;
+
+    private void QueueMutationRecord(DomMutationRecord record)
+    {
+        if (_mutationObservers.Count == 0)
+        {
+            return;
+        }
+
+        var anyQueued = false;
+        var observers = _mutationObservers.ToArray();
+        foreach (var observer in observers)
+        {
+            anyQueued |= observer.TryQueue(record);
+        }
+
+        if (!anyQueued)
+        {
+            return;
+        }
+
+        if (_mutationDeliveryScheduled)
+        {
+            return;
+        }
+
+        _mutationDeliveryScheduled = true;
+        Dispatcher.UIThread.Post(DeliverMutationRecords, DispatcherPriority.Background);
+    }
+
+    private void DeliverMutationRecords()
+    {
+        _mutationDeliveryScheduled = false;
+        if (_mutationObservers.Count == 0)
+        {
+            return;
+        }
+
+        var observers = _mutationObservers.ToArray();
+        foreach (var observer in observers)
+        {
+            observer.Deliver();
+        }
     }
 
     private static string? ToTypeName(string tag)
@@ -1020,6 +1131,7 @@ public class AvaloniaDomElement
     private DomStringMap? _dataset;
     private CssStyleDeclaration? _style;
     private DomTokenList? _classList;
+    private bool _suppressStyleMutation;
     private WeakReference<Control>? _cachedScrollOwner;
     private WeakReference<IScrollable>? _cachedScrollable;
     private double _scrollLeft;
@@ -1807,25 +1919,13 @@ public class AvaloniaDomElement
 
     public virtual void remove()
     {
-        var parent = Control.Parent;
-        if (parent is Panel panel)
+        if (Control.Parent is not Control parent)
         {
-            panel.Children.Remove(Control);
+            return;
         }
-        else if (parent is Decorator decorator)
-        {
-            if (decorator.Child == Control)
-            {
-                decorator.Child = null;
-            }
-        }
-        else if (parent is ContentControl cc)
-        {
-            if (Equals(cc.Content, Control))
-            {
-                cc.Content = null;
-            }
-        }
+
+        var parentElement = Host.Document.WrapControl(parent);
+        parentElement.removeChild(this);
     }
 
     public virtual AvaloniaDomElement? insertBefore(AvaloniaDomElement newChild, AvaloniaDomElement? referenceChild)
@@ -1838,6 +1938,39 @@ public class AvaloniaDomElement
         return InsertChild(newChild, referenceChild, placeBefore: true);
     }
 
+    private void DetachFromCurrentParentWithNotification(AvaloniaDomElement child)
+    {
+        var oldParentControl = child.Control.Parent as Control;
+        if (oldParentControl is null)
+        {
+            return;
+        }
+
+        var oldParentElement = Host.Document.WrapControl(oldParentControl);
+        var (previousSibling, nextSibling) = child.GetSiblingSnapshot(oldParentControl, child.Control);
+        if (DetachFromParent(child.Control))
+        {
+            Host.Document.NotifyChildListMutation(oldParentElement, null, new[] { child }, previousSibling, nextSibling);
+        }
+    }
+
+    private (AvaloniaDomElement? previous, AvaloniaDomElement? next) GetSiblingSnapshot(Control parentControl, Control childControl)
+    {
+        if (TryGetControlsCollection(parentControl, out var controlsCollection))
+        {
+            var controls = controlsCollection.OfType<Control>().ToList();
+            var index = controls.IndexOf(childControl);
+            if (index >= 0)
+            {
+                var previous = index > 0 ? Host.Document.WrapControl(controls[index - 1]) : null;
+                var next = index + 1 < controls.Count ? Host.Document.WrapControl(controls[index + 1]) : null;
+                return (previous, next);
+            }
+        }
+
+        return (null, null);
+    }
+
     public virtual AvaloniaDomElement? removeChild(AvaloniaDomElement child)
     {
         if (child is null)
@@ -1845,9 +1978,17 @@ public class AvaloniaDomElement
             return null;
         }
 
+        var (previousSibling, nextSibling) = child.GetSiblingSnapshot(Control, child.Control);
+
         if (TryGetControlsCollection(Control, out var list))
         {
-            return list.Remove(child.Control) ? child : null;
+            if (list.Remove(child.Control))
+            {
+                Host.Document.NotifyChildListMutation(this, null, new[] { child }, previousSibling, nextSibling);
+                return child;
+            }
+
+            return null;
         }
 
         if (Control is ContentControl cc)
@@ -1855,6 +1996,7 @@ public class AvaloniaDomElement
             if (ReferenceEquals(cc.Content, child.Control))
             {
                 cc.Content = null;
+                Host.Document.NotifyChildListMutation(this, null, new[] { child }, previousSibling, nextSibling);
                 return child;
             }
 
@@ -1866,6 +2008,7 @@ public class AvaloniaDomElement
             if (ReferenceEquals(decorator.Child, child.Control))
             {
                 decorator.Child = null;
+                Host.Document.NotifyChildListMutation(this, null, new[] { child }, previousSibling, nextSibling);
                 return child;
             }
 
@@ -1895,9 +2038,11 @@ public class AvaloniaDomElement
                 return null;
             }
 
-            DetachFromParent(newChild.Control);
+            DetachFromCurrentParentWithNotification(newChild);
+            var (previousSibling, nextSibling) = oldChild.GetSiblingSnapshot(Control, oldChild.Control);
             list.RemoveAt(index);
             list.Insert(index, newChild.Control);
+            Host.Document.NotifyChildListMutation(this, new[] { newChild }, new[] { oldChild }, previousSibling, nextSibling);
             return oldChild;
         }
 
@@ -1908,8 +2053,9 @@ public class AvaloniaDomElement
                 return null;
             }
 
-            DetachFromParent(newChild.Control);
+            DetachFromCurrentParentWithNotification(newChild);
             cc.Content = newChild.Control;
+            Host.Document.NotifyChildListMutation(this, new[] { newChild }, new[] { oldChild }, null, null);
             return oldChild;
         }
 
@@ -1920,8 +2066,9 @@ public class AvaloniaDomElement
                 return null;
             }
 
-            DetachFromParent(newChild.Control);
+            DetachFromCurrentParentWithNotification(newChild);
             decorator.Child = newChild.Control;
+            Host.Document.NotifyChildListMutation(this, new[] { newChild }, new[] { oldChild }, null, null);
             return oldChild;
         }
 
@@ -1957,35 +2104,56 @@ public class AvaloniaDomElement
             return;
         }
 
-        name = name.ToLowerInvariant();
-        switch (name)
+        var normalized = name.ToLowerInvariant();
+        string? oldValue = null;
+        try
+        {
+            oldValue = getAttribute(normalized);
+        }
+        catch (AmbiguousMatchException)
+        {
+        }
+        catch
+        {
+        }
+
+        switch (normalized)
         {
             case "id":
                 if (Control is StyledElement styled)
                 {
                     styled.Name = value;
                 }
+
+                RaiseAttributeMutation(normalized, oldValue, SafeGetAttribute(normalized));
                 return;
             case "class":
                 classList.SetFromString(value);
+                RaiseAttributeMutation(normalized, oldValue, SafeGetAttribute(normalized));
                 return;
             case "title":
                 ToolTip.SetTip(Control, value);
+                RaiseAttributeMutation(normalized, oldValue, SafeGetAttribute(normalized));
+                return;
+            case "style":
+                ApplyStyleAttribute(value);
                 return;
         }
 
-        if (name.StartsWith("data-", StringComparison.Ordinal))
+        if (normalized.StartsWith("data-", StringComparison.Ordinal))
         {
-            SetDataAttribute(name, value);
+            SetDataAttribute(normalized, value);
             return;
         }
 
-        if (TrySetAttribute(name, value))
+        if (TrySetAttribute(normalized, value))
         {
+            RaiseAttributeMutation(normalized, oldValue, SafeGetAttribute(normalized));
             return;
         }
 
-        SetControlProperty(name, value);
+        SetControlProperty(normalized, value);
+        RaiseAttributeMutation(normalized, oldValue, SafeGetAttribute(normalized));
     }
 
     public virtual void classListAdd(string cls)
@@ -2021,6 +2189,8 @@ public class AvaloniaDomElement
     internal void SetDataAttribute(string attributeName, string? value)
     {
         attributeName = attributeName.ToLowerInvariant();
+        _dataAttributes.TryGetValue(attributeName, out var oldValue);
+
         if (value is null)
         {
             _dataAttributes.Remove(attributeName);
@@ -2029,12 +2199,46 @@ public class AvaloniaDomElement
         {
             _dataAttributes[attributeName] = value;
         }
+
+        RaiseAttributeMutation(attributeName, oldValue, value);
     }
 
     internal bool RemoveDataAttribute(string attributeName)
     {
         attributeName = attributeName.ToLowerInvariant();
-        return _dataAttributes.Remove(attributeName);
+        if (!_dataAttributes.TryGetValue(attributeName, out var oldValue))
+        {
+            return false;
+        }
+
+        var removed = _dataAttributes.Remove(attributeName);
+        if (removed)
+        {
+            RaiseAttributeMutation(attributeName, oldValue, null);
+        }
+
+        return removed;
+    }
+
+    internal void RaiseAttributeMutation(string attributeName, string? oldValue, string? newValue)
+    {
+        Host.Document.NotifyAttributeChanged(this, attributeName, oldValue, newValue);
+    }
+
+    private string? SafeGetAttribute(string attributeName)
+    {
+        try
+        {
+            return getAttribute(attributeName);
+        }
+        catch (AmbiguousMatchException)
+        {
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     internal IEnumerable<KeyValuePair<string, string?>> EnumerateDataset()
@@ -2053,10 +2257,20 @@ public class AvaloniaDomElement
             return;
         }
 
+        string? beforeStyle = null;
+        if (!_suppressStyleMutation)
+        {
+            beforeStyle = GetStyleString(Control);
+        }
+
         if (value is null)
         {
             if (HandleStyleProperty(normalized, null))
             {
+                if (!_suppressStyleMutation)
+                {
+                    RaiseAttributeMutation("style", beforeStyle, GetStyleString(Control));
+                }
                 return;
             }
 
@@ -2069,11 +2283,21 @@ public class AvaloniaDomElement
         {
             if (HandleStyleProperty(normalized, value))
             {
+                if (!_suppressStyleMutation)
+                {
+                    RaiseAttributeMutation("style", beforeStyle, GetStyleString(Control));
+                }
                 return;
             }
 
             _styleValues[normalized] = value;
             ApplyStyleToControl(normalized, value);
+        }
+
+        if (!_suppressStyleMutation)
+        {
+            var afterStyle = GetStyleString(Control);
+            RaiseAttributeMutation("style", beforeStyle, afterStyle);
         }
     }
 
@@ -2861,6 +3085,8 @@ public class AvaloniaDomElement
 
     private void ApplyStyleAttribute(string? value)
     {
+        var beforeStyle = GetStyleString(Control);
+        _suppressStyleMutation = true;
         var keys = _styleValues.Keys.ToList();
         foreach (var key in keys)
         {
@@ -2869,29 +3095,37 @@ public class AvaloniaDomElement
 
         _styleValues.Clear();
 
-        if (string.IsNullOrWhiteSpace(value))
+        try
         {
-            return;
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                var declarations = value.Split(';', StringSplitOptions.RemoveEmptyEntries);
+                foreach (var declaration in declarations)
+                {
+                    var parts = declaration.Split(':', 2);
+                    if (parts.Length != 2)
+                    {
+                        continue;
+                    }
+
+                    var property = parts[0].Trim();
+                    var propertyValue = parts[1].Trim();
+                    if (string.IsNullOrEmpty(property))
+                    {
+                        continue;
+                    }
+
+                    SetStyleProperty(property, propertyValue);
+                }
+            }
+        }
+        finally
+        {
+            _suppressStyleMutation = false;
         }
 
-        var declarations = value.Split(';', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var declaration in declarations)
-        {
-            var parts = declaration.Split(':', 2);
-            if (parts.Length != 2)
-            {
-                continue;
-            }
-
-            var property = parts[0].Trim();
-            var propertyValue = parts[1].Trim();
-            if (string.IsNullOrEmpty(property))
-            {
-                continue;
-            }
-
-            SetStyleProperty(property, propertyValue);
-        }
+        var afterStyle = GetStyleString(Control);
+        RaiseAttributeMutation("style", beforeStyle, afterStyle);
     }
 
     private void SetControlProperty(string propertyName, string? value)
@@ -3530,22 +3764,26 @@ public class AvaloniaDomElement
 
         if (TryGetControlsCollection(Control, out var list))
         {
+            DetachFromCurrentParentWithNotification(child);
+
             if (reference is null)
             {
-                DetachFromParent(child.Control);
                 list.Add(child.Control);
-                return child;
             }
-
-            var index = list.IndexOf(reference.Control);
-            if (index < 0)
+            else
             {
-                return null;
+                var index = list.IndexOf(reference.Control);
+                if (index < 0)
+                {
+                    return null;
+                }
+
+                var insertIndex = placeBefore ? index : Math.Min(index + 1, list.Count);
+                list.Insert(insertIndex, child.Control);
             }
 
-            DetachFromParent(child.Control);
-            var targetIndex = placeBefore ? index : Math.Min(index + 1, list.Count);
-            list.Insert(targetIndex, child.Control);
+            var (previousSibling, nextSibling) = child.GetSiblingSnapshot(Control, child.Control);
+            Host.Document.NotifyChildListMutation(this, new[] { child }, null, previousSibling, nextSibling);
             return child;
         }
 
@@ -3556,8 +3794,17 @@ public class AvaloniaDomElement
                 return null;
             }
 
-            DetachFromParent(child.Control);
+            DetachFromCurrentParentWithNotification(child);
+
+            AvaloniaDomElement? removedElement = null;
+            if (cc.Content is Control existing)
+            {
+                removedElement = Host.Document.WrapControl(existing);
+            }
+
             cc.Content = child.Control;
+
+            Host.Document.NotifyChildListMutation(this, new[] { child }, removedElement is null ? null : new[] { removedElement }, null, null);
             return child;
         }
 
@@ -3568,29 +3815,38 @@ public class AvaloniaDomElement
                 return null;
             }
 
-            DetachFromParent(child.Control);
+            DetachFromCurrentParentWithNotification(child);
+
+            AvaloniaDomElement? removedElement = null;
+            if (decorator.Child is Control existing)
+            {
+                removedElement = Host.Document.WrapControl(existing);
+            }
+
             decorator.Child = child.Control;
+
+            Host.Document.NotifyChildListMutation(this, new[] { child }, removedElement is null ? null : new[] { removedElement }, null, null);
             return child;
         }
 
         return null;
     }
 
-    private static void DetachFromParent(Control control)
+    private static bool DetachFromParent(Control control)
     {
         var parent = control.Parent;
         switch (parent)
         {
             case Panel panel:
-                panel.Children.Remove(control);
-                break;
+                return panel.Children.Remove(control);
             case Decorator decorator when decorator.Child == control:
                 decorator.Child = null;
-                break;
+                return true;
             case ContentControl cc when ReferenceEquals(cc.Content, control):
                 cc.Content = null;
-                break;
+                return true;
         }
+        return false;
     }
 
     private static bool IsNullish(JsValue value) => value.IsNull() || value.IsUndefined();
@@ -3880,10 +4136,13 @@ public sealed class DomTokenList
             return;
         }
 
+        var before = _element.getAttribute("class");
         foreach (var token in SplitTokens(tokens))
         {
             styled.Classes.Add(token);
         }
+
+        NotifyClassMutation(before);
     }
 
     public void remove(params string[] tokens)
@@ -3894,10 +4153,13 @@ public sealed class DomTokenList
             return;
         }
 
+        var before = _element.getAttribute("class");
         foreach (var token in SplitTokens(tokens))
         {
             styled.Classes.Remove(token);
         }
+
+        NotifyClassMutation(before);
     }
 
     public bool toggle(string token)
@@ -3914,6 +4176,7 @@ public sealed class DomTokenList
         var contains = styled.Classes.Contains(token);
         var shouldAdd = force ?? !contains;
 
+        var before = _element.getAttribute("class");
         if (shouldAdd)
         {
             if (!contains)
@@ -3921,10 +4184,12 @@ public sealed class DomTokenList
                 styled.Classes.Add(token);
             }
 
+            NotifyClassMutation(before);
             return true;
         }
 
         styled.Classes.Remove(token);
+        NotifyClassMutation(before);
         return false;
     }
 
@@ -3941,9 +4206,11 @@ public sealed class DomTokenList
             return;
         }
 
+        var before = _element.getAttribute("class");
         styled.Classes.Clear();
         if (string.IsNullOrWhiteSpace(value))
         {
+            NotifyClassMutation(before);
             return;
         }
 
@@ -3951,6 +4218,8 @@ public sealed class DomTokenList
         {
             styled.Classes.Add(token);
         }
+
+        NotifyClassMutation(before);
     }
 
 
@@ -3968,6 +4237,12 @@ public sealed class DomTokenList
                 yield return part;
             }
         }
+    }
+
+    private void NotifyClassMutation(string? before)
+    {
+        var after = _element.getAttribute("class");
+        _element.RaiseAttributeMutation("class", before, after);
     }
 }
 
@@ -4250,6 +4525,319 @@ public sealed class CssComputedStyle : DynamicObject
 
     public override IEnumerable<string> GetDynamicMemberNames()
         => _camelCaseValues.Keys;
+}
+
+internal sealed class DomMutationObserverOptions
+{
+    public bool Attributes { get; private set; }
+    public bool ChildList { get; private set; }
+    public bool Subtree { get; private set; }
+    public bool AttributeOldValue { get; private set; }
+
+    public static DomMutationObserverOptions FromJsValue(JsValue value)
+    {
+        var options = new DomMutationObserverOptions();
+
+        if (value.IsNull() || value.IsUndefined())
+        {
+            options.ChildList = true;
+            return options;
+        }
+
+        if (!value.IsObject())
+        {
+            options.ChildList = true;
+            return options;
+        }
+
+        var obj = value.AsObject();
+
+        if (obj.HasProperty("childList"))
+        {
+            options.ChildList = Jint.Runtime.TypeConverter.ToBoolean(obj.Get("childList"));
+        }
+
+        if (obj.HasProperty("attributes"))
+        {
+            options.Attributes = Jint.Runtime.TypeConverter.ToBoolean(obj.Get("attributes"));
+        }
+
+        if (obj.HasProperty("subtree"))
+        {
+            options.Subtree = Jint.Runtime.TypeConverter.ToBoolean(obj.Get("subtree"));
+        }
+
+        if (obj.HasProperty("attributeOldValue"))
+        {
+            options.AttributeOldValue = Jint.Runtime.TypeConverter.ToBoolean(obj.Get("attributeOldValue"));
+        }
+
+        if (!options.Attributes && !options.ChildList)
+        {
+            options.ChildList = true;
+        }
+
+        if (options.AttributeOldValue)
+        {
+            options.Attributes = true;
+        }
+
+        return options;
+    }
+
+    public bool MatchesRecordType(string type)
+        => type switch
+        {
+            DomMutationRecord.ChildListType => ChildList,
+            DomMutationRecord.AttributesType => Attributes,
+            _ => false
+        };
+}
+
+public sealed class DomMutationRecord
+{
+    internal const string ChildListType = "childList";
+    internal const string AttributesType = "attributes";
+
+    private readonly AvaloniaDomElement _target;
+    private readonly AvaloniaDomElement[] _addedNodes;
+    private readonly AvaloniaDomElement[] _removedNodes;
+    private readonly AvaloniaDomElement? _previousSibling;
+    private readonly AvaloniaDomElement? _nextSibling;
+    private readonly string? _attributeName;
+    private readonly string? _oldValue;
+    private readonly string _type;
+
+    private DomMutationRecord(
+        string type,
+        AvaloniaDomElement target,
+        AvaloniaDomElement[] addedNodes,
+        AvaloniaDomElement[] removedNodes,
+        AvaloniaDomElement? previousSibling,
+        AvaloniaDomElement? nextSibling,
+        string? attributeName,
+        string? oldValue)
+    {
+        _type = type;
+        _target = target;
+        _addedNodes = addedNodes;
+        _removedNodes = removedNodes;
+        _previousSibling = previousSibling;
+        _nextSibling = nextSibling;
+        _attributeName = attributeName;
+        _oldValue = oldValue;
+    }
+
+    internal static DomMutationRecord CreateForChildList(
+        AvaloniaDomElement target,
+        IReadOnlyList<AvaloniaDomElement>? addedNodes,
+        IReadOnlyList<AvaloniaDomElement>? removedNodes,
+        AvaloniaDomElement? previousSibling,
+        AvaloniaDomElement? nextSibling)
+        => new(
+            ChildListType,
+            target,
+            addedNodes is null ? Array.Empty<AvaloniaDomElement>() : addedNodes.ToArray(),
+            removedNodes is null ? Array.Empty<AvaloniaDomElement>() : removedNodes.ToArray(),
+            previousSibling,
+            nextSibling,
+            null,
+            null);
+
+    internal static DomMutationRecord CreateForAttribute(AvaloniaDomElement target, string attributeName, string? oldValue)
+        => new(
+            AttributesType,
+            target,
+            Array.Empty<AvaloniaDomElement>(),
+            Array.Empty<AvaloniaDomElement>(),
+            null,
+            null,
+            attributeName,
+            oldValue);
+
+    internal DomMutationRecord Clone(bool includeOldValue)
+        => new(
+            _type,
+            _target,
+            _addedNodes,
+            _removedNodes,
+            _previousSibling,
+            _nextSibling,
+            _attributeName,
+            includeOldValue ? _oldValue : null);
+
+    internal AvaloniaDomElement TargetElement => _target;
+
+    public string type => _type;
+
+    public AvaloniaDomElement target => _target;
+
+    public object[] addedNodes
+        => _addedNodes.Length == 0 ? Array.Empty<object>() : _addedNodes.Cast<object>().ToArray();
+
+    public object[] removedNodes
+        => _removedNodes.Length == 0 ? Array.Empty<object>() : _removedNodes.Cast<object>().ToArray();
+
+    public AvaloniaDomElement? previousSibling => _previousSibling;
+
+    public AvaloniaDomElement? nextSibling => _nextSibling;
+
+    public string? attributeName => _attributeName;
+
+    public string? oldValue => _oldValue;
+}
+
+public sealed class DomMutationObserver
+{
+    private readonly AvaloniaDomDocument _document;
+    private readonly Jint.Engine _engine;
+    private readonly JsValue _callback;
+    private readonly List<DomMutationRecord> _queue = new();
+    private readonly List<Observation> _observations = new();
+    private JsValue _jsObserver = JsValue.Undefined;
+
+    internal DomMutationObserver(AvaloniaDomDocument document, JsValue callback)
+    {
+        _document = document ?? throw new ArgumentNullException(nameof(document));
+        _engine = document.Engine;
+        _callback = callback;
+        _document.RegisterMutationObserver(this);
+    }
+
+    public void observe(object target)
+        => observe(target, JsValue.Undefined);
+
+    public void observe(object target, JsValue optionsValue)
+    {
+        if (target is not AvaloniaDomElement element)
+        {
+            return;
+        }
+
+        var options = DomMutationObserverOptions.FromJsValue(optionsValue);
+
+        var observation = _observations.FirstOrDefault(o => ReferenceEquals(o.Target, element));
+        if (observation is not null)
+        {
+            observation.Options = options;
+        }
+        else
+        {
+            _observations.Add(new Observation(element, options));
+        }
+
+        _document.RegisterMutationObserver(this);
+    }
+
+    public void disconnect()
+    {
+        _observations.Clear();
+        _queue.Clear();
+        _document.UnregisterMutationObserver(this);
+    }
+
+    public object[] takeRecords()
+    {
+        if (_queue.Count == 0)
+        {
+            return Array.Empty<object>();
+        }
+
+        var records = _queue.ToArray();
+        _queue.Clear();
+        return records.Cast<object>().ToArray();
+    }
+
+    public void __setJsObserver(JsValue observer)
+    {
+        _jsObserver = observer;
+    }
+
+    internal bool TryQueue(DomMutationRecord record)
+    {
+        if (_observations.Count == 0)
+        {
+            return false;
+        }
+
+        var matched = false;
+        var includeOldValue = false;
+
+        foreach (var observation in _observations)
+        {
+            if (!observation.Options.MatchesRecordType(record.type))
+            {
+                continue;
+            }
+
+            if (ReferenceEquals(record.TargetElement, observation.Target) ||
+                (observation.Options.Subtree && IsDescendantOf(record.TargetElement, observation.Target)))
+            {
+                matched = true;
+                includeOldValue |= observation.Options.AttributeOldValue;
+            }
+        }
+
+        if (!matched)
+        {
+            return false;
+        }
+
+        _queue.Add(record.Clone(includeOldValue));
+        return true;
+    }
+
+    internal void Deliver()
+    {
+        if (_queue.Count == 0 || _callback.IsNull() || _callback.IsUndefined())
+        {
+            return;
+        }
+
+        var records = _queue.ToArray();
+        _queue.Clear();
+
+        var jsRecords = JsValue.FromObject(_engine, records);
+        var observerValue = _jsObserver;
+        if (observerValue.IsUndefined())
+        {
+            observerValue = JsValue.FromObject(_engine, this);
+        }
+
+        try
+        {
+            _engine.Invoke(_callback, jsRecords, observerValue);
+        }
+        catch
+        {
+            // Ignore observer callback failures to mirror browser behaviour.
+        }
+    }
+
+    private static bool IsDescendantOf(AvaloniaDomElement candidate, AvaloniaDomElement ancestor)
+    {
+        for (var current = candidate; current is not null; current = current.parentElement)
+        {
+            if (ReferenceEquals(current, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private sealed class Observation
+    {
+        public Observation(AvaloniaDomElement target, DomMutationObserverOptions options)
+        {
+            Target = target;
+            Options = options;
+        }
+
+        public AvaloniaDomElement Target { get; }
+        public DomMutationObserverOptions Options { get; set; }
+    }
 }
 
 public sealed class DomRect

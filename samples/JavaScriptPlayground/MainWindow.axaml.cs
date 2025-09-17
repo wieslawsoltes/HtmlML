@@ -396,6 +396,10 @@ resetBtn.addEventListener('click', () => {
       </ScrollViewer>
     </StackPanel>
   </Border>
+  <StackPanel Orientation="Horizontal" Spacing="8">
+    <Button Name="addItem" Content="Add Item" />
+    <Button Name="toggleAccent" Content="Toggle Accent" />
+  </StackPanel>
   <TextBlock Name="output"
              Text="Metrics pending..."
              TextWrapping="Wrap"
@@ -407,6 +411,8 @@ const card = document.getElementById('card');
 const scroll = document.getElementById('sampleScroll');
 const output = document.getElementById('output');
 const list = document.getElementById('scrollItems');
+const addItemButton = document.getElementById('addItem');
+const toggleAccentButton = document.getElementById('toggleAccent');
 
 for (let i = 5; i <= 12; i++) {
   const item = document.createElement('TextBlock');
@@ -416,18 +422,57 @@ for (let i = 5; i <= 12; i++) {
 
 scroll.scrollTop = 30;
 
-const style = window.getComputedStyle(card);
-const metrics = [
-  `offset: (${Math.round(card.offsetLeft)}, ${Math.round(card.offsetTop)})`,
-  `client: ${Math.round(card.clientWidth)} x ${Math.round(card.clientHeight)}`,
-  `padding: ${style.getPropertyValue('padding')}`,
-  `background: ${style.getPropertyValue('background-color')}`,
-  `scroll viewport: ${Math.round(scroll.clientWidth)} x ${Math.round(scroll.clientHeight)}`,
-  `scroll extent: ${Math.round(scroll.scrollWidth)} x ${Math.round(scroll.scrollHeight)}`,
-  `scroll position: ${Math.round(scroll.scrollLeft)}, ${Math.round(scroll.scrollTop)}`
-];
+const log = [];
 
-output.textContent = metrics.join('\n');
+function computeMetrics() {
+  const style = window.getComputedStyle(card);
+  return [
+    `offset: (${Math.round(card.offsetLeft)}, ${Math.round(card.offsetTop)})`,
+    `client: ${Math.round(card.clientWidth)} x ${Math.round(card.clientHeight)}`,
+    `padding: ${style.getPropertyValue('padding')}`,
+    `background: ${style.getPropertyValue('background-color')}`,
+    `scroll viewport: ${Math.round(scroll.clientWidth)} x ${Math.round(scroll.clientHeight)}`,
+    `scroll extent: ${Math.round(scroll.scrollWidth)} x ${Math.round(scroll.scrollHeight)}`,
+    `scroll position: ${Math.round(scroll.scrollLeft)}, ${Math.round(scroll.scrollTop)}`
+  ];
+}
+
+function render() {
+  const metrics = computeMetrics();
+  const history = log.slice(-5);
+  output.textContent = metrics.concat(history).join('\n');
+}
+
+const observer = new MutationObserver(records => {
+  records.forEach(r => {
+    if (r.type === 'childList') {
+      log.push(`childList ➜ +${r.addedNodes.length} / -${r.removedNodes.length}`);
+    } else if (r.type === 'attributes') {
+      log.push(`attribute ➜ ${r.attributeName} (old: ${r.oldValue ?? 'null'})`);
+    }
+  });
+  render();
+});
+
+observer.observe(card, { attributes: true, attributeOldValue: true });
+observer.observe(list, { childList: true });
+
+addItemButton.addEventListener('click', () => {
+  const item = document.createElement('TextBlock');
+  item.textContent = `Item ${list.childNodes.length + 1}`;
+  list.appendChild(item);
+  render();
+});
+
+let accent = false;
+toggleAccentButton.addEventListener('click', () => {
+  accent = !accent;
+  card.setAttribute('background', accent ? '#FFF4F0FF' : '#FFEEF2FF');
+  card.setAttribute('border-brush', accent ? '#FF414BB2' : '#FF537FE7');
+  render();
+});
+
+render();
 """),
             new Preset(
                 "ClassList & Dataset",
