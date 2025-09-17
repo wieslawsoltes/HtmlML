@@ -47,6 +47,7 @@ public class JintAvaloniaHost
         Document = documentFactory?.Invoke(this) ?? CreateDocument();
         Engine.SetValue("document", Document);
         RegisterModuleSystem();
+        RegisterEventConstructors();
         try
         {
             Engine.Execute("if (typeof window !== 'undefined') { window.document = document; if (typeof globalThis !== 'undefined') { globalThis.document = document; if (typeof window.setTimeout === 'function') { globalThis.setTimeout = window.setTimeout.bind(window); } if (typeof window.clearTimeout === 'function') { globalThis.clearTimeout = window.clearTimeout.bind(window); } if (typeof window.setInterval === 'function') { globalThis.setInterval = window.setInterval.bind(window); } if (typeof window.clearInterval === 'function') { globalThis.clearInterval = window.clearInterval.bind(window); } if (typeof window.requestAnimationFrame === 'function') { globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window); } if (typeof window.cancelAnimationFrame === 'function') { globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window); } if (typeof window.importScripts === 'function') { globalThis.importScripts = window.importScripts.bind(window); } if (typeof window.require === 'function') { globalThis.require = window.require.bind(window); } } }");
@@ -81,6 +82,49 @@ public class JintAvaloniaHost
         try
         {
             Engine.Execute("if (typeof window !== 'undefined') { window.require = require; }");
+        }
+        catch
+        {
+        }
+    }
+
+    private void RegisterEventConstructors()
+    {
+        Engine.SetValue("__createEventInternal", new Func<JsValue, JsValue, object?>((type, options) => Document.CreateEventFromConstructor(type, options, false)));
+        Engine.SetValue("__createCustomEventInternal", new Func<JsValue, JsValue, object?>((type, options) => Document.CreateEventFromConstructor(type, options, true)));
+
+        const string script = @"(function(){
+  if (typeof globalThis === 'undefined') {
+    return;
+  }
+  var createEvent = globalThis.__createEventInternal;
+  var createCustomEvent = globalThis.__createCustomEventInternal;
+  if (typeof createEvent !== 'function' || typeof createCustomEvent !== 'function') {
+    return;
+  }
+  function Event(type, options) {
+    return createEvent(type, options);
+  }
+  function CustomEvent(type, options) {
+    return createCustomEvent(type, options);
+  }
+  CustomEvent.prototype = Object.create(Event.prototype);
+  CustomEvent.prototype.constructor = CustomEvent;
+  globalThis.Event = Event;
+  globalThis.CustomEvent = CustomEvent;
+  if (typeof window !== 'undefined') {
+    window.Event = Event;
+    window.CustomEvent = CustomEvent;
+  }
+  try {
+    delete globalThis.__createEventInternal;
+    delete globalThis.__createCustomEventInternal;
+  } catch (e) {}
+})();";
+
+        try
+        {
+            Engine.Execute(script);
         }
         catch
         {

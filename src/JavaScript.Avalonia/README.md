@@ -96,6 +96,16 @@ canvas.addEventListener('pointermove', evt => {
 
 Handlers now receive DOM-style event objects. Every event exposes `type`, `target`, `currentTarget`, `timeStamp`, `defaultPrevented`, and the helper methods `stopPropagation()`, `stopImmediatePropagation()`, and `preventDefault()`. Listener options (`capture`, `once`, `passive`) mirror the browser and participate in capture/target/bubble ordering.
 
+Create synthetic events with familiar constructors:
+
+```js
+const extra = document.getElementById('helper');
+const target = document.getElementById('sink');
+
+const evt = new CustomEvent('data', { detail: { value: 42 }, bubbles: true, path: [extra] });
+target.dispatchEvent(evt);
+```
+
 Pointer, keyboard, and text-input events extend the base payload:
 
 ```ts

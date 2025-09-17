@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Reflection;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -16,6 +17,7 @@ using Jint.Native;
 using Jint.Runtime;
 using JavaScript.Avalonia;
 using Xunit;
+using Pointer = Avalonia.Input.Pointer;
 
 namespace JavaScript.Avalonia.Tests;
 
@@ -977,6 +979,86 @@ public class AvaloniaDomDocumentTests
         window.Close();
         Dispatcher.UIThread.RunJobs();
         await unloadTcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [AvaloniaFact]
+    public void EventConstructor_ProducesSyntheticEvent()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+
+        host.Engine.Execute("var evt = new Event('status', { bubbles: true, cancelable: true });");
+        var value = host.Engine.GetValue("evt");
+        var evt = Assert.IsType<DomSyntheticEvent>(value.ToObject());
+
+        Assert.Equal("status", evt.type);
+        Assert.True(evt.bubbles);
+        Assert.True(evt.cancelable);
+        Assert.False(evt.isTrusted);
+        Assert.False(evt.defaultPrevented);
+    }
+
+    [AvaloniaFact]
+    public void CustomEventConstructor_SetsDetail()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+
+        host.Engine.Execute("var evt = new CustomEvent('ping', { detail: 42, bubbles: true });");
+        var evt = Assert.IsType<DomSyntheticEvent>(host.Engine.GetValue("evt").ToObject());
+
+        Assert.Equal("ping", evt.type);
+        Assert.True(evt.bubbles);
+        Assert.False(evt.cancelable);
+        Assert.False(evt.isTrusted);
+        Assert.Equal(42d, Assert.IsType<double>(evt.detail));
+    }
+
+    [AvaloniaFact]
+    public void EventConstructor_PathExtendsPropagation()
+    {
+        var panel = new StackPanel();
+        var synthetic = new Border { Name = "synthetic" };
+        var target = new Border { Name = "target" };
+        panel.Children.Add(synthetic);
+        panel.Children.Add(target);
+
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var syntheticElement = HostTestUtilities.GetElement(host.Document.getElementById("synthetic"));
+        var targetElement = HostTestUtilities.GetElement(host.Document.getElementById("target"));
+        host.Engine.SetValue("syntheticEl", syntheticElement);
+        host.Engine.Execute("var evt = new Event('synthetic', { bubbles: true, path: [syntheticEl] });");
+        var evtInstance = Assert.IsType<DomSyntheticEvent>(host.Engine.GetValue("evt").ToObject());
+        var syntheticPathProperty = typeof(DomEvent).GetProperty("SyntheticPath", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(syntheticPathProperty);
+        var syntheticPath = (List<AvaloniaDomElement>?)syntheticPathProperty!.GetValue(evtInstance);
+        Assert.NotNull(syntheticPath);
+        Assert.Single(syntheticPath!);
+        Assert.Same(syntheticElement, syntheticPath![0]);
+
+        var captureOptions = JsValue.FromObject(host.Engine, new { capture = true });
+        var captureCount = 0;
+        var bubbleCount = 0;
+
+        syntheticElement.addEventListener("synthetic", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var domEvent = Assert.IsType<DomSyntheticEvent>(arg);
+            Assert.Equal(DomEventPhase.CapturingPhase, domEvent.eventPhase);
+            captureCount++;
+        })), captureOptions);
+
+        syntheticElement.addEventListener("synthetic", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var domEvent = Assert.IsType<DomSyntheticEvent>(arg);
+            Assert.Equal(DomEventPhase.BubblingPhase, domEvent.eventPhase);
+            bubbleCount++;
+        })));
+
+        var evtValue = host.Engine.GetValue("evt");
+        var dispatched = targetElement.dispatchEvent(evtValue);
+
+        Assert.True(dispatched);
+        Assert.Equal(1, captureCount);
+        Assert.Equal(1, bubbleCount);
     }
 
     private sealed class SampleForm : Control

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -22,14 +23,14 @@ public class DomEvent
     private bool _handledFlag;
     private bool _currentListenerPassive;
 
-    internal DomEvent(string type, bool bubbles, bool cancelable, RoutedEventArgs? args, double timeStamp)
+    internal DomEvent(string type, bool bubbles, bool cancelable, RoutedEventArgs? args, double timeStamp, bool isTrusted)
     {
         this.type = type;
         this.bubbles = bubbles;
         this.cancelable = cancelable;
         _args = args;
         this.timeStamp = timeStamp;
-        isTrusted = true;
+        this.isTrusted = isTrusted;
         _handledFlag = args?.Handled ?? false;
     }
 
@@ -50,6 +51,8 @@ public class DomEvent
     public bool defaultPrevented => _defaultPrevented;
 
     public bool isTrusted { get; }
+
+    internal List<AvaloniaDomElement>? SyntheticPath { get; set; }
 
     public bool handled
     {
@@ -118,7 +121,7 @@ public sealed class DomPointerEvent : DomEvent
     private readonly Control _relativeTo;
 
     internal DomPointerEvent(string type, PointerEventArgs args, Control relativeTo, double timeStamp, bool bubbles = true, bool cancelable = true)
-        : base(type, bubbles, cancelable, args, timeStamp)
+        : base(type, bubbles, cancelable, args, timeStamp, isTrusted: true)
     {
         _args = args;
         _relativeTo = relativeTo;
@@ -229,7 +232,7 @@ public sealed class DomKeyboardEvent : DomEvent
     private readonly KeyEventArgs _args;
 
     internal DomKeyboardEvent(string type, KeyEventArgs args, double timeStamp, bool bubbles = true, bool cancelable = true)
-        : base(type, bubbles, cancelable, args, timeStamp)
+        : base(type, bubbles, cancelable, args, timeStamp, isTrusted: true)
     {
         _args = args;
     }
@@ -254,7 +257,7 @@ public sealed class DomTextInputEvent : DomEvent
     private readonly TextInputEventArgs _args;
 
     internal DomTextInputEvent(string type, TextInputEventArgs args, double timeStamp, bool bubbles = true, bool cancelable = true)
-        : base(type, bubbles, cancelable, args, timeStamp)
+        : base(type, bubbles, cancelable, args, timeStamp, isTrusted: true)
     {
         _args = args;
     }
@@ -265,7 +268,7 @@ public sealed class DomTextInputEvent : DomEvent
 public sealed class DomSyntheticEvent : DomEvent
 {
     internal DomSyntheticEvent(string type, bool bubbles, bool cancelable, double timeStamp, object? detail, JsValueAccessor? accessor)
-        : base(type, bubbles, cancelable, args: null, timeStamp)
+        : base(type, bubbles, cancelable, args: null, timeStamp, isTrusted: false)
     {
         this.detail = detail;
         _accessor = accessor;
