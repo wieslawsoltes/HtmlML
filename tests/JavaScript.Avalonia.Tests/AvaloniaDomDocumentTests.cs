@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Layout;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Input.Raw;
@@ -339,7 +340,7 @@ public class AvaloniaDomDocumentTests
         var border = Assert.IsType<Border>(element.Control);
         var brush = Assert.IsAssignableFrom<ISolidColorBrush>(border.Background);
         Assert.Equal(Colors.Red, brush.Color);
-        Assert.Equal(new Thickness(4, 8, 4, 8), border.Padding);
+        Assert.Equal(new Thickness(8, 4, 8, 4), border.Padding);
         Assert.IsAssignableFrom<ISolidColorBrush>(border.BorderBrush);
     }
 
@@ -1059,6 +1060,157 @@ public class AvaloniaDomDocumentTests
         Assert.True(dispatched);
         Assert.Equal(1, captureCount);
         Assert.Equal(1, bubbleCount);
+    }
+
+    [AvaloniaFact]
+    public void ClientMetrics_TrackLayoutBounds()
+    {
+        var canvas = new Canvas { Width = 300, Height = 300 };
+        var border = new Border { Width = 120, Height = 80, Name = "target" };
+        Canvas.SetLeft(border, 40);
+        Canvas.SetTop(border, 25);
+        canvas.Children.Add(border);
+        canvas.Measure(new Size(300, 300));
+        canvas.Arrange(new Rect(0, 0, 300, 300));
+
+        var (host, _) = HostTestUtilities.CreateHost(canvas);
+        var element = HostTestUtilities.GetElement(host.Document.getElementById("target"));
+
+        Assert.Equal(120, element.clientWidth);
+        Assert.Equal(80, element.clientHeight);
+        Assert.Equal(120, element.scrollWidth);
+        Assert.Equal(80, element.scrollHeight);
+        Assert.Equal(120, element.offsetWidth);
+        Assert.Equal(80, element.offsetHeight);
+        Assert.Equal(40, element.offsetLeft);
+        Assert.Equal(25, element.offsetTop);
+        var offsetParent = Assert.IsType<AvaloniaDomElement>(element.offsetParent);
+        Assert.Same(canvas, offsetParent.Control);
+    }
+
+    [AvaloniaFact]
+    public void ScrollMetrics_InteractWithScrollViewer()
+    {
+        var stack = new StackPanel { Orientation = Orientation.Vertical };
+        for (var i = 0; i < 5; i++)
+        {
+            stack.Children.Add(new Border { Height = 60, Width = 150, Margin = new Thickness(0, 2, 0, 2) });
+        }
+
+        var viewer = new ScrollViewer
+        {
+            Width = 100,
+            Height = 120,
+            Content = stack
+        };
+
+        viewer.Measure(new Size(100, 120));
+        viewer.Arrange(new Rect(0, 0, 100, 120));
+
+        var (host, _) = HostTestUtilities.CreateHost(viewer);
+        Dispatcher.UIThread.RunJobs();
+        var element = HostTestUtilities.GetElement(host.Document.body);
+
+        Assert.Equal(Math.Round(viewer.Viewport.Width, 2), Math.Round(element.clientWidth, 2));
+        Assert.Equal(Math.Round(viewer.Viewport.Height, 2), Math.Round(element.clientHeight, 2));
+        Assert.Equal(Math.Round(viewer.Extent.Width, 2), Math.Round(element.scrollWidth, 2));
+        Assert.Equal(Math.Round(viewer.Extent.Height, 2), Math.Round(element.scrollHeight, 2));
+
+        element.scrollTop = 40;
+        element.scrollLeft = 10;
+
+        Assert.Equal(0, Math.Round(element.scrollTop, 2));
+        Assert.Equal(0, Math.Round(element.scrollLeft, 2));
+    }
+
+    [AvaloniaFact]
+    public void ComputedStyle_ReflectsAppliedValues()
+    {
+        var border = new Border
+        {
+            Width = 140,
+            Height = 90,
+            Margin = new Thickness(12, 14, 16, 18),
+            Padding = new Thickness(6, 8, 10, 12),
+            BorderThickness = new Thickness(3, 4, 5, 6),
+            Background = Brushes.LightGray,
+            BorderBrush = Brushes.DarkSlateBlue
+        };
+
+        border.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        border.Arrange(new Rect(0, 0, 140, 90));
+
+        var (host, _) = HostTestUtilities.CreateHost(border);
+        var element = HostTestUtilities.GetElement(host.Document.body);
+        var computed = host.Document.getComputedStyle(element);
+
+        Assert.Equal("140px", computed.getPropertyValue("width"));
+        Assert.Equal("90px", computed.getPropertyValue("height"));
+        Assert.Equal("14px 16px 18px 12px", computed.getPropertyValue("margin"));
+        Assert.Equal("8px 10px 12px 6px", computed.getPropertyValue("padding"));
+        Assert.Equal("4px", computed.getPropertyValue("border-top-width"));
+        Assert.Equal("5px", computed.getPropertyValue("border-right-width"));
+        Assert.Equal("6px", computed.getPropertyValue("border-bottom-width"));
+        Assert.Equal("3px", computed.getPropertyValue("border-left-width"));
+        Assert.Equal("solid solid solid solid", computed.getPropertyValue("border-style"));
+        Assert.Equal("rgba(211, 211, 211, 1)", computed.getPropertyValue("background-color"));
+        Assert.Equal("rgba(72, 61, 139, 1) rgba(72, 61, 139, 1) rgba(72, 61, 139, 1) rgba(72, 61, 139, 1)", computed.getPropertyValue("border-color"));
+        Assert.Equal("block", computed.getPropertyValue("display"));
+    }
+
+    [AvaloniaFact]
+    public void ComputedStyle_InheritsFontProperties()
+    {
+        var container = new ContentControl
+        {
+            FontSize = 18,
+            FontFamily = new FontFamily("Arial"),
+            FontStyle = FontStyle.Italic
+        };
+
+        var text = new TextBlock { Text = "Sample" };
+        container.Content = text;
+        container.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        container.Arrange(new Rect(0, 0, 200, 50));
+
+        var (host, _) = HostTestUtilities.CreateHost(container);
+        var element = HostTestUtilities.GetElement(host.Document.querySelector("TextBlock"));
+        var computed = host.Document.getComputedStyle(element);
+
+        Assert.Equal("18px", computed.getPropertyValue("font-size"));
+        Assert.Equal("italic", computed.getPropertyValue("font-style"));
+        var fontFamilyValue = computed.getPropertyValue("font-family") ?? string.Empty;
+        Assert.Contains("arial", fontFamilyValue.ToLowerInvariant());
+        Assert.Equal("inline", computed.getPropertyValue("display"));
+    }
+
+    [AvaloniaFact]
+    public void StyleFacade_ParsesShorthandsAndUnits()
+    {
+        var parent = new Border { Width = 200, Height = 150 };
+        var child = new Border { Name = "inner", Width = 100, Height = 50 };
+        parent.Child = child;
+        parent.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        parent.Arrange(new Rect(0, 0, 200, 150));
+
+        var (host, _) = HostTestUtilities.CreateHost(parent);
+        var element = HostTestUtilities.GetElement(host.Document.getElementById("inner"));
+
+        element.style.setProperty("margin", "20px 10%");
+        element.style.setProperty("padding", "5%");
+        element.style.setProperty("border", "4px solid #0080ff");
+        element.style.setProperty("border-top-width", "6px");
+
+        var control = Assert.IsType<Border>(element.Control);
+        Assert.Equal(new Thickness(20, 20, 20, 20), control.Margin);
+        Assert.Equal(10, Math.Round(control.Padding.Left, 2));
+        Assert.Equal(10, Math.Round(control.Padding.Top, 2));
+        Assert.Equal(10, Math.Round(control.Padding.Right, 2));
+        Assert.Equal(10, Math.Round(control.Padding.Bottom, 2));
+        Assert.Equal(4, control.BorderThickness.Left);
+        Assert.Equal(6, control.BorderThickness.Top);
+        var brush = Assert.IsAssignableFrom<ISolidColorBrush>(control.BorderBrush);
+        Assert.Equal(Color.FromArgb(255, 0, 128, 255), brush.Color);
     }
 
     private sealed class SampleForm : Control

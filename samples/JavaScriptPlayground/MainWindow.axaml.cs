@@ -370,6 +370,66 @@ resetBtn.addEventListener('click', () => {
 });
 """),
             new Preset(
+                "Layout inspector",
+                """
+<StackPanel xmlns="https://github.com/avaloniaui"
+            Margin="20"
+            Spacing="12">
+  <Border Name="card"
+          Width="220"
+          Padding="12"
+          Background="#FFEEF2FF"
+          BorderBrush="#FF537FE7"
+          BorderThickness="2"
+          CornerRadius="6">
+    <StackPanel Spacing="6">
+      <TextBlock Text="Layout &amp; Style Metrics" FontWeight="SemiBold" />
+      <ScrollViewer Name="sampleScroll"
+                    Height="90"
+                    HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Name="scrollItems" Spacing="4">
+          <TextBlock Text="Item 1" />
+          <TextBlock Text="Item 2" />
+          <TextBlock Text="Item 3" />
+          <TextBlock Text="Item 4" />
+        </StackPanel>
+      </ScrollViewer>
+    </StackPanel>
+  </Border>
+  <TextBlock Name="output"
+             Text="Metrics pending..."
+             TextWrapping="Wrap"
+             FontFamily="Consolas, Courier New, monospace" />
+</StackPanel>
+""",
+                """
+const card = document.getElementById('card');
+const scroll = document.getElementById('sampleScroll');
+const output = document.getElementById('output');
+const list = document.getElementById('scrollItems');
+
+for (let i = 5; i <= 12; i++) {
+  const item = document.createElement('TextBlock');
+  item.textContent = `Item ${i}`;
+  list.appendChild(item);
+}
+
+scroll.scrollTop = 30;
+
+const style = window.getComputedStyle(card);
+const metrics = [
+  `offset: (${Math.round(card.offsetLeft)}, ${Math.round(card.offsetTop)})`,
+  `client: ${Math.round(card.clientWidth)} x ${Math.round(card.clientHeight)}`,
+  `padding: ${style.getPropertyValue('padding')}`,
+  `background: ${style.getPropertyValue('background-color')}`,
+  `scroll viewport: ${Math.round(scroll.clientWidth)} x ${Math.round(scroll.clientHeight)}`,
+  `scroll extent: ${Math.round(scroll.scrollWidth)} x ${Math.round(scroll.scrollHeight)}`,
+  `scroll position: ${Math.round(scroll.scrollLeft)}, ${Math.round(scroll.scrollTop)}`
+];
+
+output.textContent = metrics.join('\n');
+"""),
+            new Preset(
                 "ClassList & Dataset",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16">
