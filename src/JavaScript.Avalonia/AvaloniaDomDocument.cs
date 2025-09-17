@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Dynamic;
 using System.Globalization;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -979,6 +980,28 @@ internal sealed class DomEventRegistration
 public class AvaloniaDomElement
 {
     private readonly Dictionary<string, List<DomEventRegistration>> _eventListeners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ClrEventBridge> _clrEventBridges = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> s_builtinEventNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "click",
+        "mousedown",
+        "mousemove",
+        "mouseup",
+        "mouseenter",
+        "mouseleave",
+        "pointerdown",
+        "pointermove",
+        "pointerup",
+        "pointerenter",
+        "pointerleave",
+        "keydown",
+        "keyup",
+        "textinput",
+        "input"
+    };
+
+    private sealed record ClrEventBridge(EventInfo EventInfo, Delegate Handler, string EventName);
+
     private readonly Dictionary<string, string?> _dataAttributes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _styleValues = new(StringComparer.OrdinalIgnoreCase);
     private DomStringMap? _dataset;
@@ -1096,11 +1119,14 @@ public class AvaloniaDomElement
 
     public virtual void addEventListener(string type, JsValue handler, JsValue optionsValue)
     {
-        var normalized = NormalizeEventName(type);
+        var trimmedType = type?.Trim() ?? string.Empty;
+        var normalized = NormalizeEventName(trimmedType);
         if (string.IsNullOrEmpty(normalized) || IsNullish(handler))
         {
             return;
         }
+
+        EnsureClrEventBridge(normalized, trimmedType);
 
         var options = EventListenerOptions.FromJsValue(optionsValue);
         var listeners = GetOrCreateEventListeners(normalized);
@@ -1142,6 +1168,7 @@ public class AvaloniaDomElement
         if (list.Count == 0)
         {
             _eventListeners.Remove(normalized);
+            TryDetachClrEvent(normalized);
         }
     }
 
@@ -1156,6 +1183,7 @@ public class AvaloniaDomElement
         if (_eventListeners.TryGetValue(type, out var list) && list.Remove(listener) && list.Count == 0)
         {
             _eventListeners.Remove(type);
+            TryDetachClrEvent(type);
         }
     }
 
@@ -1201,6 +1229,146 @@ public class AvaloniaDomElement
         {
             AttachClickHandlers();
         }
+    }
+
+    private void EnsureClrEventBridge(string normalizedEventName, string originalEventName)
+    {
+        if (string.IsNullOrEmpty(originalEventName) || _clrEventBridges.ContainsKey(normalizedEventName) || s_builtinEventNames.Contains(normalizedEventName))
+        {
+            return;
+        }
+
+        var eventInfo = FindClrEvent(originalEventName);
+        if (eventInfo is null)
+        {
+            return;
+        }
+
+        if (!TryCreateClrEventDelegate(eventInfo, normalizedEventName, out var handler))
+        {
+            return;
+        }
+
+        try
+        {
+            eventInfo.AddEventHandler(Control, handler);
+            _clrEventBridges[normalizedEventName] = new ClrEventBridge(eventInfo, handler, originalEventName);
+        }
+        catch
+        {
+            // Ignore binding failures; event will simply not be bridged.
+        }
+    }
+
+    private void TryDetachClrEvent(string eventName)
+    {
+        var normalized = NormalizeEventName(eventName);
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return;
+        }
+
+        if (!_clrEventBridges.TryGetValue(normalized, out var bridge))
+        {
+            return;
+        }
+
+        try
+        {
+            bridge.EventInfo.RemoveEventHandler(Control, bridge.Handler);
+        }
+        catch
+        {
+        }
+
+        _clrEventBridges.Remove(normalized);
+    }
+
+    private EventInfo? FindClrEvent(string eventName)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+        {
+            return null;
+        }
+
+        var type = Control.GetType();
+        while (type is not null)
+        {
+            var eventInfo = type.GetEvent(eventName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+            if (eventInfo is not null)
+            {
+                return eventInfo;
+            }
+
+            type = type.BaseType;
+        }
+
+        return null;
+    }
+
+    private bool TryCreateClrEventDelegate(EventInfo eventInfo, string normalizedEventName, out Delegate handler)
+    {
+        handler = null!;
+        var handlerType = eventInfo.EventHandlerType;
+        if (handlerType is null)
+        {
+            return false;
+        }
+
+        var invoke = handlerType.GetMethod("Invoke");
+        if (invoke is null)
+        {
+            return false;
+        }
+
+        var parameters = invoke.GetParameters();
+        var method = typeof(AvaloniaDomElement).GetMethod(nameof(OnClrEventRaised), BindingFlags.Instance | BindingFlags.NonPublic);
+        if (method is null)
+        {
+            return false;
+        }
+
+        if (parameters.Length == 2)
+        {
+            var senderParam = Expression.Parameter(parameters[0].ParameterType, "sender");
+            var argsParam = Expression.Parameter(parameters[1].ParameterType, "args");
+            var body = Expression.Call(Expression.Constant(this), method, Expression.Constant(normalizedEventName), Expression.Convert(senderParam, typeof(object)), Expression.Convert(argsParam, typeof(object)));
+            handler = Expression.Lambda(handlerType, body, senderParam, argsParam).Compile();
+            return true;
+        }
+
+        if (parameters.Length == 1)
+        {
+            var argsParam = Expression.Parameter(parameters[0].ParameterType, "args");
+            var body = Expression.Call(Expression.Constant(this), method, Expression.Constant(normalizedEventName), Expression.Constant(null, typeof(object)), Expression.Convert(argsParam, typeof(object)));
+            handler = Expression.Lambda(handlerType, body, argsParam).Compile();
+            return true;
+        }
+
+        return false;
+    }
+
+    private void OnClrEventRaised(string eventKey, object? sender, object? args)
+    {
+        if (!HasListeners(eventKey))
+        {
+            return;
+        }
+
+        var eventName = eventKey;
+        if (_clrEventBridges.TryGetValue(eventKey, out var bridge) && !string.IsNullOrEmpty(bridge.EventName))
+        {
+            eventName = bridge.EventName;
+        }
+
+        if (args is RoutedEventArgs routedArgs)
+        {
+            Host.Document.DispatchRoutedEvent(this, eventName, routedArgs, bubbles: true, cancelable: true);
+            return;
+        }
+
+        var synthetic = new DomSyntheticEvent(eventName, bubbles: false, cancelable: false, Host.GetTimestamp(), args, accessor: null);
+        Host.Document.DispatchSyntheticEvent(this, synthetic);
     }
 
     private void AttachPointerHandlers()
