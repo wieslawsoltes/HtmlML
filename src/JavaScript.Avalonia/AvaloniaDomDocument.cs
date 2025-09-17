@@ -470,7 +470,7 @@ public class AvaloniaDomDocument
 
     private void DispatchDocumentLifecycleEvent(string type, bool bubbles, bool cancelable)
     {
-        var evt = new DomEvent(type, bubbles, cancelable, null, Host.GetTimestamp());
+        var evt = new DomEvent(type, bubbles, cancelable, null, Host.GetTimestamp(), isTrusted: true);
         evt.target = this;
         DispatchDocumentEvent(evt);
     }
@@ -536,7 +536,7 @@ public class AvaloniaDomDocument
 
     internal void DispatchRoutedEvent(AvaloniaDomElement target, string type, RoutedEventArgs args, bool bubbles, bool cancelable)
     {
-        var evt = new DomEvent(type, bubbles, cancelable, args, Host.GetTimestamp());
+        var evt = new DomEvent(type, bubbles, cancelable, args, Host.GetTimestamp(), isTrusted: true);
         DispatchDomEventInternal(target, evt);
     }
 
@@ -551,6 +551,15 @@ public class AvaloniaDomDocument
         }
 
         var timeStamp = Host.GetTimestamp();
+
+        if (value.IsObject())
+        {
+            var existing = value.ToObject();
+            if (existing is DomSyntheticEvent domSyntheticEvent)
+            {
+                return domSyntheticEvent;
+            }
+        }
 
         if (value.IsString())
         {
@@ -585,10 +594,118 @@ public class AvaloniaDomDocument
             JsValueAccessor accessor = new(value => obj.Set("defaultPrevented", JsValue.FromObject(Host.Engine, value), throwOnError: false));
             obj.Set("defaultPrevented", JsBoolean.False, throwOnError: false);
 
-            return new DomSyntheticEvent(trimmedType, bubbles, cancelable, timeStamp, detail, accessor);
+            var syntheticPath = ExtractSyntheticPath(obj.Get("path"));
+            var evt = new DomSyntheticEvent(trimmedType, bubbles, cancelable, timeStamp, detail, accessor)
+            {
+                SyntheticPath = syntheticPath
+            };
+            return evt;
         }
 
         return null;
+    }
+
+    internal DomSyntheticEvent CreateEventFromConstructor(JsValue typeValue, JsValue initValue, bool isCustom)
+    {
+        var type = RequireEventType(typeValue);
+        ParseEventInit(initValue, isCustom, out var bubbles, out var cancelable, out var detail, out var syntheticPath);
+        var evt = new DomSyntheticEvent(type, bubbles, cancelable, Host.GetTimestamp(), detail, accessor: null)
+        {
+            SyntheticPath = syntheticPath
+        };
+        return evt;
+    }
+
+    private string RequireEventType(JsValue value)
+    {
+        if (!value.IsString())
+        {
+            throw new ArgumentException("Event type must be a non-empty string.");
+        }
+
+        var type = value.AsString()?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(type))
+        {
+            throw new ArgumentException("Event type must be a non-empty string.");
+        }
+
+        return type;
+    }
+
+    private void ParseEventInit(JsValue initValue, bool isCustom, out bool bubbles, out bool cancelable, out object? detail, out List<AvaloniaDomElement>? syntheticPath)
+    {
+        bubbles = false;
+        cancelable = false;
+        detail = null;
+        syntheticPath = null;
+
+        if (initValue.IsNull() || initValue.IsUndefined())
+        {
+            return;
+        }
+
+        if (!initValue.IsObject())
+        {
+            return;
+        }
+
+        var init = initValue.AsObject();
+        bubbles = ToBoolean(init.Get("bubbles"));
+        cancelable = ToBoolean(init.Get("cancelable"));
+
+        if (isCustom)
+        {
+            var detailValue = init.Get("detail");
+            if (!detailValue.IsUndefined() && !detailValue.IsNull())
+            {
+                detail = detailValue.ToObject();
+            }
+        }
+
+        syntheticPath = ExtractSyntheticPath(init.Get("path"));
+    }
+
+    private List<AvaloniaDomElement>? ExtractSyntheticPath(JsValue pathValue)
+    {
+        if (pathValue.IsUndefined() || pathValue.IsNull() || !pathValue.IsObject())
+        {
+            return null;
+        }
+
+        if (!pathValue.IsArray())
+        {
+            return null;
+        }
+
+        var array = pathValue.AsArray();
+        var lengthValue = array.Get("length");
+        uint length = 0;
+        if (lengthValue.IsNumber())
+        {
+            var number = lengthValue.AsNumber();
+            if (number > 0)
+            {
+                length = (uint)Math.Min(number, uint.MaxValue);
+            }
+        }
+        var list = new List<AvaloniaDomElement>();
+
+        for (uint i = 0; i < length; i++)
+        {
+            var entry = array.Get(i);
+            if (entry.IsUndefined() || entry.IsNull())
+            {
+                continue;
+            }
+
+            var resolved = entry.ToObject();
+            if (resolved is AvaloniaDomElement element && !list.Contains(element))
+            {
+                list.Add(element);
+            }
+        }
+
+        return list.Count > 0 ? list : null;
     }
 
     private void DispatchDomEventInternal(AvaloniaDomElement target, DomEvent domEvent)
@@ -601,6 +718,20 @@ public class AvaloniaDomDocument
         }
 
         var path = BuildEventPath(target);
+        if (domEvent.SyntheticPath is { Count: > 0 })
+        {
+            var insertIndex = Math.Max(1, path.Count - 1);
+            foreach (var synthetic in domEvent.SyntheticPath)
+            {
+                if (synthetic is null)
+                {
+                    continue;
+                }
+
+                path.Insert(insertIndex, new DomEventPathEntry(synthetic));
+                insertIndex++;
+            }
+        }
         if (!HasListeners(normalizedType, path))
         {
             return;

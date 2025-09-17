@@ -508,7 +508,72 @@ trigger.addEventListener('click', () => {
   log.textContent = '';
   const synthetic = { type: 'custom', bubbles: true, detail: Date.now() };
   const result = inner.dispatchEvent(synthetic);
-  write(`dispatchEvent returned ${result}, defaultPrevented=${synthetic.defaultPrevented}`);
+          write(`dispatchEvent returned ${result}, defaultPrevented=${synthetic.defaultPrevented}`);
+});
+"""),
+            new Preset(
+                "Custom events",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="20" Background="#f8fafc" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="CustomEvent constructors" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
+    <Border Background="#eef2ff" Padding="12" CornerRadius="6">
+      <StackPanel Name="eventArea" Spacing="8">
+        <TextBlock Text="Event log" FontWeight="SemiBold" />
+        <Border Background="White" Padding="8" CornerRadius="4" BorderBrush="#c7d2fe" BorderThickness="1">
+          <TextBlock Name="eventLog" TextWrapping="Wrap" Foreground="#1e293b" />
+        </Border>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button Name="fireCustom" Content="CustomEvent" Padding="14,8" />
+          <Button Name="fireNative" Content="Event" Padding="14,8" />
+          <Button Name="clearLog" Content="Clear" Padding="14,8" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
+    <Border Name="syntheticNode" Background="#fde68a" Padding="10" CornerRadius="6" BorderBrush="#f59e0b" BorderThickness="1">
+      <TextBlock Text="Synthetic path node" Foreground="#92400e" />
+    </Border>
+  </StackPanel>
+</Border>
+""",
+                """
+const area = document.getElementById('eventArea');
+const logBlock = document.getElementById('eventLog');
+const helper = document.getElementById('syntheticNode');
+const fireCustom = document.getElementById('fireCustom');
+const fireNative = document.getElementById('fireNative');
+const clearLog = document.getElementById('clearLog');
+
+const appendLog = message => {
+  const stamp = new Date().toLocaleTimeString();
+  const existing = logBlock.textContent ? `${logBlock.textContent}\n` : '';
+  logBlock.textContent = `${existing}[${stamp}] ${message}`;
+};
+
+area.addEventListener('notify', evt => {
+  appendLog(`capture → target: ${evt.target?.nodeName}, current: ${evt.currentTarget?.nodeName}`);
+}, { capture: true });
+
+area.addEventListener('notify', evt => {
+  appendLog(`bubble → detail: ${JSON.stringify(evt.detail)}, from synthetic: ${evt.eventPhase === 3}`);
+});
+
+helper.addEventListener('notify', evt => {
+  appendLog(`synthetic node observed phase=${evt.eventPhase}`);
+}, { capture: true });
+
+fireCustom.addEventListener('click', () => {
+  const evt = new CustomEvent('notify', { detail: { count: logBlock.textContent.split('\n').filter(Boolean).length + 1 }, bubbles: true, path: [helper] });
+  area.dispatchEvent(evt);
+});
+
+fireNative.addEventListener('click', () => {
+  const evt = new Event('notify', { bubbles: true });
+  area.dispatchEvent(evt);
+});
+
+clearLog.addEventListener('click', () => {
+  logBlock.textContent = '';
 });
 """),
             new Preset(
