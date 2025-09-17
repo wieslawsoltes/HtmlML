@@ -196,6 +196,9 @@ ctx.fill();
 
 Use `ctx.clearRect(0, 0, surface.offsetWidth, surface.offsetHeight);` to wipe the surface between frames or drive animations with `requestAnimationFrame`.
 
+- Gradients via `createLinearGradient` / `createRadialGradient` with standard `addColorStop` semantics.
+- `drawImage` accepts Avalonia `IImage` instances (including `Bitmap` and `Image.Source`) for blitting surfaces into the canvas.
+
 
 ## Console Output
 

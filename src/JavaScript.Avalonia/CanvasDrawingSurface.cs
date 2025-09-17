@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -15,6 +16,8 @@ internal sealed class CanvasDrawingSurface : Control
     
     private readonly List<CanvasDrawCommand> _commands = new();
     private CanvasRenderingContext2D? _context;
+
+    internal IReadOnlyList<CanvasDrawCommand> Commands => _commands;
 
     public CanvasDrawingSurface()
     {
@@ -104,6 +107,8 @@ internal abstract class CanvasDrawCommand
     }
 
     protected CanvasStateSnapshot State { get; }
+
+    internal CanvasStateSnapshot Snapshot => State;
 
     public void Render(DrawingContext context)
     {
@@ -340,6 +345,28 @@ internal sealed class FillTextCommand : CanvasDrawCommand
     }
 }
 
+internal sealed class DrawImageCommand : CanvasDrawCommand
+{
+    private readonly IImage _image;
+    private readonly Rect _sourceRect;
+    private readonly Rect _destinationRect;
+
+    public DrawImageCommand(IImage image, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot state)
+        : base(state)
+    {
+        _image = image ?? throw new ArgumentNullException(nameof(image));
+        _sourceRect = sourceRect;
+        _destinationRect = destinationRect;
+    }
+
+    protected override void RenderCore(DrawingContext context)
+    {
+        context.DrawImage(_image, _sourceRect, _destinationRect);
+    }
+
+    public override Rect? GetBounds() => _destinationRect;
+}
+
 internal sealed class CanvasRenderingContext2D
 {
     private readonly CanvasDrawingSurface _owner;
@@ -352,16 +379,16 @@ internal sealed class CanvasRenderingContext2D
         _owner = owner ?? throw new ArgumentNullException(nameof(owner));
     }
 
-    public string fillStyle
+    public object? fillStyle
     {
-        get => _state.FillBrush.Color.ToString();
-        set => _state.FillBrush = CanvasColorParser.Parse(value, _state.FillBrush);
+        get => _state.FillStyleValue;
+        set => _state.SetFillStyle(value);
     }
 
-    public string strokeStyle
+    public object? strokeStyle
     {
-        get => _state.StrokeBrush.Color.ToString();
-        set => _state.StrokeBrush = CanvasColorParser.Parse(value, _state.StrokeBrush);
+        get => _state.StrokeStyleValue;
+        set => _state.SetStrokeStyle(value);
     }
 
     public double lineWidth
@@ -499,6 +526,16 @@ internal sealed class CanvasRenderingContext2D
         _path.Rect(x, y, width, height);
     }
 
+    public CanvasGradient createLinearGradient(double x0, double y0, double x1, double y1)
+    {
+        return new CanvasLinearGradient(x0, y0, x1, y1);
+    }
+
+    public CanvasGradient createRadialGradient(double x0, double y0, double r0, double x1, double y1, double r1)
+    {
+        return new CanvasRadialGradient(x0, y0, r0, x1, y1, r1);
+    }
+
     public void stroke()
     {
         if (_path.IsEmpty)
@@ -549,12 +586,89 @@ internal sealed class CanvasRenderingContext2D
         var origin = new Point(x, y);
         _owner.AddCommand(new FillTextCommand(text, origin, _state.CreateSnapshot()));
     }
+
+    public void drawImage(object image, double dx, double dy)
+    {
+        if (!TryResolveImage(image, out var resolved, out var sourceRect))
+        {
+            return;
+        }
+
+        var destRect = new Rect(dx, dy, sourceRect.Width, sourceRect.Height);
+        if (destRect.Width <= 0 || destRect.Height <= 0)
+        {
+            return;
+        }
+
+        _owner.AddCommand(new DrawImageCommand(resolved, sourceRect, destRect, _state.CreateSnapshot()));
+    }
+
+    public void drawImage(object image, double dx, double dy, double dWidth, double dHeight)
+    {
+        if (dWidth <= 0 || dHeight <= 0)
+        {
+            return;
+        }
+
+        if (!TryResolveImage(image, out var resolved, out var sourceRect))
+        {
+            return;
+        }
+
+        var destRect = new Rect(dx, dy, dWidth, dHeight);
+        _owner.AddCommand(new DrawImageCommand(resolved, sourceRect, destRect, _state.CreateSnapshot()));
+    }
+
+    public void drawImage(object image, double sx, double sy, double sWidth, double sHeight, double dx, double dy, double dWidth, double dHeight)
+    {
+        if (sWidth <= 0 || sHeight <= 0 || dWidth <= 0 || dHeight <= 0)
+        {
+            return;
+        }
+
+        if (!TryResolveImage(image, out var resolved, out var fullSourceRect))
+        {
+            return;
+        }
+
+        var crop = new Rect(sx, sy, sWidth, sHeight);
+        var bounded = crop.Intersect(fullSourceRect);
+        if (bounded.Width <= 0 || bounded.Height <= 0)
+        {
+            return;
+        }
+
+        var destRect = new Rect(dx, dy, dWidth, dHeight);
+        _owner.AddCommand(new DrawImageCommand(resolved, bounded, destRect, _state.CreateSnapshot()));
+    }
+
+    private static bool TryResolveImage(object image, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IImage? resolved, out Rect sourceRect)
+    {
+        resolved = image switch
+        {
+            IImage img => img,
+            Image control when control.Source is IImage src => src,
+            _ => null
+        };
+
+        if (resolved is null)
+        {
+            sourceRect = default;
+            return false;
+        }
+
+        var size = resolved.Size;
+        sourceRect = new Rect(0, 0, size.Width, size.Height);
+        return sourceRect.Width > 0 && sourceRect.Height > 0;
+    }
 }
 
 internal sealed class CanvasState
 {
-    public ImmutableSolidColorBrush FillBrush { get; set; } = new ImmutableSolidColorBrush(Colors.Black);
-    public ImmutableSolidColorBrush StrokeBrush { get; set; } = new ImmutableSolidColorBrush(Colors.Black);
+    public IImmutableBrush? FillBrush { get; set; } = new ImmutableSolidColorBrush(Colors.Black);
+    public IImmutableBrush? StrokeBrush { get; set; } = new ImmutableSolidColorBrush(Colors.Black);
+    public object? FillStyleValue { get; set; } = "#000000";
+    public object? StrokeStyleValue { get; set; } = "#000000";
     public double LineWidth { get; set; } = 1.0;
     public PenLineCap LineCap { get; set; } = PenLineCap.Flat;
     public PenLineJoin LineJoin { get; set; } = PenLineJoin.Miter;
@@ -573,6 +687,8 @@ internal sealed class CanvasState
     {
         FillBrush = FillBrush,
         StrokeBrush = StrokeBrush,
+        FillStyleValue = FillStyleValue,
+        StrokeStyleValue = StrokeStyleValue,
         LineWidth = LineWidth,
         LineCap = LineCap,
         LineJoin = LineJoin,
@@ -585,6 +701,24 @@ internal sealed class CanvasState
         TextBaseline = TextBaseline,
         Font = Font
     };
+
+    public void SetFillStyle(object? value)
+    {
+        if (CanvasPaintParser.TryCreateBrush(value, FillBrush, out var brush, out var stored) && brush is not null)
+        {
+            FillBrush = brush;
+            FillStyleValue = stored;
+        }
+    }
+
+    public void SetStrokeStyle(object? value)
+    {
+        if (CanvasPaintParser.TryCreateBrush(value, StrokeBrush, out var brush, out var stored) && brush is not null)
+        {
+            StrokeBrush = brush;
+            StrokeStyleValue = stored;
+        }
+    }
 
     public CanvasStateSnapshot CreateSnapshot() => new(this);
 
@@ -618,8 +752,8 @@ internal sealed class CanvasStateSnapshot
         TextBaseline = state.TextBaseline;
     }
 
-    public ImmutableSolidColorBrush FillBrush { get; }
-    public ImmutableSolidColorBrush StrokeBrush { get; }
+    public IImmutableBrush? FillBrush { get; }
+    public IImmutableBrush? StrokeBrush { get; }
     public double LineWidth { get; }
     public PenLineCap LineCap { get; }
     public PenLineJoin LineJoin { get; }
@@ -745,16 +879,23 @@ internal static class CanvasTextParser
 
 internal static class CanvasColorParser
 {
-    public static ImmutableSolidColorBrush Parse(string? value, ImmutableSolidColorBrush current)
+    public static IImmutableBrush Parse(string? value, IImmutableBrush? current)
+    {
+        var fallback = current is ImmutableSolidColorBrush solid ? solid.Color : Colors.Black;
+        var color = ParseColor(value, fallback);
+        return new ImmutableSolidColorBrush(color);
+    }
+
+    public static Color ParseColor(string? value, Color fallback)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return current;
+            return fallback;
         }
 
         if (string.Equals(value, "transparent", StringComparison.OrdinalIgnoreCase))
         {
-            return new ImmutableSolidColorBrush(Colors.Transparent);
+            return Colors.Transparent;
         }
 
         try
@@ -762,19 +903,169 @@ internal static class CanvasColorParser
             var brush = Brush.Parse(value);
             if (brush is ISolidColorBrush solid)
             {
-                return new ImmutableSolidColorBrush(solid.Color);
+                return solid.Color;
             }
         }
         catch
         {
         }
 
-        if (Color.TryParse(value, out var color))
+        if (Color.TryParse(value, out var parsed))
         {
-            return new ImmutableSolidColorBrush(color);
+            return parsed;
         }
 
-        return current;
+        return fallback;
+    }
+}
+
+internal static class CanvasPaintParser
+{
+    public static bool TryCreateBrush(object? value, IImmutableBrush? currentBrush, out IImmutableBrush? brush, out object? stored)
+    {
+        switch (value)
+        {
+            case null:
+                brush = currentBrush;
+                stored = null;
+                return false;
+            case string s:
+                brush = CanvasColorParser.Parse(s, currentBrush);
+                stored = s;
+                return true;
+            case CanvasGradient gradient:
+                brush = gradient.ToImmutableBrush();
+                stored = gradient;
+                return true;
+            case IImmutableBrush immutable:
+                brush = immutable;
+                stored = immutable;
+                return true;
+            case ISolidColorBrush solidBrush:
+                brush = solidBrush.ToImmutable();
+                stored = solidBrush;
+                return true;
+            default:
+                var asString = value?.ToString();
+                if (!string.IsNullOrWhiteSpace(asString))
+                {
+                    brush = CanvasColorParser.Parse(asString, currentBrush);
+                    stored = asString;
+                    return true;
+                }
+
+                brush = currentBrush;
+                stored = currentBrush;
+                return false;
+        }
+    }
+}
+
+internal readonly record struct CanvasGradientStop(double Offset, Color Color);
+
+public abstract class CanvasGradient
+{
+    private readonly List<CanvasGradientStop> _stops = new();
+
+    public void addColorStop(double offset, string color)
+    {
+        if (double.IsNaN(offset) || double.IsInfinity(offset))
+        {
+            return;
+        }
+
+        var clamped = Math.Clamp(offset, 0.0, 1.0);
+        var parsed = CanvasColorParser.ParseColor(color, Colors.Transparent);
+        _stops.Add(new CanvasGradientStop(clamped, parsed));
+    }
+
+    internal IReadOnlyList<CanvasGradientStop> Stops => _stops;
+
+    protected IEnumerable<GradientStop> EnumerateStops()
+    {
+        if (_stops.Count == 0)
+        {
+            yield return new GradientStop(Colors.Transparent, 0);
+            yield return new GradientStop(Colors.Transparent, 1);
+            yield break;
+        }
+
+        foreach (var stop in _stops)
+        {
+            yield return new GradientStop(stop.Color, stop.Offset);
+        }
+    }
+
+    internal abstract IImmutableBrush ToImmutableBrush();
+}
+
+public sealed class CanvasLinearGradient : CanvasGradient
+{
+    private readonly double _x0;
+    private readonly double _y0;
+    private readonly double _x1;
+    private readonly double _y1;
+
+    public CanvasLinearGradient(double x0, double y0, double x1, double y1)
+    {
+        _x0 = x0;
+        _y0 = y0;
+        _x1 = x1;
+        _y1 = y1;
+    }
+
+    internal override IImmutableBrush ToImmutableBrush()
+    {
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(new Point(_x0, _y0), RelativeUnit.Absolute),
+            EndPoint = new RelativePoint(new Point(_x1, _y1), RelativeUnit.Absolute),
+            SpreadMethod = GradientSpreadMethod.Pad
+        };
+        brush.GradientStops.Clear();
+        foreach (var stop in EnumerateStops())
+        {
+            brush.GradientStops.Add(stop);
+        }
+        return new ImmutableLinearGradientBrush(brush);
+    }
+}
+
+public sealed class CanvasRadialGradient : CanvasGradient
+{
+    private readonly double _x0;
+    private readonly double _y0;
+    private readonly double _r0;
+    private readonly double _x1;
+    private readonly double _y1;
+    private readonly double _r1;
+
+    public CanvasRadialGradient(double x0, double y0, double r0, double x1, double y1, double r1)
+    {
+        _x0 = x0;
+        _y0 = y0;
+        _r0 = Math.Max(0, r0);
+        _x1 = x1;
+        _y1 = y1;
+        _r1 = Math.Max(0, r1);
+    }
+
+    internal override IImmutableBrush ToImmutableBrush()
+    {
+        var brush = new RadialGradientBrush
+        {
+            GradientOrigin = new RelativePoint(new Point(_x0, _y0), RelativeUnit.Absolute),
+            Center = new RelativePoint(new Point(_x1, _y1), RelativeUnit.Absolute),
+            RadiusX = new RelativeScalar(_r1, RelativeUnit.Absolute),
+            RadiusY = new RelativeScalar(_r1, RelativeUnit.Absolute),
+            SpreadMethod = GradientSpreadMethod.Pad
+        };
+        brush.GradientStops.Clear();
+        foreach (var stop in EnumerateStops())
+        {
+            brush.GradientStops.Add(stop);
+        }
+        return new ImmutableRadialGradientBrush(brush);
     }
 }
 
