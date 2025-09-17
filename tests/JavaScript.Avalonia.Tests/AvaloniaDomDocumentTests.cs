@@ -13,6 +13,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.Media;
 using Jint.Native;
+using Jint.Runtime;
 using JavaScript.Avalonia;
 using Xunit;
 
@@ -416,8 +417,9 @@ public class AvaloniaDomDocumentTests
         var handled = false;
         var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
-            var info = Assert.IsType<PointerEventInfo>(arg);
-            Assert.Equal("LeftButtonPressed", info.button);
+            var info = Assert.IsType<DomPointerEvent>(arg);
+            Assert.Equal(0, info.button);
+            Assert.Equal("mouse", info.pointerType);
             info.handled = true;
             handled = true;
         }));
@@ -454,7 +456,7 @@ public class AvaloniaDomDocumentTests
         var handled = false;
         var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
-            var info = Assert.IsType<KeyEventInfo>(arg);
+            var info = Assert.IsType<DomKeyboardEvent>(arg);
             Assert.Equal("A", info.key);
             info.handled = true;
             handled = true;
@@ -489,18 +491,12 @@ public class AvaloniaDomDocumentTests
         string? observed = null;
         var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
-            var info = Assert.IsType<TextInputEventInfo>(arg);
-            observed = info.text;
+            var info = Assert.IsType<DomTextInputEvent>(arg);
+            observed = info.data;
             info.handled = true;
         }));
 
         element.addEventListener("textinput", callback);
-
-        var field = typeof(AvaloniaDomElement).GetField("_eventHandlers", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        Assert.NotNull(field);
-        var handlers = (System.Collections.IDictionary)field!.GetValue(element)!;
-        var list = (System.Collections.IList)handlers["textinput"]!;
-        var subscription = list[0];
 
         var args = new TextInputEventArgs
         {
@@ -509,9 +505,7 @@ public class AvaloniaDomDocumentTests
             Text = "abc"
         };
 
-        var method = typeof(AvaloniaDomElement).GetMethod("HandleTextInputEvent", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        Assert.NotNull(method);
-        method!.Invoke(element, new[] { subscription, args });
+        textBox.RaiseEvent(args);
 
         Assert.Equal("abc", observed);
         Assert.True(args.Handled);
@@ -697,7 +691,7 @@ public class AvaloniaDomDocumentTests
         var childCallback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
             childCalls++;
-            var info = Assert.IsType<PointerEventInfo>(arg);
+            var info = Assert.IsType<DomPointerEvent>(arg);
             info.stopPropagation();
         }));
 
@@ -721,6 +715,268 @@ public class AvaloniaDomDocumentTests
 
         childElement.removeEventListener("pointerdown", childCallback);
         parentElement.removeEventListener("pointerdown", parentCallback);
+    }
+
+    [AvaloniaFact]
+    public void PointerEvent_CaptureAndBubbleOrder()
+    {
+        var parent = new StackPanel();
+        var child = new Border();
+        parent.Children.Add(child);
+        var (host, _) = HostTestUtilities.CreateHost(parent);
+
+        var order = new List<string>();
+
+        var captureOptions = JsValue.FromObject(host.Engine, new { capture = true });
+
+        host.Document.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            order.Add($"doc:{evt.eventPhase}");
+            Assert.Same(host.Document, evt.currentTarget);
+            Assert.Equal(DomEventPhase.CapturingPhase, evt.eventPhase);
+        })), captureOptions);
+
+        host.Document.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            order.Add($"doc:{evt.eventPhase}");
+            Assert.Same(host.Document, evt.currentTarget);
+            Assert.Equal(DomEventPhase.BubblingPhase, evt.eventPhase);
+        })));
+
+        var parentElement = HostTestUtilities.GetElement(host.Document.querySelector("StackPanel"));
+        parentElement.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            order.Add($"parent:{evt.eventPhase}");
+            Assert.Same(parentElement, evt.currentTarget);
+            Assert.Equal(DomEventPhase.CapturingPhase, evt.eventPhase);
+        })), captureOptions);
+
+        parentElement.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            order.Add($"parent:{evt.eventPhase}");
+            Assert.Same(parentElement, evt.currentTarget);
+            Assert.Equal(DomEventPhase.BubblingPhase, evt.eventPhase);
+        })));
+
+        var childElement = HostTestUtilities.GetElement(host.Document.querySelector("Border"));
+        childElement.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            order.Add($"child:{evt.eventPhase}");
+            Assert.Same(childElement, evt.currentTarget);
+            Assert.Equal(childElement, evt.target);
+            Assert.Equal(DomEventPhase.AtTarget, evt.eventPhase);
+        })), captureOptions);
+
+        childElement.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            order.Add($"child:{evt.eventPhase}");
+            Assert.Same(childElement, evt.currentTarget);
+            Assert.Equal(childElement, evt.target);
+            Assert.Equal(DomEventPhase.AtTarget, evt.eventPhase);
+        })));
+
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var args = new PointerPressedEventArgs(
+            child,
+            pointer,
+            child,
+            new Point(1, 1),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None);
+
+        child.RaiseEvent(args);
+
+        Assert.Equal(new[]
+        {
+            "doc:CapturingPhase",
+            "parent:CapturingPhase",
+            "child:AtTarget",
+            "child:AtTarget",
+            "parent:BubblingPhase",
+            "doc:BubblingPhase"
+        }, order);
+    }
+
+    [AvaloniaFact]
+    public void PassiveListener_PreventDefaultIgnored()
+    {
+        var border = new Border();
+        var (host, _) = HostTestUtilities.CreateHost(border);
+        var element = HostTestUtilities.GetElement(host.Document.querySelector("Border"));
+
+        var passiveOptions = JsValue.FromObject(host.Engine, new { passive = true });
+        var passiveDefaultPrevented = false;
+
+        element.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            evt.preventDefault();
+            passiveDefaultPrevented = evt.defaultPrevented;
+        })), passiveOptions);
+
+        var bubblePrevented = false;
+        element.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            evt.preventDefault();
+            bubblePrevented = evt.defaultPrevented;
+        })));
+
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var args = new PointerPressedEventArgs(
+            border,
+            pointer,
+            border,
+            new Point(0, 0),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None);
+
+        border.RaiseEvent(args);
+
+        Assert.False(passiveDefaultPrevented);
+        Assert.True(bubblePrevented);
+        Assert.True(args.Handled);
+    }
+
+    [AvaloniaFact]
+    public void StopImmediatePropagation_BlocksSubsequentListeners()
+    {
+        var border = new Border();
+        var (host, _) = HostTestUtilities.CreateHost(border);
+        var element = HostTestUtilities.GetElement(host.Document.querySelector("Border"));
+
+        var firstCalled = false;
+        var secondCalled = false;
+
+        element.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            firstCalled = true;
+            evt.stopImmediatePropagation();
+        })));
+
+        element.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(_ => secondCalled = true)));
+
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var args = new PointerPressedEventArgs(
+            border,
+            pointer,
+            border,
+            new Point(0, 0),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None);
+
+        border.RaiseEvent(args);
+
+        Assert.True(firstCalled);
+        Assert.False(secondCalled);
+        Assert.True(args.Handled);
+    }
+
+    [AvaloniaFact]
+    public void DispatchEvent_CustomEventSupportsDetail()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var body = HostTestUtilities.GetElement(host.Document.body);
+        var element = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+        body.appendChild(element);
+
+        var detail = 0;
+        var defaultPreventedAtListener = false;
+
+        element.addEventListener("custom", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomSyntheticEvent>(arg);
+            detail = Convert.ToInt32(evt.detail, CultureInfo.InvariantCulture);
+            evt.preventDefault();
+            defaultPreventedAtListener = evt.defaultPrevented;
+            Assert.Same(element, evt.target);
+        })));
+
+        var eventValue = host.Engine.Evaluate("({ type: 'custom', bubbles: true, cancelable: true, detail: 42 })");
+        var result = element.dispatchEvent(eventValue);
+
+        Assert.False(result);
+        Assert.Equal(42, detail);
+        Assert.True(defaultPreventedAtListener);
+        host.Engine.SetValue("evtInspect", eventValue);
+        var preventedValue = host.Engine.Evaluate("evtInspect.defaultPrevented");
+        Assert.True(TypeConverter.ToBoolean(preventedValue));
+    }
+
+    [AvaloniaFact]
+    public void NodeMetadata_ExposesDomInformation()
+    {
+        var panel = new StackPanel();
+        var text = new TextBlock { Text = "Hello" };
+        panel.Children.Add(text);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+
+        var body = HostTestUtilities.GetElement(host.Document.body);
+        Assert.Equal(1, body.nodeType);
+        Assert.Equal("BODY", body.nodeName);
+        Assert.Same(host.Document, body.ownerDocument);
+        Assert.True(body.hasChildNodes);
+
+        var firstChild = body.firstChild;
+        Assert.NotNull(firstChild);
+        Assert.Equal(text, firstChild!.Control);
+
+        var textNode = Assert.IsType<AvaloniaDomTextNode>(host.Document.createTextNode("Hi"));
+        Assert.Equal(3, textNode.nodeType);
+        Assert.Equal("#TEXT", textNode.nodeName);
+        Assert.Equal("Hi", textNode.nodeValue);
+
+        body.appendChild(textNode);
+        Assert.Equal(textNode, body.lastChild);
+        Assert.Contains(textNode, body.childNodes);
+    }
+
+    [AvaloniaFact]
+    public void DocumentElement_HeadAndTitle()
+    {
+        var (host, window) = HostTestUtilities.CreateHost();
+
+        Assert.Equal("HTML", host.Document.documentElement.nodeName);
+        Assert.Equal("HEAD", host.Document.head.nodeName);
+        Assert.Same(host.Document.documentElement, host.Document.head.parentElement);
+
+        host.Document.title = "Sample";
+        Assert.Equal("Sample", host.Document.title);
+        Assert.Equal("Sample", window.Title);
+
+        var script = HostTestUtilities.GetElement(host.Document.createElement("Border"));
+        host.Document.head.appendChild(script);
+        Assert.Contains(script, host.Document.head.childNodes);
+    }
+
+    [AvaloniaFact]
+    public async Task Document_LoadAndUnload_EventsFire()
+    {
+        var (host, window) = HostTestUtilities.CreateHost();
+
+        var loadTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unloadTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        host.Document.addEventListener("load", JsValue.FromObject(host.Engine, new Action(() => loadTcs.TrySetResult(true))));
+
+        Dispatcher.UIThread.RunJobs();
+        await loadTcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        host.Document.addEventListener("unload", JsValue.FromObject(host.Engine, new Action(() => unloadTcs.TrySetResult(true))));
+
+        window.Close();
+        Dispatcher.UIThread.RunJobs();
+        await unloadTcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
     }
 
     private sealed class SampleForm : Control

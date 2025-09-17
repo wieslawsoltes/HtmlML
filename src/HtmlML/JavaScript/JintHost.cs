@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Avalonia.Controls;
 using Avalonia.Styling;
+using System.Runtime.CompilerServices;
 using Jint;
 using JavaScript.Avalonia;
 using Jint.Native;
@@ -61,6 +62,7 @@ public class JintHost : JintAvaloniaHost
     private sealed class HtmlDocument : AvaloniaDomDocument
     {
         private readonly JintHost _host;
+        private readonly ConditionalWeakTable<Control, AvaloniaDomElement> _wrappers = new();
 
         public HtmlDocument(JintHost host)
             : base(host)
@@ -100,7 +102,7 @@ public class JintHost : JintAvaloniaHost
                 {
                     if (control is body)
                     {
-                        return new HtmlDomElement(_host, control);
+                        return WrapControl(control);
                     }
                 }
 
@@ -112,7 +114,11 @@ public class JintHost : JintAvaloniaHost
         {
             if (string.Equals(tag, "canvas", StringComparison.OrdinalIgnoreCase))
             {
-                return new CanvasJsElement(_host, new canvas());
+                var canv = new canvas();
+                var wrapper = new CanvasJsElement(_host, canv);
+                RegisterWrapper(canv, wrapper);
+                RegisterCanvasById(canv, wrapper);
+                return wrapper;
             }
 
             return base.createElement(tag);
@@ -161,22 +167,53 @@ public class JintHost : JintAvaloniaHost
         {
             if (control is canvas canv)
             {
-                var id = canv.Name;
-                if (!string.IsNullOrWhiteSpace(id) && _host._canvasById.TryGetValue(id, out var existing))
+                if (_wrappers.TryGetValue(control, out var existingCanvasWrapper))
                 {
-                    return existing;
+                    if (existingCanvasWrapper is CanvasJsElement canvasWrapperCached)
+                    {
+                        RegisterCanvasById(canv, canvasWrapperCached);
+                        return canvasWrapperCached;
+                    }
+                }
+
+                var id = canv.Name;
+                if (!string.IsNullOrWhiteSpace(id) && _host._canvasById.TryGetValue(id, out var cachedById))
+                {
+                    _wrappers.Add(control, cachedById);
+                    return cachedById;
                 }
 
                 var wrapper = new CanvasJsElement(_host, canv);
-                if (!string.IsNullOrWhiteSpace(id))
-                {
-                    _host._canvasById[id] = wrapper;
-                }
-
+                RegisterWrapper(control, wrapper);
+                RegisterCanvasById(canv, wrapper);
                 return wrapper;
             }
 
-            return new HtmlDomElement(_host, control);
+            if (_wrappers.TryGetValue(control, out var existing))
+            {
+                return existing;
+            }
+
+            var created = new HtmlDomElement(_host, control);
+            RegisterWrapper(control, created);
+            return created;
+        }
+
+        private void RegisterWrapper(Control control, AvaloniaDomElement wrapper)
+        {
+            if (!_wrappers.TryGetValue(control, out _))
+            {
+                _wrappers.Add(control, wrapper);
+            }
+        }
+
+        private void RegisterCanvasById(canvas canv, CanvasJsElement wrapper)
+        {
+            var id = canv.Name;
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                _host._canvasById[id] = wrapper;
+            }
         }
     }
 

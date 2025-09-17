@@ -16,6 +16,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using Jint;
 using Jint.Native;
+using Jint.Native.Boolean;
 using Jint.Native.Object;
 using Jint.Runtime;
 
@@ -25,9 +26,11 @@ public class AvaloniaDomDocument
 {
     private readonly Func<string, Control?>? _elementFactory;
     private readonly ConditionalWeakTable<Control, AvaloniaDomElement> _elementWrappers = new();
-    private readonly Dictionary<string, List<DocumentEventSubscription>> _documentEventHandlers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<DomEventRegistration>> _documentEventListeners = new(StringComparer.OrdinalIgnoreCase);
     private bool _readyStateScheduled;
     private string _readyState = "loading";
+    private readonly DomHeadElement _head;
+    private readonly DomDocumentElement _documentElement;
 
     protected JintAvaloniaHost Host { get; }
 
@@ -35,6 +38,8 @@ public class AvaloniaDomDocument
     {
         Host = host ?? throw new ArgumentNullException(nameof(host));
         _elementFactory = elementFactory;
+        _head = new DomHeadElement(this);
+        _documentElement = new DomDocumentElement(this, _head);
     }
 
     protected virtual Control? GetDocumentRoot()
@@ -126,7 +131,30 @@ public class AvaloniaDomDocument
         get
         {
             var root = GetDocumentRoot();
-            return root is null ? null : WrapControl(root);
+            if (root is null)
+            {
+                return null;
+            }
+
+            var wrapper = WrapControl(root);
+            wrapper.SetNodeNameOverride("BODY");
+            return wrapper;
+        }
+    }
+
+    public DomHeadElement head => _head;
+
+    public DomDocumentElement documentElement => _documentElement;
+
+    public virtual string? title
+    {
+        get => Host.TopLevel is Window window ? window.Title : null;
+        set
+        {
+            if (Host.TopLevel is Window window)
+            {
+                window.Title = value;
+            }
         }
     }
 
@@ -153,27 +181,36 @@ public class AvaloniaDomDocument
         }
 
         var listenerOptions = EventListenerOptions.FromJsValue(options);
-        var subscription = new DocumentEventSubscription(handler, listenerOptions);
-        if (!_documentEventHandlers.TryGetValue(normalized, out var list))
-        {
-            list = new List<DocumentEventSubscription>();
-            _documentEventHandlers[normalized] = list;
-        }
-
-        list.Add(subscription);
-    }
-
-    public virtual void removeEventListener(string type, JsValue handler)
-    {
-        var normalized = DocumentNormalizeEventName(type);
-        if (string.IsNullOrEmpty(normalized) || !_documentEventHandlers.TryGetValue(normalized, out var list))
+        var listeners = GetDocumentListeners(normalized, create: true)!;
+        if (listeners.Any(l => l.Callback.Equals(handler) && l.Options.Capture == listenerOptions.Capture))
         {
             return;
         }
 
+        listeners.Add(new DomEventRegistration(handler, listenerOptions));
+    }
+
+    public virtual void removeEventListener(string type, JsValue handler)
+        => removeEventListener(type, handler, JsValue.Undefined);
+
+    public virtual void removeEventListener(string type, JsValue handler, JsValue options)
+    {
+        var normalized = DocumentNormalizeEventName(type);
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return;
+        }
+
+        if (!_documentEventListeners.TryGetValue(normalized, out var list))
+        {
+            return;
+        }
+
+        var capture = EventListenerOptions.FromJsValue(options).Capture;
         for (var i = 0; i < list.Count; i++)
         {
-            if (list[i].Callback.Equals(handler))
+            var listener = list[i];
+            if (listener.Callback.Equals(handler) && listener.Options.Capture == capture)
             {
                 list.RemoveAt(i);
                 break;
@@ -182,8 +219,25 @@ public class AvaloniaDomDocument
 
         if (list.Count == 0)
         {
-            _documentEventHandlers.Remove(normalized);
+            _documentEventListeners.Remove(normalized);
         }
+    }
+
+    private List<DomEventRegistration>? GetDocumentListeners(string type, bool create)
+    {
+        if (_documentEventListeners.TryGetValue(type, out var list))
+        {
+            return list;
+        }
+
+        if (!create)
+        {
+            return null;
+        }
+
+        list = new List<DomEventRegistration>();
+        _documentEventListeners[type] = list;
+        return list;
     }
 
     public virtual object[] getElementsByClassName(string className)
@@ -401,10 +455,11 @@ public class AvaloniaDomDocument
         Dispatcher.UIThread.Post(() =>
         {
             SetReadyState("interactive");
-            DispatchDocumentEvent("readystatechange");
+            DispatchDocumentLifecycleEvent("readystatechange", bubbles: false, cancelable: false);
             SetReadyState("complete");
-            DispatchDocumentEvent("readystatechange");
-            DispatchDocumentEvent("DOMContentLoaded");
+            DispatchDocumentLifecycleEvent("readystatechange", bubbles: false, cancelable: false);
+            DispatchDocumentLifecycleEvent("DOMContentLoaded", bubbles: false, cancelable: false);
+            DispatchDocumentLifecycleEvent("load", bubbles: false, cancelable: false);
         }, DispatcherPriority.Background);
     }
 
@@ -413,9 +468,243 @@ public class AvaloniaDomDocument
         _readyState = state;
     }
 
-    private void DispatchDocumentEvent(string type)
+    private void DispatchDocumentLifecycleEvent(string type, bool bubbles, bool cancelable)
     {
-        if (!_documentEventHandlers.TryGetValue(type, out var listeners) || listeners.Count == 0)
+        var evt = new DomEvent(type, bubbles, cancelable, null, Host.GetTimestamp());
+        evt.target = this;
+        DispatchDocumentEvent(evt);
+    }
+
+    internal void RaiseDocumentEvent(string type, bool bubbles, bool cancelable)
+        => DispatchDocumentLifecycleEvent(type, bubbles, cancelable);
+
+    private void DispatchDocumentEvent(DomEvent domEvent)
+    {
+        var normalizedType = DocumentNormalizeEventName(domEvent.type);
+        if (string.IsNullOrEmpty(normalizedType))
+        {
+            return;
+        }
+
+        var entry = new DomEventPathEntry(this);
+        var path = new List<DomEventPathEntry> { entry };
+        if (!HasListeners(normalizedType, path))
+        {
+            return;
+        }
+
+        InvokeListeners(entry, normalizedType, domEvent, capture: true, DomEventPhase.AtTarget);
+        if (!domEvent.ImmediatePropagationStopped)
+        {
+            InvokeListeners(entry, normalizedType, domEvent, capture: false, DomEventPhase.AtTarget);
+        }
+
+        domEvent.ResetCurrentTarget();
+    }
+
+    public virtual bool dispatchEvent(JsValue eventValue)
+    {
+        var synthetic = CreateSyntheticEvent(eventValue);
+        if (synthetic is null)
+        {
+            return true;
+        }
+
+        synthetic.target = this;
+        DispatchDocumentEvent(synthetic);
+        synthetic.SyncDefaultPrevented();
+        return !synthetic.defaultPrevented;
+    }
+
+    internal void DispatchPointerEvent(AvaloniaDomElement target, string type, PointerEventArgs args, bool bubbles, bool cancelable)
+    {
+        var evt = new DomPointerEvent(type, args, target.Control, Host.GetTimestamp(), bubbles, cancelable);
+        DispatchDomEventInternal(target, evt);
+    }
+
+    internal void DispatchKeyboardEvent(AvaloniaDomElement target, string type, KeyEventArgs args, bool bubbles, bool cancelable)
+    {
+        var evt = new DomKeyboardEvent(type, args, Host.GetTimestamp(), bubbles, cancelable);
+        DispatchDomEventInternal(target, evt);
+    }
+
+    internal void DispatchTextInputEvent(AvaloniaDomElement target, string type, TextInputEventArgs args, bool bubbles, bool cancelable)
+    {
+        var evt = new DomTextInputEvent(type, args, Host.GetTimestamp(), bubbles, cancelable);
+        DispatchDomEventInternal(target, evt);
+    }
+
+    internal void DispatchRoutedEvent(AvaloniaDomElement target, string type, RoutedEventArgs args, bool bubbles, bool cancelable)
+    {
+        var evt = new DomEvent(type, bubbles, cancelable, args, Host.GetTimestamp());
+        DispatchDomEventInternal(target, evt);
+    }
+
+    internal void DispatchSyntheticEvent(AvaloniaDomElement target, DomSyntheticEvent evt)
+        => DispatchDomEventInternal(target, evt);
+
+    internal DomSyntheticEvent? CreateSyntheticEvent(JsValue value)
+    {
+        if (value.IsUndefined() || value.IsNull())
+        {
+            return null;
+        }
+
+        var timeStamp = Host.GetTimestamp();
+
+        if (value.IsString())
+        {
+            var rawType = value.AsString();
+            var trimmedType = rawType?.Trim() ?? string.Empty;
+            var normalizedType = DocumentNormalizeEventName(trimmedType);
+            if (string.IsNullOrEmpty(normalizedType))
+            {
+                return null;
+            }
+
+            return new DomSyntheticEvent(trimmedType, bubbles: false, cancelable: false, timeStamp, detail: null, accessor: null);
+        }
+
+        if (value.IsObject())
+        {
+            var obj = value.AsObject();
+            var typeValue = obj.Get("type");
+            var rawType = typeValue.IsString() ? typeValue.AsString() : string.Empty;
+            var trimmedType = rawType?.Trim() ?? string.Empty;
+            var normalizedType = DocumentNormalizeEventName(trimmedType);
+            if (string.IsNullOrEmpty(normalizedType))
+            {
+                return null;
+            }
+
+            var bubbles = ToBoolean(obj.Get("bubbles"));
+            var cancelable = ToBoolean(obj.Get("cancelable"));
+            var detailValue = obj.Get("detail");
+            var detail = detailValue.IsUndefined() ? null : detailValue.ToObject();
+
+            JsValueAccessor accessor = new(value => obj.Set("defaultPrevented", JsValue.FromObject(Host.Engine, value), throwOnError: false));
+            obj.Set("defaultPrevented", JsBoolean.False, throwOnError: false);
+
+            return new DomSyntheticEvent(trimmedType, bubbles, cancelable, timeStamp, detail, accessor);
+        }
+
+        return null;
+    }
+
+    private void DispatchDomEventInternal(AvaloniaDomElement target, DomEvent domEvent)
+    {
+        domEvent.target = target;
+        var normalizedType = DocumentNormalizeEventName(domEvent.type);
+        if (string.IsNullOrEmpty(normalizedType))
+        {
+            return;
+        }
+
+        var path = BuildEventPath(target);
+        if (!HasListeners(normalizedType, path))
+        {
+            return;
+        }
+
+        for (var i = 0; i < path.Count - 1; i++)
+        {
+            var entry = path[i];
+            InvokeListeners(entry, normalizedType, domEvent, capture: true, DomEventPhase.CapturingPhase);
+            if (domEvent.PropagationStopped)
+            {
+                domEvent.ResetCurrentTarget();
+                return;
+            }
+        }
+
+        var targetEntry = path[^1];
+        InvokeListeners(targetEntry, normalizedType, domEvent, capture: true, DomEventPhase.AtTarget);
+        if (!domEvent.ImmediatePropagationStopped)
+        {
+            InvokeListeners(targetEntry, normalizedType, domEvent, capture: false, DomEventPhase.AtTarget);
+        }
+
+        if (domEvent.PropagationStopped || !domEvent.bubbles)
+        {
+            domEvent.ResetCurrentTarget();
+            return;
+        }
+
+        for (var i = path.Count - 2; i >= 0; i--)
+        {
+            var entry = path[i];
+            InvokeListeners(entry, normalizedType, domEvent, capture: false, DomEventPhase.BubblingPhase);
+            if (domEvent.PropagationStopped)
+            {
+                domEvent.ResetCurrentTarget();
+                return;
+            }
+        }
+
+        domEvent.ResetCurrentTarget();
+    }
+
+    private List<DomEventPathEntry> BuildEventPath(AvaloniaDomElement target)
+    {
+        var path = new List<DomEventPathEntry> { new(this) };
+        var stack = new Stack<AvaloniaDomElement>();
+        for (var current = target; current is not null; current = current.parentElement)
+        {
+            stack.Push(current);
+        }
+
+        while (stack.Count > 0)
+        {
+            path.Add(new DomEventPathEntry(stack.Pop()));
+        }
+
+        return path;
+    }
+
+    private bool HasListeners(string type, List<DomEventPathEntry> path)
+    {
+        if (_documentEventListeners.TryGetValue(type, out var documentList) && documentList.Count > 0)
+        {
+            return true;
+        }
+
+        foreach (var entry in path)
+        {
+            if (!entry.IsDocument && entry.Element!.HasListeners(type))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void InvokeListeners(DomEventPathEntry entry, string type, DomEvent domEvent, bool capture, DomEventPhase phase)
+    {
+        if (entry.IsDocument)
+        {
+            if (!_documentEventListeners.TryGetValue(type, out var list) || list.Count == 0)
+            {
+                return;
+            }
+
+            InvokeListenersCore(this, type, domEvent, capture, phase, list, listener => RemoveDocumentListener(type, listener));
+            return;
+        }
+
+        var element = entry.Element!;
+        var listeners = element.GetListeners(type);
+        if (listeners is null || listeners.Count == 0)
+        {
+            return;
+        }
+
+        InvokeListenersCore(element, type, domEvent, capture, phase, listeners, listener => element.RemoveListener(type, listener));
+    }
+
+    private void InvokeListenersCore(object currentTarget, string type, DomEvent domEvent, bool capture, DomEventPhase phase, IReadOnlyList<DomEventRegistration> listeners, Action<DomEventRegistration> remove)
+    {
+        if (listeners.Count == 0)
         {
             return;
         }
@@ -423,42 +712,71 @@ public class AvaloniaDomDocument
         var snapshot = listeners.ToArray();
         foreach (var listener in snapshot)
         {
-            listener.Invoke(Host.Engine);
+            if (listener.Options.Capture != capture)
+            {
+                continue;
+            }
+
+            domEvent.SetCurrentTarget(currentTarget, phase, listener.Options.Passive);
+            try
+            {
+                Host.Engine.Invoke(listener.Callback, domEvent);
+            }
+            catch
+            {
+            }
+
             if (listener.Options.Once)
             {
-                listeners.Remove(listener);
+                remove(listener);
+            }
+
+            if (domEvent.ImmediatePropagationStopped)
+            {
+                break;
             }
         }
-
-        if (listeners.Count == 0)
-        {
-            _documentEventHandlers.Remove(type);
-        }
     }
-}
 
-internal sealed class DocumentEventSubscription
-{
-    public DocumentEventSubscription(JsValue callback, EventListenerOptions options)
+    private void RemoveDocumentListener(string type, DomEventRegistration listener)
     {
-        Callback = callback;
-        Options = options;
+        if (_documentEventListeners.TryGetValue(type, out var list) && list.Remove(listener) && list.Count == 0)
+        {
+            _documentEventListeners.Remove(type);
+        }
     }
 
-    public JsValue Callback { get; }
-
-    public EventListenerOptions Options { get; }
-
-    public void Invoke(Engine engine)
+    private static bool ToBoolean(JsValue value)
     {
-        try
+        if (value.IsUndefined() || value.IsNull())
         {
-            engine.Invoke(Callback, Array.Empty<object>());
+            return false;
         }
-        catch
-        {
-        }
+
+        return Jint.Runtime.TypeConverter.ToBoolean(value);
     }
+
+    private readonly struct DomEventPathEntry
+    {
+        public DomEventPathEntry(AvaloniaDomDocument document)
+        {
+            Document = document;
+            Element = null;
+        }
+
+        public DomEventPathEntry(AvaloniaDomElement element)
+        {
+            Document = null;
+            Element = element;
+        }
+
+        public AvaloniaDomDocument? Document { get; }
+
+        public AvaloniaDomElement? Element { get; }
+
+        public bool IsDocument => Document is not null;
+    }
+
 }
 
 internal readonly struct EventListenerOptions
@@ -512,10 +830,23 @@ internal readonly struct EventListenerOptions
     }
 }
 
+internal sealed class DomEventRegistration
+{
+    public DomEventRegistration(JsValue callback, EventListenerOptions options)
+    {
+        Callback = callback;
+        Options = options;
+    }
+
+    public JsValue Callback { get; }
+
+    public EventListenerOptions Options { get; }
+}
+
 
 public class AvaloniaDomElement
 {
-    private readonly Dictionary<string, List<EventSubscription>> _eventHandlers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<DomEventRegistration>> _eventListeners = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _dataAttributes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _styleValues = new(StringComparer.OrdinalIgnoreCase);
     private DomStringMap? _dataset;
@@ -523,6 +854,12 @@ public class AvaloniaDomElement
     private DomTokenList? _classList;
     private double _scrollLeft;
     private double _scrollTop;
+    private bool _pointerHandlersAttached;
+    private bool _pointerOverHandlersAttached;
+    private bool _keyboardHandlersAttached;
+    private bool _textInputHandlersAttached;
+    private bool _clickHandlersAttached;
+    private string? _nodeNameOverride;
 
     protected JintAvaloniaHost Host { get; }
 
@@ -532,7 +869,29 @@ public class AvaloniaDomElement
     {
         Host = host ?? throw new ArgumentNullException(nameof(host));
         Control = control ?? throw new ArgumentNullException(nameof(control));
+        EnsureEventBridges();
     }
+
+    public virtual int nodeType => 1;
+
+    public virtual string nodeName
+    {
+        get
+        {
+            var name = _nodeNameOverride ?? Control.GetType().Name;
+            return string.IsNullOrEmpty(name) ? string.Empty : name.ToUpperInvariant();
+        }
+    }
+
+    public virtual string? nodeValue
+    {
+        get => null;
+        set { }
+    }
+
+    public AvaloniaDomDocument ownerDocument => Host.Document;
+
+    public AvaloniaDomElement? parentNode => parentElement;
 
     public DomTokenList classList => _classList ??= new DomTokenList(this);
 
@@ -546,17 +905,31 @@ public class AvaloniaDomElement
 
     public AvaloniaDomElement? parentElement => Control.Parent is Control parent ? Host.Document.WrapControl(parent) : null;
 
-    public AvaloniaDomElement? firstElementChild => GetChildElements().FirstOrDefault();
+    public AvaloniaDomElement? firstChild => GetChildElements().FirstOrDefault();
 
-    public AvaloniaDomElement? lastElementChild => GetChildElements().LastOrDefault();
+    public AvaloniaDomElement? lastChild => GetChildElements().LastOrDefault();
 
-    public AvaloniaDomElement? previousElementSibling => GetSibling(-1);
+    public AvaloniaDomElement? previousSibling => GetSibling(-1);
 
-    public AvaloniaDomElement? nextElementSibling => GetSibling(1);
+    public AvaloniaDomElement? nextSibling => GetSibling(1);
 
-    public object[] children => GetChildElements().Cast<object>().ToArray();
+    public AvaloniaDomElement? firstElementChild => firstChild;
+
+    public AvaloniaDomElement? lastElementChild => lastChild;
+
+    public AvaloniaDomElement? previousElementSibling => previousSibling;
+
+    public AvaloniaDomElement? nextElementSibling => nextSibling;
+
+    public object[] childNodes => GetChildElements().Cast<object>().ToArray();
+
+    public object[] children => childNodes;
 
     public int childElementCount => GetChildElements().Count();
+
+    public bool hasChildNodes => GetChildElements().Any();
+
+    public string tagName => nodeName;
 
     public virtual DomRect getBoundingClientRect() => new(Control.Bounds);
 
@@ -596,56 +969,240 @@ public class AvaloniaDomElement
         }
 
         var options = EventListenerOptions.FromJsValue(optionsValue);
-        var subscription = EventSubscription.Create(this, normalized, handler, options);
-        if (subscription is null)
+        var listeners = GetOrCreateEventListeners(normalized);
+        if (listeners.Any(l => l.Callback.Equals(handler) && l.Options.Capture == options.Capture))
         {
             return;
         }
 
-        if (!_eventHandlers.TryGetValue(normalized, out var list))
-        {
-            list = new List<EventSubscription>();
-            _eventHandlers[normalized] = list;
-        }
-
-        list.Add(subscription);
+        listeners.Add(new DomEventRegistration(handler, options));
     }
 
     public virtual void removeEventListener(string type, JsValue handler)
+        => removeEventListener(type, handler, JsValue.Undefined);
+
+    public virtual void removeEventListener(string type, JsValue handler, JsValue optionsValue)
     {
         var normalized = NormalizeEventName(type);
-        if (string.IsNullOrEmpty(normalized) || !_eventHandlers.TryGetValue(normalized, out var list))
+        if (string.IsNullOrEmpty(normalized))
         {
             return;
         }
 
+        if (!_eventListeners.TryGetValue(normalized, out var list))
+        {
+            return;
+        }
+
+        var capture = EventListenerOptions.FromJsValue(optionsValue).Capture;
         for (var i = 0; i < list.Count; i++)
         {
-            var subscription = list[i];
-            if (subscription.Callback.Equals(handler))
+            var listener = list[i];
+            if (listener.Callback.Equals(handler) && listener.Options.Capture == capture)
             {
                 list.RemoveAt(i);
-                subscription.Dispose();
                 break;
             }
         }
 
         if (list.Count == 0)
         {
-            _eventHandlers.Remove(normalized);
+            _eventListeners.Remove(normalized);
         }
     }
 
-    internal void RemoveSubscription(EventSubscription subscription)
+    internal bool HasListeners(string type)
+        => _eventListeners.TryGetValue(type, out var list) && list.Count > 0;
+
+    internal List<DomEventRegistration>? GetListeners(string type)
+        => _eventListeners.TryGetValue(type, out var list) ? list : null;
+
+    internal void RemoveListener(string type, DomEventRegistration listener)
     {
-        if (_eventHandlers.TryGetValue(subscription.EventName, out var list) && list.Remove(subscription))
+        if (_eventListeners.TryGetValue(type, out var list) && list.Remove(listener) && list.Count == 0)
         {
-            subscription.Dispose();
-            if (list.Count == 0)
-            {
-                _eventHandlers.Remove(subscription.EventName);
-            }
+            _eventListeners.Remove(type);
         }
+    }
+
+    private List<DomEventRegistration> GetOrCreateEventListeners(string eventName)
+    {
+        if (!_eventListeners.TryGetValue(eventName, out var list))
+        {
+            list = new List<DomEventRegistration>();
+            _eventListeners[eventName] = list;
+        }
+
+        return list;
+    }
+
+    internal void SetNodeNameOverride(string value)
+    {
+        _nodeNameOverride = string.IsNullOrEmpty(value) ? null : value.ToUpperInvariant();
+    }
+
+    private void EnsureEventBridges()
+    {
+        if (!_pointerHandlersAttached)
+        {
+            AttachPointerHandlers();
+        }
+
+        if (!_pointerOverHandlersAttached)
+        {
+            AttachPointerOverHandlers();
+        }
+
+        if (!_keyboardHandlersAttached)
+        {
+            AttachKeyboardHandlers();
+        }
+
+        if (!_textInputHandlersAttached)
+        {
+            AttachTextInputHandlers();
+        }
+
+        if (!_clickHandlersAttached)
+        {
+            AttachClickHandlers();
+        }
+    }
+
+    private void AttachPointerHandlers()
+    {
+        _pointerHandlersAttached = true;
+        Control.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Direct | RoutingStrategies.Bubble, handledEventsToo: true);
+        Control.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Direct | RoutingStrategies.Bubble, handledEventsToo: true);
+        Control.AddHandler(InputElement.PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Direct | RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
+    private void AttachPointerOverHandlers()
+    {
+        _pointerOverHandlersAttached = true;
+        Control.PointerEntered += OnPointerEntered;
+        Control.PointerExited += OnPointerExited;
+    }
+
+    private void AttachKeyboardHandlers()
+    {
+        _keyboardHandlersAttached = true;
+        Control.AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+        Control.AddHandler(InputElement.KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
+    private void AttachTextInputHandlers()
+    {
+        _textInputHandlersAttached = true;
+        Control.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
+    private void AttachClickHandlers()
+    {
+        _clickHandlersAttached = true;
+        if (Control is Button button)
+        {
+            button.Click += OnButtonClick;
+        }
+    }
+
+    private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchPointerEvent(this, "pointerdown", e, bubbles: true, cancelable: true);
+        Host.Document.DispatchPointerEvent(this, "mousedown", e, bubbles: true, cancelable: true);
+    }
+
+    private void OnPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchPointerEvent(this, "pointermove", e, bubbles: true, cancelable: false);
+        Host.Document.DispatchPointerEvent(this, "mousemove", e, bubbles: true, cancelable: false);
+    }
+
+    private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchPointerEvent(this, "pointerup", e, bubbles: true, cancelable: true);
+        Host.Document.DispatchPointerEvent(this, "mouseup", e, bubbles: true, cancelable: true);
+
+        if (Control is not Button && e.InitialPressMouseButton == MouseButton.Left)
+        {
+            Host.Document.DispatchPointerEvent(this, "click", e, bubbles: true, cancelable: true);
+        }
+    }
+
+    private void OnPointerEntered(object? sender, PointerEventArgs e)
+    {
+        Host.Document.DispatchPointerEvent(this, "pointerenter", e, bubbles: false, cancelable: false);
+        Host.Document.DispatchPointerEvent(this, "mouseenter", e, bubbles: false, cancelable: false);
+    }
+
+    private void OnPointerExited(object? sender, PointerEventArgs e)
+    {
+        Host.Document.DispatchPointerEvent(this, "pointerleave", e, bubbles: false, cancelable: false);
+        Host.Document.DispatchPointerEvent(this, "mouseleave", e, bubbles: false, cancelable: false);
+    }
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchKeyboardEvent(this, "keydown", e, bubbles: true, cancelable: true);
+    }
+
+    private void OnKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchKeyboardEvent(this, "keyup", e, bubbles: true, cancelable: false);
+    }
+
+    private void OnTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchTextInputEvent(this, "textinput", e, bubbles: true, cancelable: false);
+        Host.Document.DispatchTextInputEvent(this, "input", e, bubbles: true, cancelable: false);
+    }
+
+    private void OnButtonClick(object? sender, RoutedEventArgs e)
+    {
+        Host.Document.DispatchRoutedEvent(this, "click", e, bubbles: true, cancelable: true);
+    }
+
+    public bool dispatchEvent(JsValue eventValue)
+    {
+        var synthetic = Host.Document.CreateSyntheticEvent(eventValue);
+        if (synthetic is null)
+        {
+            return true;
+        }
+
+        Host.Document.DispatchSyntheticEvent(this, synthetic);
+        synthetic.SyncDefaultPrevented();
+        return !synthetic.defaultPrevented;
     }
 
     public virtual AvaloniaDomElement? appendChild(AvaloniaDomElement child)
@@ -1142,7 +1699,15 @@ public class AvaloniaDomElement
                 return property;
             }
 
-            var info = type.GetProperty(propertyName, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public | BindingFlags.FlattenHierarchy | BindingFlags.Static);
+            PropertyInfo? info = null;
+            try
+            {
+                info = type.GetProperty(propertyName, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public | BindingFlags.FlattenHierarchy);
+            }
+            catch (AmbiguousMatchException)
+            {
+                // Prefer explicit lookup below using registered property names
+            }
             if (info is not null)
             {
                 property = registry.FindRegistered(type, info.Name);
@@ -1278,46 +1843,10 @@ public class AvaloniaDomElement
         }
     }
 
-    private PointerEventInfo CreatePointerEventInfo(PointerEventArgs args) => new(args, Control);
-
-    private KeyEventInfo CreateKeyEventInfo(KeyEventArgs args) => new(args);
-
-    private TextInputEventInfo CreateTextInputEventInfo(TextInputEventArgs args) => new(args);
-
     private static bool IsNullish(JsValue value) => value.IsNull() || value.IsUndefined();
 
     private static string NormalizeEventName(string? type)
         => string.IsNullOrWhiteSpace(type) ? string.Empty : type.Trim().ToLowerInvariant();
-
-    private void HandlePointerEvent(EventSubscription subscription, PointerEventArgs args)
-    {
-        var data = CreatePointerEventInfo(args);
-        subscription.Invoke(data);
-    }
-
-    private void HandleKeyEvent(EventSubscription subscription, KeyEventArgs args)
-    {
-        var data = CreateKeyEventInfo(args);
-        subscription.Invoke(data);
-    }
-
-    private void HandleTextInputEvent(EventSubscription subscription, TextInputEventArgs args)
-    {
-        var data = CreateTextInputEventInfo(args);
-        subscription.Invoke(data);
-    }
-
-    internal static string? GetPointerButton(PointerEventArgs args, Control control)
-    {
-        try
-        {
-            return args.GetCurrentPoint(control).Properties.PointerUpdateKind.ToString();
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     protected virtual bool TryGetAttribute(string name, out string? value)
     {
@@ -1382,148 +1911,6 @@ public class AvaloniaDomElement
         return false;
     }
 
-    internal sealed class EventSubscription : IDisposable
-    {
-        private readonly Action _unsubscribe;
-        private bool _disposed;
-
-        private EventSubscription(AvaloniaDomElement element, string eventName, JsValue callback, EventListenerOptions options, Action unsubscribe)
-        {
-            Element = element;
-            EventName = eventName;
-            Callback = callback;
-            Options = options;
-            _unsubscribe = unsubscribe;
-        }
-
-        public AvaloniaDomElement Element { get; }
-
-        public string EventName { get; }
-
-        public JsValue Callback { get; }
-
-        public EventListenerOptions Options { get; }
-
-        public static EventSubscription? Create(AvaloniaDomElement element, string eventName, JsValue callback, EventListenerOptions options)
-        {
-            var control = element.Control;
-            EventSubscription? subscription = null;
-
-            switch (eventName)
-            {
-                case "pointerdown":
-                case "mousedown":
-                    EventHandler<PointerPressedEventArgs>? down = null;
-                    down = (s, e) => subscription?.Invoke(element.CreatePointerEventInfo(e));
-                    control.PointerPressed += down;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.PointerPressed -= down);
-                    return subscription;
-                case "pointermove":
-                case "mousemove":
-                    EventHandler<PointerEventArgs>? move = null;
-                    move = (s, e) => subscription?.Invoke(element.CreatePointerEventInfo(e));
-                    control.PointerMoved += move;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.PointerMoved -= move);
-                    return subscription;
-                case "pointerup":
-                case "mouseup":
-                    EventHandler<PointerReleasedEventArgs>? up = null;
-                    up = (s, e) => subscription?.Invoke(element.CreatePointerEventInfo(e));
-                    control.PointerReleased += up;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.PointerReleased -= up);
-                    return subscription;
-                case "pointerenter":
-                case "mouseenter":
-                    EventHandler<PointerEventArgs>? enter = null;
-                    enter = (s, e) => subscription?.Invoke(element.CreatePointerEventInfo(e));
-                    control.PointerEntered += enter;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.PointerEntered -= enter);
-                    return subscription;
-                case "pointerleave":
-                case "mouseleave":
-                    EventHandler<PointerEventArgs>? leave = null;
-                    leave = (s, e) => subscription?.Invoke(element.CreatePointerEventInfo(e));
-                    control.PointerExited += leave;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.PointerExited -= leave);
-                    return subscription;
-                case "click":
-                    if (control is Button button)
-                    {
-                        EventHandler<RoutedEventArgs>? handler = null;
-                        handler = (s, e) => subscription?.Invoke(Array.Empty<object?>());
-                        button.Click += handler;
-                        subscription = new EventSubscription(element, eventName, callback, options, () => button.Click -= handler);
-                        return subscription;
-                    }
-                    else
-                    {
-                        EventHandler<PointerReleasedEventArgs>? click = null;
-                        click = (s, e) => subscription?.Invoke(element.CreatePointerEventInfo(e));
-                        control.PointerReleased += click;
-                        subscription = new EventSubscription(element, eventName, callback, options, () => control.PointerReleased -= click);
-                        return subscription;
-                    }
-                case "keydown":
-                    EventHandler<KeyEventArgs>? keyDown = null;
-                    keyDown = (s, e) => subscription?.Invoke(element.CreateKeyEventInfo(e));
-                    control.KeyDown += keyDown;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.KeyDown -= keyDown);
-                    return subscription;
-                case "keyup":
-                    EventHandler<KeyEventArgs>? keyUp = null;
-                    keyUp = (s, e) => subscription?.Invoke(element.CreateKeyEventInfo(e));
-                    control.KeyUp += keyUp;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.KeyUp -= keyUp);
-                    return subscription;
-                case "textinput":
-                case "input":
-                    EventHandler<TextInputEventArgs>? textInput = null;
-                    textInput = (s, e) => subscription?.Invoke(element.CreateTextInputEventInfo(e));
-                    control.TextInput += textInput;
-                    subscription = new EventSubscription(element, eventName, callback, options, () => control.TextInput -= textInput);
-                    return subscription;
-                default:
-                    return null;
-            }
-        }
-
-        public void Invoke(params object?[] arguments)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            try
-            {
-                Element.Host.Engine.Invoke(Callback, arguments);
-            }
-            catch
-            {
-            }
-
-            if (Options.Once)
-            {
-                Element.RemoveSubscription(this);
-            }
-        }
-
-        public void Invoke(object argument)
-        {
-            Invoke(new[] { argument });
-        }
-
-        public void Dispose()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _unsubscribe();
-            _disposed = true;
-        }
-    }
 }
 
 public sealed class AvaloniaDomTextNode : AvaloniaDomElement
@@ -1535,16 +1922,20 @@ public sealed class AvaloniaDomTextNode : AvaloniaDomElement
 
     private TextBlock TextBlock => (TextBlock)Control;
 
+    public override int nodeType => 3;
+
+    public override string nodeName => "#TEXT";
+
+    public override string? nodeValue
+    {
+        get => data;
+        set => data = value ?? string.Empty;
+    }
+
     public string data
     {
         get => TextBlock.Text ?? string.Empty;
         set => TextBlock.Text = value ?? string.Empty;
-    }
-
-    public string nodeValue
-    {
-        get => data;
-        set => data = value ?? string.Empty;
     }
 
     public override string? textContent
@@ -1554,69 +1945,168 @@ public sealed class AvaloniaDomTextNode : AvaloniaDomElement
     }
 }
 
-public abstract class DomEventBase
+public sealed class DomHeadElement
 {
-    protected DomEventBase(RoutedEventArgs args)
+    private readonly AvaloniaDomDocument _document;
+    private DomDocumentElement? _parent;
+    private readonly List<object> _children = new();
+
+    internal DomHeadElement(AvaloniaDomDocument document)
     {
-        RoutedEventArgs = args;
+        _document = document;
     }
 
-    protected RoutedEventArgs RoutedEventArgs { get; }
-
-    public bool handled
+    internal void SetParent(DomDocumentElement parent)
     {
-        get => RoutedEventArgs.Handled;
-        set => RoutedEventArgs.Handled = value;
+        _parent = parent;
     }
 
-    public void stopPropagation() => RoutedEventArgs.Handled = true;
+    public int nodeType => 1;
 
-    public void preventDefault() => RoutedEventArgs.Handled = true;
+    public string nodeName => "HEAD";
+
+    public AvaloniaDomDocument ownerDocument => _document;
+
+    public DomDocumentElement? parentElement => _parent;
+
+    public object[] childNodes => _children.ToArray();
+
+    public object[] children => childNodes;
+
+    public object? firstChild => _children.Count > 0 ? _children[0] : null;
+
+    public object? lastChild => _children.Count > 0 ? _children[^1] : null;
+
+    public bool hasChildNodes => _children.Count > 0;
+
+    public object appendChild(object node)
+    {
+        if (node is null)
+        {
+            return node!;
+        }
+
+        _children.Remove(node);
+        _children.Add(node);
+        return node;
+    }
+
+    public object insertBefore(object node, object? referenceNode)
+    {
+        if (referenceNode is null)
+        {
+            return appendChild(node);
+        }
+
+        var index = _children.IndexOf(referenceNode);
+        if (index < 0)
+        {
+            return appendChild(node);
+        }
+
+        _children.Remove(node);
+        _children.Insert(index, node);
+        return node;
+    }
+
+    public object? removeChild(object node)
+    {
+        if (_children.Remove(node))
+        {
+            return node;
+        }
+
+        return null;
+    }
+
+    public object? replaceChild(object newChild, object oldChild)
+    {
+        var index = _children.IndexOf(oldChild);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        _children[index] = newChild;
+        return oldChild;
+    }
 }
 
-public sealed class PointerEventInfo : DomEventBase
+public sealed class DomDocumentElement
 {
-    private readonly PointerEventArgs _args;
-    private readonly Control _relativeTo;
+    private readonly AvaloniaDomDocument _document;
+    private readonly DomHeadElement _head;
 
-    public PointerEventInfo(PointerEventArgs args, Control relativeTo)
-        : base(args)
+    internal DomDocumentElement(AvaloniaDomDocument document, DomHeadElement head)
     {
-        _args = args;
-        _relativeTo = relativeTo;
+        _document = document;
+        _head = head;
+        _head.SetParent(this);
     }
 
-    public double x => _args.GetPosition(_relativeTo).X;
+    public int nodeType => 1;
 
-    public double y => _args.GetPosition(_relativeTo).Y;
+    public string nodeName => "HTML";
 
-    public string? button => AvaloniaDomElement.GetPointerButton(_args, _relativeTo);
-}
+    public AvaloniaDomDocument ownerDocument => _document;
 
-public sealed class KeyEventInfo : DomEventBase
-{
-    private readonly KeyEventArgs _args;
+    public DomDocumentElement? parentElement => null;
 
-    public KeyEventInfo(KeyEventArgs args)
-        : base(args)
+    public DomHeadElement head => _head;
+
+    public AvaloniaDomElement? body
     {
-        _args = args;
+        get => _document.body as AvaloniaDomElement;
     }
 
-    public string? key => _args.Key.ToString();
-}
-
-public sealed class TextInputEventInfo : DomEventBase
-{
-    private readonly TextInputEventArgs _args;
-
-    public TextInputEventInfo(TextInputEventArgs args)
-        : base(args)
+    public object[] childNodes
     {
-        _args = args;
+        get
+        {
+            var bodyElement = body;
+            return bodyElement is null ? new object[] { _head } : new object[] { _head, bodyElement };
+        }
     }
 
-    public string? text => _args.Text;
+    public object[] children => childNodes;
+
+    public object? firstChild => childNodes.FirstOrDefault();
+
+    public object? lastChild => childNodes.LastOrDefault();
+
+    public bool hasChildNodes => childNodes.Length > 0;
+
+    public bool contains(object? node)
+    {
+        if (node is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(node, this) || ReferenceEquals(node, _head))
+        {
+            return true;
+        }
+
+        var bodyElement = body;
+        return bodyElement is not null && ReferenceEquals(node, bodyElement);
+    }
+
+    public object appendChild(object node)
+    {
+        if (node is DomHeadElement)
+        {
+            return node;
+        }
+
+        if (node is AvaloniaDomElement element)
+        {
+            body?.appendChild(element);
+            return element;
+        }
+
+        return node;
+    }
 }
 
 public sealed class DomTokenList

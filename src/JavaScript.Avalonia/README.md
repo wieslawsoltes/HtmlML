@@ -79,14 +79,14 @@ Each `AvaloniaDomElement` exposes:
 - `keyup`
 - `textinput` / `input`
 
-Handlers receive plain objects:
+Example usage:
 
 ```js
 button.addEventListener('click', () => console.log('Clicked!'));
 
 textBox.addEventListener('keydown', evt => {
   console.log(`Key pressed: ${evt.key}`);
-  evt.handled = true; // prevent further processing if needed
+  evt.preventDefault();
 });
 
 canvas.addEventListener('pointermove', evt => {
@@ -94,30 +94,56 @@ canvas.addEventListener('pointermove', evt => {
 });
 ```
 
-The payload shapes are:
+Handlers now receive DOM-style event objects. Every event exposes `type`, `target`, `currentTarget`, `timeStamp`, `defaultPrevented`, and the helper methods `stopPropagation()`, `stopImmediatePropagation()`, and `preventDefault()`. Listener options (`capture`, `once`, `passive`) mirror the browser and participate in capture/target/bubble ordering.
+
+Pointer, keyboard, and text-input events extend the base payload:
 
 ```ts
-interface PointerEventInfo {
+interface DomPointerEvent {
+  type: string;
+  target: object | null;
+  currentTarget: object | null;
+  eventPhase: 1 | 2 | 3;
+  pointerId: number;
+  pointerType: string;
   x: number;
   y: number;
-  button?: string;
-  handled: boolean;
+  button: number;
+  buttons: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  metaKey: boolean;
+  defaultPrevented: boolean;
+  preventDefault(): void;
+  stopPropagation(): void;
+  stopImmediatePropagation(): void;
 }
 
-interface KeyEventInfo {
-  key?: string;
-  handled: boolean;
+interface DomKeyboardEvent {
+  type: string;
+  key: string | null;
+  code: string | null;
+  altKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  metaKey: boolean;
+  defaultPrevented: boolean;
+  preventDefault(): void;
 }
 
-interface TextInputEventInfo {
-  text?: string;
-  handled: boolean;
+interface DomTextInputEvent {
+  type: string;
+  data: string | null;
+  preventDefault(): void;
 }
 ```
 
-Setting `handled = true` inside the handler will mark the underlying Avalonia event as handled.
+Synthetic events are supported via `dispatchEvent()`. Pass either a string type or a plain object (`{ type, bubbles, cancelable, detail }`). `dispatchEvent` returns `false` when any listener calls `preventDefault()` and also reflects the outcome by updating the supplied object's `defaultPrevented` property.
 
 Remove listeners with `element.removeEventListener(type, handler)`; the same function reference must be supplied.
+
+The document root now exposes `document.documentElement`, `document.head`, and `document.title` in addition to `document.body`, making it easy to append metadata, adjust the window title, or inspect the DOM hierarchy.
 
 ## Timers and Animation
 

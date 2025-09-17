@@ -180,12 +180,26 @@ public partial class MainWindow : Window
                 "Welcome Panel",
                 """
 <Border xmlns="https://github.com/avaloniaui"
-        Padding="16"
-        Background="#20232a">
-  <StackPanel Spacing="8">
-    <TextBlock Name="title" Text="JavaScript.Avalonia" Foreground="White" FontSize="22" FontWeight="SemiBold" />
-    <TextBlock Text="Play with DOM-style APIs directly inside Avalonia." Foreground="#dddddd" />
-    <Button Name="mainButton" Content="Click me" HorizontalAlignment="Left" />
+        Padding="20"
+        Background="#f7f9fc"
+        BorderBrush="#d9e2f1"
+        BorderThickness="1"
+        CornerRadius="8">
+  <StackPanel Spacing="10">
+    <TextBlock Name="title"
+               Text="JavaScript.Avalonia"
+               Foreground="#1f2937"
+               FontSize="22"
+               FontWeight="SemiBold" />
+    <TextBlock Text="Play with DOM-style APIs directly inside Avalonia."
+               Foreground="#475569" />
+    <Button Name="mainButton"
+            Content="Click me"
+            HorizontalAlignment="Left"
+            Padding="16,8"
+            Background="#2563eb"
+            Foreground="White"
+            CornerRadius="4" />
   </StackPanel>
 </Border>
 """,
@@ -420,6 +434,81 @@ surface.addEventListener('pointermove', info => {
 surface.addEventListener('pointerdown', info => {
   log.textContent = `Pointer button: ${info.button}`;
   info.stopPropagation();
+});
+"""),
+            new Preset(
+                "Events & head",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Capture, passive, and custom events" FontWeight="SemiBold" />
+    <Border Name="outer" Background="#f2f4ff" Padding="12">
+      <Border Name="inner" Background="#d7e2ff" Padding="12">
+        <StackPanel Spacing="8">
+          <Button Name="trigger" Content="Dispatch custom event" HorizontalAlignment="Left" />
+          <TextBlock Name="info" FontWeight="Bold" TextWrapping="Wrap" />
+          <TextBlock Name="log" TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+    </Border>
+  </StackPanel>
+</Border>
+""",
+                """
+const outer = document.getElementById('outer');
+const inner = document.getElementById('inner');
+const trigger = document.getElementById('trigger');
+const info = document.getElementById('info');
+const log = document.getElementById('log');
+
+function write(message) {
+  log.textContent += message + '\n';
+}
+
+document.title = 'JavaScript.Avalonia events';
+const headEntry = document.createElement('TextBlock');
+headEntry.textContent = 'Head updated at ' + new Date().toLocaleTimeString();
+document.head.appendChild(headEntry);
+
+const body = document.body;
+const firstChildName = body.firstChild ? body.firstChild.nodeName : 'none';
+info.textContent = `documentElement: ${document.documentElement.nodeName}, body first child: ${firstChildName}`;
+
+document.addEventListener('pointerdown', evt => {
+  write(`document capture → phase=${evt.eventPhase}`);
+}, { capture: true });
+
+document.addEventListener('pointerdown', evt => {
+  write(`document bubble → phase=${evt.eventPhase}`);
+});
+
+outer.addEventListener('pointerdown', evt => {
+  write(`outer capture → currentTarget=${evt.currentTarget.nodeName}`);
+}, { capture: true });
+
+outer.addEventListener('pointerdown', evt => {
+  write(`outer bubble → defaultPrevented=${evt.defaultPrevented}`);
+});
+
+inner.addEventListener('pointerdown', evt => {
+  write('inner passive listener (preventDefault ignored)');
+  evt.preventDefault();
+}, { passive: true });
+
+inner.addEventListener('pointerdown', evt => {
+  write(`inner bubble → pointerType=${evt.pointerType}, button=${evt.button}`);
+});
+
+inner.addEventListener('custom', evt => {
+  write(`custom event detail=${evt.detail}`);
+  evt.preventDefault();
+});
+
+trigger.addEventListener('click', () => {
+  log.textContent = '';
+  const synthetic = { type: 'custom', bubbles: true, detail: Date.now() };
+  const result = inner.dispatchEvent(synthetic);
+  write(`dispatchEvent returned ${result}, defaultPrevented=${synthetic.defaultPrevented}`);
 });
 """),
             new Preset(

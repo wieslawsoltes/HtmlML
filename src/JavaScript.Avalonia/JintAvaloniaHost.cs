@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -27,6 +28,7 @@ public class JintAvaloniaHost
     private bool _rafScheduled;
     private static readonly HttpClient s_httpClient = new();
     private readonly Dictionary<string, JsValue> _moduleCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
 
     public string ScriptBaseDirectory { get; set; } = AppContext.BaseDirectory;
 
@@ -54,6 +56,7 @@ public class JintAvaloniaHost
         }
 
         Document.ScheduleReadyStateCompletion();
+        TopLevel.Closed += OnTopLevelClosed;
     }
 
     protected virtual void ConfigureEngineOptions(Options options)
@@ -67,6 +70,8 @@ public class JintAvaloniaHost
 
     protected virtual AvaloniaDomDocument CreateDocument()
         => new AvaloniaDomDocument(this);
+
+    internal double GetTimestamp() => _stopwatch.Elapsed.TotalMilliseconds;
 
     private void RegisterModuleSystem()
     {
@@ -95,9 +100,9 @@ public class JintAvaloniaHost
         {
             Engine.Execute(code);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Ignore malformed script; do not crash the app
+            Console.Error.WriteLine($"JavaScript execution error: {ex}");
         }
     }
 
@@ -320,6 +325,11 @@ public class JintAvaloniaHost
         }
 
         throw new NotSupportedException($"Unsupported module scheme '{uri.Scheme}'.");
+    }
+
+    private void OnTopLevelClosed(object? sender, EventArgs e)
+    {
+        Document.RaiseDocumentEvent("unload", bubbles: false, cancelable: false);
     }
 
     private ModuleSource LoadModuleFromFile(string path)
