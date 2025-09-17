@@ -1185,6 +1185,1017 @@ renderScene('Sketch scene rendered with rough.js — adjust the slider or change
 """
             ),
             new Preset(
+                "Canvas 2D + Chart.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas 2D with Chart.js" FontWeight="SemiBold" Foreground="#1f2937" />
+    <Border Name="chartSurface" Width="540" Height="300" Background="#ffffff" BorderBrush="#e2e8f0" BorderThickness="1" CornerRadius="4" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="chartRandomize" Content="Randomise data" />
+      <Button Name="chartToggle" Content="Toggle line/bar" />
+    </StackPanel>
+    <TextBlock Name="chartStatus" Foreground="#475569" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('chartSurface');
+const randomBtn = document.getElementById('chartRandomize');
+const toggleBtn = document.getElementById('chartToggle');
+const status = document.getElementById('chartStatus');
+
+if (!surface) {
+  throw new Error('chartSurface element not found');
+}
+
+const context = surface.getContext('2d');
+if (!context) {
+  throw new Error('CanvasRenderingContext2D unavailable for Chart.js demo');
+}
+
+let logicalWidth = surface.offsetWidth;
+let logicalHeight = surface.offsetHeight;
+const updateLogicalSize = (width, height) => {
+  if (typeof width === 'number' && !Number.isNaN(width)) {
+    logicalWidth = width;
+  }
+  if (typeof height === 'number' && !Number.isNaN(height)) {
+    logicalHeight = height;
+  }
+};
+
+const canvasElement = {
+  nodeName: 'CANVAS',
+  style: surface.style ?? {},
+  ownerDocument: surface.ownerDocument ?? document,
+  defaultView: typeof window !== 'undefined' ? window : undefined,
+  getContext: () => context,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+  getBoundingClientRect: () => surface.getBoundingClientRect?.() ?? {
+    width: surface.offsetWidth,
+    height: surface.offsetHeight,
+    top: 0,
+    left: 0,
+    right: surface.offsetWidth,
+    bottom: surface.offsetHeight
+  }
+};
+
+Object.defineProperties(canvasElement, {
+  width: {
+    configurable: true,
+    enumerable: true,
+    get: () => logicalWidth,
+    set: value => updateLogicalSize(value, logicalHeight)
+  },
+  height: {
+    configurable: true,
+    enumerable: true,
+    get: () => logicalHeight,
+    set: value => updateLogicalSize(logicalWidth, value)
+  },
+  clientWidth: {
+    configurable: true,
+    enumerable: true,
+    get: () => surface.offsetWidth
+  },
+  clientHeight: {
+    configurable: true,
+    enumerable: true,
+    get: () => surface.offsetHeight
+  },
+  offsetWidth: {
+    configurable: true,
+    enumerable: true,
+    get: () => surface.offsetWidth
+  },
+  offsetHeight: {
+    configurable: true,
+    enumerable: true,
+    get: () => surface.offsetHeight
+  }
+});
+
+if (canvasElement.ownerDocument && typeof canvasElement.ownerDocument.defaultView === 'undefined' && typeof window !== 'undefined') {
+  canvasElement.ownerDocument.defaultView = window;
+}
+
+context.canvas = canvasElement;
+
+let chartModule;
+try {
+  chartModule = require('https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.js');
+} catch (error) {
+  const message = `Failed to load Chart.js: ${error}`;
+  if (status) {
+    status.textContent = message;
+  }
+  console.error(message);
+  throw error;
+}
+
+const Chart = chartModule?.Chart ?? chartModule?.default ?? chartModule;
+if (typeof Chart !== 'function' && typeof Chart?.register !== 'function') {
+  const message = 'Chart.js module did not expose a Chart constructor';
+  if (status) {
+    status.textContent = message;
+  }
+  throw new Error(message);
+}
+
+if (typeof Chart.register === 'function' && chartModule?.registerables) {
+  Chart.register(...chartModule.registerables);
+}
+
+const helpers = Chart?.helpers ?? chartModule?.helpers;
+if (helpers?.canvas?.acquireContext && !helpers.canvas.__avaloniaPatched) {
+  const originalAcquire = helpers.canvas.acquireContext.bind(helpers.canvas);
+  helpers.canvas.acquireContext = (item, ...args) => {
+    if (item === surface || item === canvasElement || item === context) {
+      return context;
+    }
+    return originalAcquire(item, ...args);
+  };
+  helpers.canvas.__avaloniaPatched = true;
+}
+
+const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+let dataPoints = labels.map(() => 40 + Math.round(Math.random() * 60));
+let currentType = 'line';
+let chart;
+
+const buildGradient = () => {
+  const gradientHeight = canvasElement.offsetHeight ?? canvasElement.height ?? logicalHeight;
+  const gradient = context.createLinearGradient(0, 0, 0, gradientHeight);
+  gradient.addColorStop(0, 'rgba(59, 130, 246, 0.35)');
+  gradient.addColorStop(1, 'rgba(59, 130, 246, 0.08)');
+  return gradient;
+};
+
+const createConfig = type => ({
+  type,
+  data: {
+    labels,
+    datasets: [
+      {
+        label: 'Active sessions',
+        data: dataPoints,
+        borderColor: '#2563eb',
+        backgroundColor: type === 'bar' ? '#93c5fd' : buildGradient(),
+        borderWidth: 2,
+        fill: type !== 'bar',
+        tension: 0.45,
+        pointRadius: type === 'bar' ? 0 : 4,
+        pointBackgroundColor: '#1d4ed8',
+        hoverRadius: 6
+      }
+    ]
+  },
+  options: {
+    responsive: false,
+    animation: {
+      duration: 600,
+      easing: 'easeInOutCubic'
+    },
+    scales: {
+      x: {
+        ticks: { color: '#64748b' },
+        grid: { color: 'rgba(148, 163, 184, 0.18)' }
+      },
+      y: {
+        beginAtZero: true,
+        suggestedMax: 120,
+        ticks: { color: '#64748b' },
+        grid: { color: 'rgba(148, 163, 184, 0.12)' }
+      }
+    },
+    plugins: {
+      legend: {
+        labels: { color: '#0f172a' }
+      },
+      tooltip: {
+        backgroundColor: '#0f172a',
+        borderColor: '#1d4ed8',
+        borderWidth: 1,
+        padding: 12
+      }
+    }
+  }
+});
+
+const report = message => {
+  if (status) {
+    status.textContent = message;
+  }
+};
+
+const renderChart = type => {
+  if (chart) {
+    chart.destroy();
+  }
+  try {
+    chart = new Chart(canvasElement, createConfig(type));
+    report(`Chart.js ${(chartModule?.version ?? Chart?.version) ?? ''} rendering a ${type} chart`);
+  } catch (error) {
+    report(`Failed to create chart: ${error}`);
+    console.error('Chart.js initialisation error', error);
+    chart = null;
+  }
+};
+
+const randomiseData = () => {
+  dataPoints = labels.map(() => 25 + Math.round(Math.random() * 90));
+  if (!chart) {
+    return;
+  }
+  chart.data.datasets[0].data = dataPoints;
+  if (currentType !== 'bar') {
+    chart.data.datasets[0].backgroundColor = buildGradient();
+  }
+  chart.update();
+  report('Dataset randomised with smooth animation');
+};
+
+randomBtn.addEventListener('click', () => {
+  if (chart) {
+    randomiseData();
+  }
+});
+
+toggleBtn.addEventListener('click', () => {
+  currentType = currentType === 'line' ? 'bar' : 'line';
+  renderChart(currentType);
+});
+
+renderChart(currentType);
+"""
+            ),
+            new Preset(
+                "Canvas 2D + Fabric.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#ffffff" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas 2D with Fabric.js" FontWeight="SemiBold" Foreground="#1f2937" />
+    <Border Name="fabricSurface" Width="560" Height="320" Background="#f8fafc" BorderBrush="#e2e8f0" BorderThickness="1" CornerRadius="4" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="fabricAddRect" Content="Add rectangle" />
+      <Button Name="fabricAddCircle" Content="Add circle" />
+      <Button Name="fabricToggleGrid" Content="Toggle grid" />
+      <Button Name="fabricReset" Content="Reset scene" />
+    </StackPanel>
+    <TextBlock Name="fabricStatus" Foreground="#475569" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('fabricSurface');
+const addRect = document.getElementById('fabricAddRect');
+const addCircle = document.getElementById('fabricAddCircle');
+const gridBtn = document.getElementById('fabricToggleGrid');
+const resetBtn = document.getElementById('fabricReset');
+const status = document.getElementById('fabricStatus');
+
+if (!surface) {
+  throw new Error('fabricSurface element not found');
+}
+
+surface.width = surface.offsetWidth;
+surface.height = surface.offsetHeight;
+
+let fabricModule;
+try {
+  fabricModule = require('https://cdn.jsdelivr.net/npm/fabric@5.3.0/dist/fabric.min.js');
+} catch (error) {
+  const message = `Failed to load Fabric.js: ${error}`;
+  if (status) {
+    status.textContent = message;
+  }
+  console.error(message);
+  throw error;
+}
+
+const fabricGlobal = typeof window !== 'undefined' ? window.fabric : undefined;
+const fabric = fabricModule?.fabric ?? fabricModule?.default ?? fabricGlobal ?? fabricModule;
+if (!fabric?.Canvas) {
+  const message = 'Fabric.js module did not expose a Canvas constructor';
+  if (status) {
+    status.textContent = message;
+  }
+  throw new Error(message);
+}
+
+const canvas = new fabric.Canvas(surface, {
+  selection: true,
+  backgroundColor: '#f8fafc',
+  preserveObjectStacking: true
+});
+canvas.setDimensions({ width: surface.offsetWidth, height: surface.offsetHeight });
+
+const report = message => {
+  if (status) {
+    status.textContent = message;
+  }
+};
+
+const randomBetween = (min, max) => Math.round(min + Math.random() * (max - min));
+const randomColor = () => {
+  const palette = ['#3b82f6', '#ec4899', '#f97316', '#22c55e', '#a855f7'];
+  return palette[randomBetween(0, palette.length - 1)];
+};
+
+const gridLines = [];
+let gridVisible = false;
+
+const clearGrid = () => {
+  while (gridLines.length) {
+    const line = gridLines.pop();
+    canvas.remove(line);
+  }
+};
+
+const createGrid = () => {
+  clearGrid();
+  const step = 60;
+  const width = canvas.getWidth();
+  const height = canvas.getHeight();
+  for (let x = step; x < width; x += step) {
+    const line = new fabric.Line([x, 0, x, height], {
+      stroke: '#cbd5f5',
+      strokeWidth: 1,
+      strokeDashArray: [6, 6],
+      selectable: false,
+      evented: false
+    });
+    line.excludeFromExport = true;
+    gridLines.push(line);
+    canvas.add(line);
+    line.sendToBack();
+  }
+  for (let y = step; y < height; y += step) {
+    const line = new fabric.Line([0, y, width, y], {
+      stroke: '#cbd5f5',
+      strokeWidth: 1,
+      strokeDashArray: [6, 6],
+      selectable: false,
+      evented: false
+    });
+    line.excludeFromExport = true;
+    gridLines.push(line);
+    canvas.add(line);
+    line.sendToBack();
+  }
+  gridVisible = true;
+  report('Grid overlay enabled – drag shapes to explore snapping visuals.');
+  canvas.renderAll();
+};
+
+const toggleGrid = () => {
+  if (gridVisible) {
+    clearGrid();
+    gridVisible = false;
+    canvas.renderAll();
+    report('Grid overlay removed.');
+    return;
+  }
+  createGrid();
+};
+
+const baseShapes = () => {
+  clearGrid();
+  gridVisible = false;
+  canvas.clear();
+  canvas.backgroundColor = '#f1f5f9';
+
+  const gradientRect = new fabric.Rect({
+    left: 80,
+    top: 70,
+    width: 200,
+    height: 140,
+    rx: 26,
+    ry: 26,
+    fill: new fabric.Gradient({
+      type: 'linear',
+      gradientUnits: 'percentage',
+      coords: { x1: 0, y1: 0, x2: 0, y2: 1 },
+      colorStops: [
+        { offset: 0, color: '#93c5fd' },
+        { offset: 1, color: '#1d4ed8' }
+      ]
+    }),
+    stroke: '#1e3a8a',
+    strokeWidth: 2
+  });
+  gradientRect.shadow = new fabric.Shadow({
+    color: 'rgba(15, 23, 42, 0.18)',
+    blur: 16,
+    offsetX: 0,
+    offsetY: 10
+  });
+
+  const circle = new fabric.Circle({
+    left: 320,
+    top: 90,
+    radius: 70,
+    fill: new fabric.Gradient({
+      type: 'radial',
+      coords: { r1: 0, r2: 1, x1: 0.5, y1: 0.5, x2: 0.5, y2: 0.5 },
+      colorStops: [
+        { offset: 0, color: '#fda4af' },
+        { offset: 1, color: '#db2777' }
+      ]
+    }),
+    stroke: '#be123c',
+    strokeWidth: 2
+  });
+
+  const text = new fabric.Textbox('Fabric.js', {
+    left: 200,
+    top: 240,
+    width: 200,
+    fontSize: 28,
+    fontFamily: 'Segoe UI',
+    fontWeight: 'bold',
+    fill: '#0f172a',
+    textAlign: 'center'
+  });
+
+  canvas.add(gradientRect, circle, text);
+  canvas.renderAll();
+  report('Scene initialised with layered vector objects.');
+};
+
+const addRandomRect = () => {
+  const rect = new fabric.Rect({
+    left: randomBetween(40, canvas.getWidth() - 160),
+    top: randomBetween(40, canvas.getHeight() - 120),
+    width: randomBetween(80, 160),
+    height: randomBetween(60, 120),
+    rx: 18,
+    ry: 18,
+    fill: randomColor(),
+    opacity: 0.85
+  });
+  rect.shadow = new fabric.Shadow({
+    color: 'rgba(15, 23, 42, 0.15)',
+    blur: 14,
+    offsetX: 0,
+    offsetY: 8
+  });
+  canvas.add(rect);
+  canvas.setActiveObject(rect);
+  report('Added a draggable rounded rectangle.');
+};
+
+const addRandomCircle = () => {
+  const circle = new fabric.Circle({
+    left: randomBetween(60, canvas.getWidth() - 140),
+    top: randomBetween(60, canvas.getHeight() - 140),
+    radius: randomBetween(36, 72),
+    fill: randomColor(),
+    stroke: '#1f2937',
+    strokeWidth: 1.5,
+    opacity: 0.9
+  });
+  circle.shadow = new fabric.Shadow({
+    color: 'rgba(15, 23, 42, 0.12)',
+    blur: 12,
+    offsetX: 0,
+    offsetY: 6
+  });
+  canvas.add(circle);
+  canvas.setActiveObject(circle);
+  report('Added an interactive circle.');
+};
+
+canvas.on('object:modified', evt => {
+  const target = evt?.target;
+  if (!target) {
+    return;
+  }
+  const { left, top, angle } = target;
+  report(`Updated ${target.type} → left=${Math.round(left ?? 0)}, top=${Math.round(top ?? 0)}, angle=${Math.round(angle ?? 0)}`);
+});
+
+canvas.on('selection:created', evt => {
+  const target = evt?.selected?.[0];
+  if (target) {
+    report(`Selected ${target.type} – try scaling or rotating.`);
+  }
+});
+
+canvas.on('selection:cleared', () => {
+  report('Selection cleared.');
+});
+
+addRect.addEventListener('click', addRandomRect);
+addCircle.addEventListener('click', addRandomCircle);
+gridBtn.addEventListener('click', toggleGrid);
+resetBtn.addEventListener('click', () => {
+  baseShapes();
+  report('Scene reset to default composition.');
+});
+
+baseShapes();
+"""
+            ),
+            new Preset(
+                "Canvas 2D + Paper.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#0f172a" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas 2D with Paper.js" FontWeight="SemiBold" Foreground="#f8fafc" />
+    <Border Name="paperSurface" Width="560" Height="320" Background="#111827" BorderBrush="#1e293b" BorderThickness="1" CornerRadius="6" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="paperMutate" Content="Mutate scene" />
+      <Button Name="paperToggle" Content="Pause / resume" />
+    </StackPanel>
+    <TextBlock Name="paperStatus" Foreground="#e2e8f0" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('paperSurface');
+const mutateBtn = document.getElementById('paperMutate');
+const toggleBtn = document.getElementById('paperToggle');
+const status = document.getElementById('paperStatus');
+
+if (!surface) {
+  throw new Error('paperSurface element not found');
+}
+
+const paperContext = surface.getContext('2d');
+if (!paperContext) {
+  throw new Error('CanvasRenderingContext2D unavailable for Paper.js demo');
+}
+
+const paperCanvas = paperContext.canvas ?? surface;
+paperCanvas.width = surface.offsetWidth;
+paperCanvas.height = surface.offsetHeight;
+
+let paperModule;
+try {
+  paperModule = require('https://cdn.jsdelivr.net/npm/paper@0.12.17/dist/paper-full.min.js');
+} catch (error) {
+  const message = `Failed to load Paper.js: ${error}`;
+  if (status) {
+    status.textContent = message;
+  }
+  console.error(message);
+  throw error;
+}
+
+const paperGlobal = typeof window !== 'undefined' ? window.paper : undefined;
+const paper = paperModule?.paper ?? paperModule?.default ?? paperGlobal ?? paperModule;
+if (typeof paper?.setup !== 'function') {
+  const message = 'Paper.js module did not expose a setup function';
+  if (status) {
+    status.textContent = message;
+  }
+  throw new Error(message);
+}
+
+paper.setup(paperCanvas);
+
+const report = message => {
+  if (status) {
+    status.textContent = message;
+  }
+};
+
+const width = surface.offsetWidth;
+const height = surface.offsetHeight;
+const center = new paper.Point(width / 2, height / 2);
+
+const background = new paper.Path.Rectangle({
+  point: [0, 0],
+  size: [width, height],
+  radius: 18,
+  fillColor: '#111827'
+});
+background.sendToBack();
+
+const halo = new paper.Path.Circle({
+  center,
+  radius: Math.min(width, height) * 0.45,
+  strokeColor: '#60a5fa',
+  dashArray: [12, 8],
+  strokeWidth: 2,
+  opacity: 0.85
+});
+
+const star = new paper.Path.Star({
+  center,
+  points: 7,
+  radius1: Math.min(width, height) * 0.16,
+  radius2: Math.min(width, height) * 0.34,
+  fillColor: '#ec4899',
+  strokeColor: '#be185d',
+  strokeWidth: 3
+});
+star.shadowColor = new paper.Color(0, 0, 0, 0.28);
+star.shadowBlur = 18;
+star.shadowOffset = new paper.Point(0, 10);
+
+const ribbon = new paper.Path.Rectangle({
+  point: [60, height / 2 - 40],
+  size: [width - 120, 80],
+  radius: 28,
+  fillColor: new paper.Color(0.22, 0.35, 0.55, 0.45)
+});
+ribbon.rotate(-8, center);
+ribbon.blendMode = 'soft-light';
+
+const wave = new paper.Path({
+  strokeColor: '#38bdf8',
+  strokeWidth: 2,
+  opacity: 0.75,
+  smooth: true
+});
+wave.sendToBack();
+let waveBase = [];
+
+const rebuildWave = () => {
+  wave.removeSegments();
+  const segments = 14;
+  const baseline = height - 70;
+  const amplitude = 22;
+  for (let i = 0; i <= segments; i++) {
+    const x = (width / segments) * i;
+    const phase = (i / segments) * Math.PI * 2;
+    const y = baseline + Math.sin(phase) * amplitude;
+    wave.add(new paper.Point(x, y));
+  }
+  wave.smooth({ type: 'catmull-rom', factor: 0.5 });
+  waveBase = wave.segments.map(segment => segment.point.y);
+};
+
+rebuildWave();
+
+const connectors = new paper.Group();
+const rebuildConnectors = () => {
+  connectors.removeChildren();
+  const spokes = 6;
+  for (let i = 0; i < spokes; i++) {
+    const angle = (360 / spokes) * i;
+    const start = center.add(new paper.Point({ length: star.bounds.width * 0.2, angle }));
+    const end = center.add(new paper.Point({ length: star.bounds.width * 0.8, angle }));
+    const path = new paper.Path.Line(start, end);
+    path.strokeColor = new paper.Color(0.55, 0.63, 0.75, 0.65);
+    path.strokeWidth = 1.5;
+    path.dashArray = [8, 6];
+    connectors.addChild(path);
+  }
+  connectors.sendToBack();
+};
+
+rebuildConnectors();
+
+const particles = new paper.Group();
+const createParticles = count => {
+  particles.removeChildren();
+  for (let i = 0; i < count; i++) {
+    const base = new paper.Point(
+      40 + Math.random() * (width - 80),
+      80 + Math.random() * (height - 140)
+    );
+    const radius = 5 + Math.random() * 9;
+    const blob = new paper.Path.Circle({
+      center: base,
+      radius,
+      fillColor: new paper.Color({
+        hue: 210 + Math.random() * 40,
+        saturation: 0.35,
+        brightness: 0.95,
+        alpha: 0.45
+      })
+    });
+    blob.blendMode = 'screen';
+    blob.data = {
+      base,
+      amplitude: 4 + Math.random() * 6,
+      speed: 0.5 + Math.random() * 1.2
+    };
+    particles.addChild(blob);
+  }
+};
+
+createParticles(26);
+
+let animationEnabled = true;
+
+paper.view.onFrame = event => {
+  if (!animationEnabled) {
+    return;
+  }
+
+  star.rotate(0.6);
+  connectors.rotate(0.25, center);
+
+  particles.children.forEach((particle, index) => {
+    const base = particle.data.base;
+    const amp = particle.data.amplitude;
+    const speed = particle.data.speed;
+    const phase = event.time * speed + index;
+    particle.position.x = base.x + Math.sin(phase) * amp * 4;
+    particle.position.y = base.y + Math.cos(phase * 1.4) * amp * 2;
+  });
+
+  wave.segments.forEach((segment, index) => {
+    segment.point.y = waveBase[index] + Math.sin(event.time * 1.6 + index * 0.35) * 4;
+  });
+  wave.smooth({ type: 'catmull-rom', factor: 0.5 });
+};
+
+const mutateScene = () => {
+  const hue = Math.round(Math.random() * 360);
+  star.fillColor = new paper.Color({ hue, saturation: 0.65, brightness: 0.95 });
+  star.strokeColor = new paper.Color({ hue: (hue + 320) % 360, saturation: 0.6, brightness: 0.6 });
+  halo.strokeColor = new paper.Color({ hue: (hue + 180) % 360, saturation: 0.4, brightness: 0.85 });
+  ribbon.fillColor = new paper.Color({ hue: (hue + 40) % 360, saturation: 0.3, brightness: 0.55, alpha: 0.5 });
+
+  particles.children.forEach((particle, index) => {
+    const base = new paper.Point(
+      40 + Math.random() * (width - 80),
+      80 + Math.random() * (height - 140)
+    );
+    particle.data.base = base;
+    particle.position = base.clone();
+    particle.data.amplitude = 4 + Math.random() * 7;
+    particle.data.speed = 0.5 + Math.random() * 1.4;
+    particle.fillColor = new paper.Color({
+      hue: (hue + index * 9) % 360,
+      saturation: 0.4,
+      brightness: 0.95,
+      alpha: 0.48
+    });
+  });
+
+  rebuildWave();
+  rebuildConnectors();
+  paper.view.requestUpdate();
+  report('Paper.js scene mutated with new palette and geometry.');
+};
+
+mutateBtn.addEventListener('click', mutateScene);
+
+toggleBtn.addEventListener('click', () => {
+  animationEnabled = !animationEnabled;
+  if (animationEnabled) {
+    paper.view.play();
+    report('Animation resumed.');
+  } else {
+    paper.view.pause();
+    report('Animation paused — mutate to explore new layouts.');
+  }
+});
+
+report('Paper.js generative scene ready — mutate the palette or pause the motion.');
+paper.view.play();
+"""
+            ),
+            new Preset(
+                "Modules: CommonJS",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f9fafc" BorderBrush="#d8e2ef" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="10">
+    <TextBlock Text="CommonJS module (ms)" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
+    <TextBlock Text="Convert between human readable durations and milliseconds using the ms package." TextWrapping="Wrap" Foreground="#475569" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <TextBox Name="msInput" Width="160" Text="1.5h" />
+      <Button Name="msParse" Content="Parse ⟶ ms" />
+      <Button Name="msFormat" Content="Format ⟶ long" />
+    </StackPanel>
+    <TextBlock Name="msOutput" Foreground="#0f172a" FontFamily="Consolas" />
+  </StackPanel>
+</Border>
+""",
+                """
+const input = document.getElementById('msInput');
+const parseBtn = document.getElementById('msParse');
+const formatBtn = document.getElementById('msFormat');
+const output = document.getElementById('msOutput');
+
+let ms;
+try {
+  ms = require('https://cdn.jsdelivr.net/npm/ms@2.1.3/index.js');
+  if (typeof ms !== 'function') {
+    throw new Error('ms module did not export a function');
+  }
+} catch (error) {
+  const message = `Failed to load ms module: ${error}`;
+  output.textContent = message;
+  console.error(message);
+  throw error;
+}
+
+const report = message => {
+  output.textContent = message ?? '';
+};
+
+parseBtn.addEventListener('click', () => {
+  const value = input.value?.trim();
+  if (!value) {
+    report('Enter a duration like 2500, 2m, 1.5h');
+    return;
+  }
+
+  try {
+    const result = ms(value);
+    if (typeof result !== 'number' || Number.isNaN(result)) {
+      report(`Could not parse "${value}"`);
+      return;
+    }
+    report(`${value} = ${result.toLocaleString()} ms`);
+  } catch (error) {
+    report(`Parse error: ${error}`);
+  }
+});
+
+formatBtn.addEventListener('click', () => {
+  const value = Number.parseFloat(input.value ?? '');
+  if (!Number.isFinite(value)) {
+    report('Provide a numeric millisecond value to format.');
+    return;
+  }
+
+  try {
+    report(`${value.toLocaleString()} ms ≈ ${ms(value, { long: true })}`);
+  } catch (error) {
+    report(`Format error: ${error}`);
+  }
+});
+
+report('CommonJS require() ready – try parsing "45m" or formatting 900000.');
+"""
+            ),
+            new Preset(
+                "Modules: AMD",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#ffffff" BorderBrush="#d9e3f1" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="AMD module (underscore)" FontWeight="SemiBold" FontSize="18" Foreground="#111827" />
+    <TextBlock Text="Load underscore via its AMD factory and explore functional helpers." TextWrapping="Wrap" Foreground="#475569" />
+    <ItemsControl Name="amdTodo">
+      <ItemsControl.Items>
+        <TextBlock Text="Refactor module loader" />
+        <TextBlock Text="Review pull requests" />
+        <TextBlock Text="Write release notes" />
+        <TextBlock Text="Triage issues" />
+        <TextBlock Text="Ship new sample" />
+      </ItemsControl.Items>
+    </ItemsControl>
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="amdShuffle" Content="Shuffle" />
+      <Button Name="amdSample" Content="Pick task" />
+    </StackPanel>
+    <TextBlock Name="amdStatus" Foreground="#1e293b" FontFamily="Consolas" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+const list = document.getElementById('amdTodo');
+const shuffleBtn = document.getElementById('amdShuffle');
+const sampleBtn = document.getElementById('amdSample');
+const status = document.getElementById('amdStatus');
+
+let underscore;
+try {
+  underscore = require('https://cdn.jsdelivr.net/npm/underscore@1.13.6/underscore-min.js');
+  if (!underscore || typeof underscore.sample !== 'function') {
+    throw new Error('underscore export missing expected helpers');
+  }
+} catch (error) {
+  const message = `Failed to load underscore via AMD: ${error}`;
+  status.textContent = message;
+  console.error(message);
+  throw error;
+}
+
+const readItems = () => Array.from(list.children ?? []).map(child => child.textContent).filter(Boolean);
+
+shuffleBtn.addEventListener('click', () => {
+  const items = readItems();
+  const shuffled = underscore.shuffle(items);
+  list.children?.forEach(child => child.remove());
+  shuffled.forEach(text => {
+    const node = document.createElement('TextBlock');
+    node.textContent = text;
+    list.appendChild(node);
+  });
+  status.textContent = 'Shuffled using underscore.shuffle()';
+});
+
+sampleBtn.addEventListener('click', () => {
+  const items = readItems();
+  if (items.length === 0) {
+    status.textContent = 'List is empty';
+    return;
+  }
+  const pick = underscore.sample(items);
+  status.textContent = `Focus next: ${pick}`;
+});
+
+status.textContent = 'underscore AMD module ready – shuffle the backlog or pick a task.';
+"""
+            ),
+            new Preset(
+                "Modules: Global fallback",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#0f172a" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Global factory (anime.js)" FontWeight="SemiBold" Foreground="#f8fafc" FontSize="18" />
+    <TextBlock Text="anime.js exposes a browser global – the loader captures it so we can orchestrate tweening." TextWrapping="Wrap" Foreground="#cbd5f5" />
+    <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+      <Border Name="animeBar1" Width="60" Height="12" CornerRadius="6" Background="#38bdf8" />
+      <Border Name="animeBar2" Width="60" Height="12" CornerRadius="6" Background="#818cf8" />
+      <Border Name="animeBar3" Width="60" Height="12" CornerRadius="6" Background="#f472b6" />
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="animePlay" Content="Play animation" />
+      <Button Name="animeReset" Content="Reset" />
+    </StackPanel>
+    <TextBlock Name="animeStatus" Foreground="#e2e8f0" />
+  </StackPanel>
+</Border>
+""",
+                """
+const bar1 = document.getElementById('animeBar1');
+const bar2 = document.getElementById('animeBar2');
+const bar3 = document.getElementById('animeBar3');
+const playBtn = document.getElementById('animePlay');
+const resetBtn = document.getElementById('animeReset');
+const status = document.getElementById('animeStatus');
+
+let animeFactory;
+try {
+  const module = require('https://cdn.jsdelivr.net/npm/animejs@3.2.1/lib/anime.min.js');
+  animeFactory = module?.anime ?? module ?? window.anime;
+  if (typeof animeFactory !== 'function') {
+    throw new Error('anime.js global was not detected');
+  }
+} catch (error) {
+  const message = `Failed to load anime.js: ${error}`;
+  status.textContent = message;
+  console.error(message);
+  throw error;
+}
+
+const bars = [bar1, bar2, bar3].filter(Boolean);
+
+const resetBars = () => {
+  bars.forEach((bar, index) => {
+    bar.style.setProperty('transform', 'scaleX(1)');
+    bar.style.setProperty('opacity', '1');
+    bar.style.setProperty('box-shadow', 'none');
+    bar.setAttribute('width', '60');
+    bar.setAttribute('Background', index === 0 ? '#38bdf8' : index === 1 ? '#818cf8' : '#f472b6');
+  });
+  status.textContent = 'Ready – animate the bars!';
+};
+
+resetBars();
+
+let running = null;
+
+const playAnimation = () => {
+  if (running) {
+    running.pause?.();
+  }
+
+  running = animeFactory({
+    targets: bars,
+    scaleX: [1, 2.4],
+    opacity: [1, 0.45],
+    borderRadius: ['6px', '12px'],
+    direction: 'alternate',
+    easing: 'easeInOutSine',
+    duration: 1200,
+    delay: animeFactory.stagger(120),
+    loop: 2,
+    complete: () => {
+      status.textContent = 'Animation finished – global fallback succeeded.';
+    }
+  });
+
+  status.textContent = 'Animating with anime.js global factory...';
+};
+
+playBtn.addEventListener('click', playAnimation);
+
+resetBtn.addEventListener('click', () => {
+  if (running) {
+    running.pause?.();
+    running = null;
+  }
+  resetBars();
+  status.textContent = 'Animation reset.';
+});
+"""
+            ),
+            new Preset(
                 "Ready state & query",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16">
