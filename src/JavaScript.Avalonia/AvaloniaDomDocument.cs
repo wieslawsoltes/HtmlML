@@ -269,6 +269,7 @@ public class AvaloniaDomDocument
         }
 
         var created = new AvaloniaDomElement(Host, control);
+
         _elementWrappers.Add(control, created);
         return created;
     }
@@ -1027,6 +1028,8 @@ public class AvaloniaDomElement
     public DomTokenList classList => _classList ??= new DomTokenList(this);
 
     public CssStyleDeclaration style => _style ??= new CssStyleDeclaration(this);
+
+    public virtual object? getContext(string type) => CanvasContextBridge.GetContext(Control, type);
 
     public DomStringMap dataset => _dataset ??= new DomStringMap(this);
 

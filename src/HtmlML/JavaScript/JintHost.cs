@@ -250,7 +250,7 @@ public class JintHost : JintAvaloniaHost
             _host = host;
         }
 
-        public canvas.Canvas2DContext getContext(string type)
+        public override object? getContext(string type)
         {
             return ((canvas)Control).GetContext(type);
         }

@@ -10,6 +10,7 @@ The library was originally extracted from the HtmlML project and is now a standa
 - **DOM-style document API** (`document.getElementById`, `querySelector(All)`, `createElement`, `document.body`).
 - **Control wrapper** (`AvaloniaDomElement`) exposing `appendChild`, `remove`, `setAttribute`, `classList*`, `textContent` and more.
 - **Event bridge** that maps common DOM event names to Avalonia routed events and delivers strongly-typed event payloads back to JavaScript.
+- **Canvas 2D surface** on any `Control` via `getContext('2d')`, backed by a browser-style `CanvasRenderingContext2D` that records commands against Avalonia's `DrawingContext`.
 - **Timers and animation** via `window.setTimeout`, `window.requestAnimationFrame`, and `window.cancelAnimationFrame` bound to Avalonia’s dispatcher and `TopLevel.RequestAnimationFrame`.
 - **Console output** routed to `System.Console.WriteLine` for easy debugging.
 - **Extensibility hooks**: override `CreateDocument`, supply a custom element factory, or derive your own `AvaloniaDomElement` to add behaviour.
@@ -162,6 +163,39 @@ The document root now exposes `document.documentElement`, `document.head`, and `
 `window.requestAnimationFrame` integrates with `TopLevel.RequestAnimationFrame` and passes the frame timestamp (milliseconds) to the callback. Use `window.cancelAnimationFrame(id)` to cancel pending frames.
 
 These helpers are also assigned to `globalThis`, so `setTimeout` and `requestAnimationFrame` work without the `window.` prefix.
+
+## Canvas API
+
+Any Avalonia `Control` can expose a `getContext('2d')` surface to JavaScript that mirrors the browser Canvas 2D API while rendering through Avalonia's `DrawingContext`. The context supports fills and strokes, paths (`beginPath`/`moveTo`/`lineTo`/`arc`/`closePath`), transforms (`translate`, `scale`, `rotate`, `setTransform`), text rendering, and `clearRect` to reset the surface.
+
+```xaml
+<Border Name="paintSurface" Width="520" Height="280" Background="#ffffff" BorderBrush="#e2e8f0" BorderThickness="1" CornerRadius="4" />
+```
+
+```js
+const surface = document.getElementById('paintSurface');
+const ctx = surface.getContext('2d');
+
+ctx.fillStyle = '#ffffff';
+ctx.fillRect(0, 0, surface.offsetWidth, surface.offsetHeight);
+
+ctx.strokeStyle = '#2563eb';
+ctx.lineWidth = 4;
+ctx.beginPath();
+ctx.moveTo(40, 40);
+ctx.lineTo(200, 120);
+ctx.lineTo(40, 200);
+ctx.closePath();
+ctx.stroke();
+
+ctx.fillStyle = '#10b981';
+ctx.beginPath();
+ctx.arc(280, 140, 48, 0, Math.PI * 2, false);
+ctx.fill();
+```
+
+Use `ctx.clearRect(0, 0, surface.offsetWidth, surface.offsetHeight);` to wipe the surface between frames or drive animations with `requestAnimationFrame`.
+
 
 ## Console Output
 

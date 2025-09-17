@@ -611,6 +611,124 @@ const handle = window.setInterval(() => {
 }, 500);
 """),
             new Preset(
+                "Canvas 2D",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d4dbe5" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="CanvasRenderingContext2D demo" FontWeight="SemiBold" Foreground="#0f172a" />
+    <Border Name="paintSurface" Width="520" Height="280" Background="#ffffff" BorderBrush="#e2e8f0" BorderThickness="1" CornerRadius="4" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="drawCanvas" Content="Draw scene" />
+      <Button Name="animateCanvas" Content="Animate" />
+      <Button Name="clearCanvas" Content="Clear" />
+    </StackPanel>
+    <TextBlock Name="canvasStatus" Foreground="#334155" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('paintSurface');
+const ctx = surface.getContext('2d');
+const drawBtn = document.getElementById('drawCanvas');
+const animateBtn = document.getElementById('animateCanvas');
+const clearBtn = document.getElementById('clearCanvas');
+const status = document.getElementById('canvasStatus');
+
+let animationHandle = 0;
+let angle = 0;
+
+function drawScene() {
+  const width = surface.offsetWidth;
+  const height = surface.offsetHeight;
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = '#2563eb';
+  ctx.fillRect(28, 28, 160, 100);
+
+  ctx.strokeStyle = '#f97316';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(220, 44);
+  ctx.lineTo(340, 140);
+  ctx.lineTo(220, 184);
+  ctx.closePath();
+  ctx.stroke();
+
+  ctx.fillStyle = '#10b981';
+  ctx.beginPath();
+  ctx.arc(400, 120, 48, 0, Math.PI * 2, false);
+  ctx.fill();
+
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '20px Segoe UI';
+  ctx.fillText('CanvasRenderingContext2D from Avalonia', 28, height - 36);
+
+  status.textContent = 'Scene rendered using the Avalonia drawing context.';
+}
+
+function animate() {
+  const width = surface.offsetWidth;
+  const height = surface.offsetHeight;
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.fillStyle = '#f1f5f9';
+  ctx.fillRect(0, 0, width, height);
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) / 4;
+
+  ctx.strokeStyle = '#475569';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2, false);
+  ctx.stroke();
+
+  const orbitX = cx + Math.cos(angle) * radius;
+  const orbitY = cy + Math.sin(angle) * radius;
+
+  ctx.fillStyle = '#f97316';
+  ctx.beginPath();
+  ctx.arc(orbitX, orbitY, 16, 0, Math.PI * 2, false);
+  ctx.fill();
+
+  angle += 0.1;
+  animationHandle = window.requestAnimationFrame(animate);
+}
+
+drawBtn.addEventListener('click', () => {
+  if (animationHandle) {
+    window.cancelAnimationFrame(animationHandle);
+    animationHandle = 0;
+  }
+  drawScene();
+});
+
+animateBtn.addEventListener('click', () => {
+  if (animationHandle) {
+    return;
+  }
+  status.textContent = 'Animating with requestAnimationFrame...';
+  angle = 0;
+  animationHandle = window.requestAnimationFrame(animate);
+});
+
+clearBtn.addEventListener('click', () => {
+  if (animationHandle) {
+    window.cancelAnimationFrame(animationHandle);
+    animationHandle = 0;
+  }
+  ctx.clearRect(0, 0, surface.offsetWidth, surface.offsetHeight);
+  status.textContent = 'Canvas cleared.';
+});
+
+drawScene();
+"""
+            ),
+            new Preset(
                 "Ready state & query",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16">
