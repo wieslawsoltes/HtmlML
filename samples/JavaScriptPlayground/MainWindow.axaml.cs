@@ -729,6 +729,205 @@ drawScene();
 """
             ),
             new Preset(
+                "Canvas 2D + bezier.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#ffffff" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas 2D with bezier-js" FontWeight="SemiBold" Foreground="#1f2937" />
+    <Border Name="librarySurface" Width="540" Height="300" Background="#f8fafc" BorderBrush="#e2e8f0" BorderThickness="1" CornerRadius="4" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="libraryDraw" Content="Render curve" />
+      <Button Name="libraryRandom" Content="Randomise control points" />
+    </StackPanel>
+    <TextBlock Name="libraryStatus" Foreground="#475569" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('librarySurface');
+const ctx = surface.getContext('2d');
+const drawBtn = document.getElementById('libraryDraw');
+const randomBtn = document.getElementById('libraryRandom');
+const status = document.getElementById('libraryStatus');
+
+let Bezier;
+try {
+  const bezierModule = require('https://cdn.jsdelivr.net/npm/bezier-js@6.1.3/dist/bezier.cjs');
+  Bezier = bezierModule?.Bezier ?? bezierModule?.default ?? bezierModule;
+  if (typeof Bezier !== 'function') {
+    throw new Error('bezier-js module did not expose a constructor');
+  }
+} catch (error) {
+  const message = `Failed to load bezier-js: ${error}`;
+  if (status) {
+    status.textContent = message;
+  }
+  console.error(message);
+  throw error;
+}
+
+function createRandomCurve() {
+  const w = surface.offsetWidth;
+  const h = surface.offsetHeight;
+  const margin = 32;
+  return new Bezier(
+    margin,
+    h - margin,
+    w * 0.25 + Math.random() * w * 0.2,
+    margin + Math.random() * (h - 2 * margin),
+    w * 0.6 + Math.random() * w * 0.2,
+    margin + Math.random() * (h - 2 * margin),
+    w - margin,
+    margin
+  );
+}
+
+let curve = createRandomCurve();
+
+function renderCurve() {
+  const w = surface.offsetWidth;
+  const h = surface.offsetHeight;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#1f2937';
+  ctx.beginPath();
+  const primary = curve.getLUT(120);
+  ctx.moveTo(primary[0].x, primary[0].y);
+  for (let i = 1; i < primary.length; i++) {
+    ctx.lineTo(primary[i].x, primary[i].y);
+  }
+  ctx.stroke();
+
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#3b82f6';
+  const offsets = curve.offset(18);
+  offsets.forEach(offsetCurve => {
+    const points = offsetCurve.getLUT(80);
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.stroke();
+  });
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#94a3b8';
+  ctx.beginPath();
+  ctx.moveTo(curve.points[0].x, curve.points[0].y);
+  for (let i = 1; i < curve.points.length; i++) {
+    ctx.lineTo(curve.points[i].x, curve.points[i].y);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = '#ef4444';
+  curve.points.forEach(pt => {
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2, false);
+    ctx.fill();
+  });
+}
+
+function renderAndReport(message) {
+  renderCurve();
+  if (status) {
+    status.textContent = message ?? 'Curves rendered with bezier-js';
+  }
+}
+
+const interactionRadius = 16;
+let activePointIndex = -1;
+
+const getPointerPosition = evt => ({
+  x: evt?.x ?? 0,
+  y: evt?.y ?? 0
+});
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const distanceSquared = (a, b) => {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+};
+
+function findClosestPoint(position, radius = interactionRadius) {
+  let index = -1;
+  let minDist = radius * radius;
+  curve.points.forEach((pt, i) => {
+    const dist = distanceSquared(position, pt);
+    if (dist <= minDist) {
+      minDist = dist;
+      index = i;
+    }
+  });
+  return index;
+}
+
+function updateActivePoint(position, message) {
+  if (activePointIndex === -1) {
+    return;
+  }
+
+  const pt = curve.points[activePointIndex];
+  pt.x = clamp(position.x, 0, surface.offsetWidth);
+  pt.y = clamp(position.y, 0, surface.offsetHeight);
+  curve.update();
+  renderAndReport(message);
+}
+
+function handlePointerDown(evt) {
+  const position = getPointerPosition(evt);
+  const index = findClosestPoint(position);
+  if (index === -1) {
+    return;
+  }
+
+  evt.preventDefault?.();
+  activePointIndex = index;
+  updateActivePoint(position, 'Dragging control point');
+  surface.setPointerCapture?.(evt.pointerId);
+}
+
+function handlePointerMove(evt) {
+  if (activePointIndex === -1) {
+    return;
+  }
+
+  evt.preventDefault?.();
+  updateActivePoint(getPointerPosition(evt), 'Dragging control point');
+}
+
+function handlePointerUp(evt) {
+  if (activePointIndex === -1) {
+    return;
+  }
+
+  activePointIndex = -1;
+  surface.releasePointerCapture?.(evt?.pointerId);
+  renderAndReport('Control point updated');
+}
+
+surface.addEventListener('pointerdown', handlePointerDown);
+surface.addEventListener('pointermove', handlePointerMove);
+surface.addEventListener('pointerup', handlePointerUp);
+surface.addEventListener('pointerleave', handlePointerUp);
+
+drawBtn.addEventListener('click', () => renderAndReport('Bezier curve redrawn'));
+
+randomBtn.addEventListener('click', () => {
+  activePointIndex = -1;
+  curve = createRandomCurve();
+  renderAndReport('Generated new curve — drag the red points to edit');
+});
+
+renderAndReport('Initial curve generated with bezier-js. Drag the red points to edit.');
+"""
+            ),
+            new Preset(
                 "Ready state & query",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16">
