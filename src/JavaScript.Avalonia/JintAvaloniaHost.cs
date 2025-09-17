@@ -29,6 +29,7 @@ public class JintAvaloniaHost
     private static readonly HttpClient s_httpClient = new();
     private readonly Dictionary<string, JsValue> _moduleCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+    private readonly Stack<JsValue> _pendingModuleResults = new();
 
     public string ScriptBaseDirectory { get; set; } = AppContext.BaseDirectory;
 
@@ -79,10 +80,103 @@ public class JintAvaloniaHost
     {
         Func<string, JsValue> globalRequire = specifier => RequireModule(specifier, null);
         Engine.SetValue("require", globalRequire);
+        Engine.SetValue("__setLastModuleResult", new Action<JsValue>(SetPendingModuleResult));
 
         try
         {
             Engine.Execute("if (typeof window !== 'undefined') { window.require = require; }");
+        }
+        catch
+        {
+        }
+
+        const string amdDefineScript = @"(function(){
+  if (typeof globalThis === 'undefined') {
+    return;
+  }
+  var setter = globalThis.__setLastModuleResult;
+  if (typeof setter !== 'function') {
+    return;
+  }
+  function normalizeDependencies(deps, factory) {
+    if (deps == null) {
+      deps = [];
+    }
+    if (typeof deps === 'string') {
+      deps = [deps];
+    }
+    if (!Array.isArray(deps)) {
+      deps = [];
+    }
+    if (deps.length === 0 && typeof factory === 'function' && factory.length > 0) {
+      var defaultDeps = ['require', 'exports', 'module'];
+      deps = defaultDeps.slice(0, factory.length);
+    }
+    return deps.slice();
+  }
+  function resolveDependencies(deps, localRequire) {
+    var exportsObject = {};
+    var moduleObject = { exports: exportsObject };
+    var values = [];
+    for (var i = 0; i < deps.length; i++) {
+      var dep = deps[i];
+      if (dep === 'exports') {
+        values.push(exportsObject);
+        continue;
+      }
+      if (dep === 'module') {
+        values.push(moduleObject);
+        continue;
+      }
+      if (dep === 'require') {
+        values.push(localRequire);
+        continue;
+      }
+      values.push(localRequire(dep));
+    }
+    return { values: values, exportsObject: exportsObject, moduleObject: moduleObject };
+  }
+  function selectResult(factoryResult, moduleObject, exportsObject) {
+    if (typeof factoryResult !== 'undefined') {
+      return factoryResult;
+    }
+    if (moduleObject && typeof moduleObject.exports !== 'undefined') {
+      return moduleObject.exports;
+    }
+    return exportsObject;
+  }
+  function define(name, deps, factory) {
+    if (typeof name !== 'string') {
+      factory = deps;
+      deps = name;
+      name = null;
+    }
+    if (typeof deps === 'function' || deps == null) {
+      factory = deps;
+      deps = [];
+    }
+    if (typeof factory !== 'function') {
+      setter(factory);
+      return factory;
+    }
+    var normalized = normalizeDependencies(deps, factory);
+    var resolved = resolveDependencies(normalized, require);
+    var result = factory.apply(globalThis, resolved.values);
+    var finalResult = selectResult(result, resolved.moduleObject, resolved.exportsObject);
+    resolved.moduleObject.exports = finalResult;
+    setter(finalResult);
+    return finalResult;
+  }
+  define.amd = {};
+  globalThis.define = define;
+  if (typeof window !== 'undefined') {
+    window.define = define;
+  }
+})();";
+
+        try
+        {
+            Engine.Execute(amdDefineScript);
         }
         catch
         {
@@ -255,6 +349,8 @@ public class JintAvaloniaHost
             var requireValue = JsValue.FromObject(Engine, moduleRequire);
             moduleObject.Set("require", requireValue, throwOnError: false);
 
+            PushModuleResultFrame();
+
             var wrapper = "(function(require, module, exports, __filename, __dirname){\n" + source.Content + "\n})";
             var functionValue = Engine.Evaluate(wrapper);
             var moduleValue = JsValue.FromObject(Engine, moduleObject);
@@ -263,11 +359,35 @@ public class JintAvaloniaHost
             Engine.Invoke(functionValue, requireValue, moduleValue, exportsValue, filenameValue, dirnameValue);
 
             var result = moduleObject.Get("exports");
+            var pendingResult = PopModuleResultFrame();
+
+            if (!HasMeaningfulExport(result))
+            {
+                if (HasMeaningfulExport(pendingResult))
+                {
+                    result = pendingResult;
+                    moduleObject.Set("exports", result, throwOnError: false);
+                }
+                else
+                {
+                    var globalResult = TryGetGlobalExport(source, specifier);
+                    if (HasMeaningfulExport(globalResult))
+                    {
+                        result = globalResult;
+                        moduleObject.Set("exports", result, throwOnError: false);
+                    }
+                }
+            }
+
             _moduleCache[source.CacheKey] = result;
             return result;
         }
         catch
         {
+            if (_pendingModuleResults.Count > 0)
+            {
+                PopModuleResultFrame();
+            }
             return JsValue.Undefined;
         }
     }
@@ -466,6 +586,197 @@ public class JintAvaloniaHost
         var content = s_httpClient.GetStringAsync(uri).GetAwaiter().GetResult();
         var baseUri = new Uri(uri, "./");
         return new ModuleSource(ModuleKind.Http, uri.ToString(), content, uri.ToString(), null, baseUri);
+    }
+
+    private void PushModuleResultFrame()
+    {
+        _pendingModuleResults.Push(JsValue.Undefined);
+    }
+
+    private JsValue PopModuleResultFrame()
+    {
+        return _pendingModuleResults.Count > 0 ? _pendingModuleResults.Pop() : JsValue.Undefined;
+    }
+
+    private void SetPendingModuleResult(JsValue value)
+    {
+        if (_pendingModuleResults.Count == 0)
+        {
+            return;
+        }
+
+        _pendingModuleResults.Pop();
+        _pendingModuleResults.Push(value);
+    }
+
+    private bool HasMeaningfulExport(JsValue value)
+    {
+        if (value.IsUndefined() || value.IsNull())
+        {
+            return false;
+        }
+
+        if (value.IsBoolean() || value.IsNumber() || value.IsString() || value.IsDate() || value.IsRegExp())
+        {
+            return true;
+        }
+
+        if (value.IsObject())
+        {
+            var obj = value.AsObject();
+            var typeName = obj.GetType().Name;
+            if (typeName.IndexOf("Function", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            var keys = obj.GetOwnPropertyKeys();
+            if (keys != null && keys.Count > 0)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private JsValue TryGetGlobalExport(ModuleSource source, string specifier)
+    {
+        foreach (var name in GetGlobalNameCandidates(source, specifier))
+        {
+            var value = GetGlobalProperty(name);
+            if (HasMeaningfulExport(value))
+            {
+                return value;
+            }
+        }
+
+        return JsValue.Undefined;
+    }
+
+    private JsValue GetGlobalProperty(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return JsValue.Undefined;
+        }
+
+        if (Engine.Global.HasProperty(name))
+        {
+            var descriptor = Engine.Global.GetOwnProperty(name);
+            if (descriptor?.Value is { } value && !value.IsUndefined())
+            {
+                return value;
+            }
+        }
+
+        var windowValue = Engine.GetValue("window");
+        if (windowValue.IsObject())
+        {
+            var windowObject = windowValue.AsObject();
+            if (windowObject.HasProperty(name))
+            {
+                var descriptor = windowObject.GetOwnProperty(name);
+                if (descriptor?.Value is { } value && !value.IsUndefined())
+                {
+                    return value;
+                }
+            }
+        }
+
+        return JsValue.Undefined;
+    }
+
+    private static IEnumerable<string> GetGlobalNameCandidates(ModuleSource source, string specifier)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+
+        void AddCandidates(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return;
+            }
+
+            foreach (var token in TokenizeName(raw.Trim()))
+            {
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    continue;
+                }
+
+                set.Add(token);
+                if (token.Length > 0)
+                {
+                    set.Add(char.ToUpperInvariant(token[0]) + token.Substring(1));
+                }
+            }
+        }
+
+        AddCandidates(ExtractBaseName(specifier));
+        AddCandidates(ExtractBaseName(source.FileName));
+
+        return set;
+    }
+
+    private static string? ExtractBaseName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var sanitized = value;
+        var queryIndex = sanitized.IndexOfAny(new[] { '?', '#' });
+        if (queryIndex >= 0)
+        {
+            sanitized = sanitized[..queryIndex];
+        }
+
+        sanitized = sanitized.Replace('\\', '/');
+        var lastSlash = sanitized.LastIndexOf('/');
+        if (lastSlash >= 0)
+        {
+            sanitized = sanitized[(lastSlash + 1)..];
+        }
+
+        if (sanitized.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
+            sanitized.EndsWith(".mjs", StringComparison.OrdinalIgnoreCase) ||
+            sanitized.EndsWith(".cjs", StringComparison.OrdinalIgnoreCase))
+        {
+            var dotIndex = sanitized.LastIndexOf('.');
+            if (dotIndex > 0)
+            {
+                sanitized = sanitized[..dotIndex];
+            }
+        }
+
+        if (sanitized.StartsWith("@", StringComparison.Ordinal))
+        {
+            sanitized = sanitized[1..];
+        }
+
+        return sanitized;
+    }
+
+    private static IEnumerable<string> TokenizeName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            yield break;
+        }
+
+        var separators = new[] { '-', '.', '_', '+', ' ' };
+        var parts = value.Split(separators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var part in parts)
+        {
+            if (!string.IsNullOrWhiteSpace(part))
+            {
+                yield return part;
+            }
+        }
     }
 
     private static string AddSourceInformation(ModuleSource source)
