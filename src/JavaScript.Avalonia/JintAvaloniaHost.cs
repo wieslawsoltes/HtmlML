@@ -567,6 +567,13 @@ public class JintAvaloniaHost
             _host.ImportScripts(null, specifiers);
         }
 
+        public CssComputedStyle getComputedStyle(object element)
+        {
+            return element is AvaloniaDomElement domElement
+                ? _host.Document.getComputedStyle(domElement)
+                : CssComputedStyle.Empty;
+        }
+
         private void InvokeTimerCallback(JsValue callback)
         {
             try

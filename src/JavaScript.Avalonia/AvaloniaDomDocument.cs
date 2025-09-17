@@ -10,11 +10,14 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Layout;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Jint;
 using Jint.Native;
 using Jint.Native.Boolean;
@@ -157,6 +160,16 @@ public class AvaloniaDomDocument
                 window.Title = value;
             }
         }
+    }
+
+    public virtual CssComputedStyle getComputedStyle(object? element)
+    {
+        if (element is AvaloniaDomElement domElement)
+        {
+            return domElement.ComputeComputedStyle();
+        }
+
+        return CssComputedStyle.Empty;
     }
 
     public virtual object[] forms => GetCollection(IsFormControl);
@@ -1007,6 +1020,8 @@ public class AvaloniaDomElement
     private DomStringMap? _dataset;
     private CssStyleDeclaration? _style;
     private DomTokenList? _classList;
+    private WeakReference<Control>? _cachedScrollOwner;
+    private WeakReference<IScrollable>? _cachedScrollable;
     private double _scrollLeft;
     private double _scrollTop;
     private bool _pointerHandlersAttached;
@@ -1015,6 +1030,21 @@ public class AvaloniaDomElement
     private bool _textInputHandlersAttached;
     private bool _clickHandlersAttached;
     private string? _nodeNameOverride;
+
+    private enum LengthAxis
+    {
+        Horizontal,
+        Vertical,
+        Both
+    }
+
+    private enum BoxSide
+    {
+        Top,
+        Right,
+        Bottom,
+        Left
+    }
 
     protected JintAvaloniaHost Host { get; }
 
@@ -1090,28 +1120,293 @@ public class AvaloniaDomElement
 
     public virtual DomRect getBoundingClientRect() => new(Control.Bounds);
 
+    public virtual double clientWidth => GetClientSize().Width;
+
+    public virtual double clientHeight => GetClientSize().Height;
+
     public virtual double offsetWidth => Control.Bounds.Width;
 
     public virtual double offsetHeight => Control.Bounds.Height;
 
-    public virtual double offsetTop => Control.Bounds.Top;
+    public virtual double offsetTop => GetOffsetRelativeToParent().Y;
 
-    public virtual double offsetLeft => Control.Bounds.Left;
+    public virtual double offsetLeft => GetOffsetRelativeToParent().X;
 
-    public virtual double scrollWidth => Control.Bounds.Width;
+    public virtual AvaloniaDomElement? offsetParent => FindOffsetParentElement();
 
-    public virtual double scrollHeight => Control.Bounds.Height;
+    public virtual double scrollWidth => GetScrollSize().Width;
+
+    public virtual double scrollHeight => GetScrollSize().Height;
 
     public virtual double scrollTop
     {
-        get => _scrollTop;
-        set => _scrollTop = value;
+        get => GetScrollOffset().Y;
+        set
+        {
+            var current = GetScrollOffset();
+            SetScrollOffset(current.X, value);
+        }
     }
 
     public virtual double scrollLeft
     {
-        get => _scrollLeft;
-        set => _scrollLeft = value;
+        get => GetScrollOffset().X;
+        set
+        {
+            var current = GetScrollOffset();
+            SetScrollOffset(value, current.Y);
+        }
+    }
+
+    private Size GetClientSize()
+    {
+        if (Control is ScrollViewer viewer)
+        {
+            var viewport = viewer.Viewport;
+            if (IsFiniteSize(viewport))
+            {
+                return viewport;
+            }
+        }
+
+        if (TryGetScrollInfo(out _, out var scrollable))
+        {
+            var viewport = scrollable.Viewport;
+            if (IsFiniteSize(viewport))
+            {
+                return viewport;
+            }
+        }
+
+        return Control.Bounds.Size;
+    }
+
+    private Size GetScrollSize()
+    {
+        if (Control is ScrollViewer viewer)
+        {
+            var width = Math.Max(viewer.Extent.Width, viewer.Viewport.Width);
+            var height = Math.Max(viewer.Extent.Height, viewer.Viewport.Height);
+            return new Size(double.IsFinite(width) ? width : 0, double.IsFinite(height) ? height : 0);
+        }
+
+        if (TryGetScrollInfo(out _, out var scrollable))
+        {
+            var viewport = scrollable.Viewport;
+            var extent = scrollable.Extent;
+            var width = Math.Max(extent.Width, viewport.Width);
+            var height = Math.Max(extent.Height, viewport.Height);
+            return new Size(double.IsFinite(width) ? width : 0, double.IsFinite(height) ? height : 0);
+        }
+
+        return Control.Bounds.Size;
+    }
+
+    private Vector GetScrollOffset()
+    {
+        if (Control is ScrollViewer viewer)
+        {
+            var offset = viewer.Offset;
+            _scrollLeft = offset.X;
+            _scrollTop = offset.Y;
+            return offset;
+        }
+
+        if (TryGetScrollInfo(out _, out var scrollable))
+        {
+            var offset = scrollable.Offset;
+            if (double.IsFinite(offset.X) && double.IsFinite(offset.Y))
+            {
+                _scrollLeft = offset.X;
+                _scrollTop = offset.Y;
+                return offset;
+            }
+        }
+
+        return new Vector(_scrollLeft, _scrollTop);
+    }
+
+    private void SetScrollOffset(double left, double top)
+    {
+        var desired = new Vector(left, top);
+        _scrollLeft = left;
+        _scrollTop = top;
+
+        if (Control is ScrollViewer viewer)
+        {
+            var viewerViewport = viewer.Viewport;
+            var viewerExtent = viewer.Extent;
+            var viewerMaxX = Math.Max(0, viewerExtent.Width - viewerViewport.Width);
+            var viewerMaxY = Math.Max(0, viewerExtent.Height - viewerViewport.Height);
+            var viewerClampedX = Clamp(desired.X, 0, double.IsFinite(viewerMaxX) ? viewerMaxX : 0);
+            var viewerClampedY = Clamp(desired.Y, 0, double.IsFinite(viewerMaxY) ? viewerMaxY : 0);
+
+            var viewerOffset = new Vector(viewerClampedX, viewerClampedY);
+            if (!AreClose(viewer.Offset.X, viewerClampedX) || !AreClose(viewer.Offset.Y, viewerClampedY))
+            {
+                viewer.SetValue(ScrollViewer.OffsetProperty, viewerOffset);
+            }
+            _scrollLeft = viewerClampedX;
+            _scrollTop = viewerClampedY;
+            return;
+        }
+
+        if (!TryGetScrollInfo(out var owner, out var scrollable))
+        {
+            return;
+        }
+
+        var viewport = scrollable.Viewport;
+        var extent = scrollable.Extent;
+
+        var maxX = Math.Max(0, extent.Width - viewport.Width);
+        var maxY = Math.Max(0, extent.Height - viewport.Height);
+
+        var clampedX = Clamp(desired.X, 0, double.IsFinite(maxX) ? maxX : 0);
+        var clampedY = Clamp(desired.Y, 0, double.IsFinite(maxY) ? maxY : 0);
+        _scrollLeft = clampedX;
+        _scrollTop = clampedY;
+        var current = scrollable.Offset;
+
+        if (AreClose(current.X, clampedX) && AreClose(current.Y, clampedY))
+        {
+            return;
+        }
+
+        ApplyScrollOffset(owner, new Vector(clampedX, clampedY));
+    }
+
+    private void ApplyScrollOffset(Control owner, Vector offset)
+    {
+        switch (owner)
+        {
+            case ScrollViewer viewer:
+                viewer.Offset = offset;
+                return;
+            default:
+            {
+                var property = owner.GetType().GetProperty("Offset", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (property?.CanWrite == true)
+                {
+                    property.SetValue(owner, offset);
+                    return;
+                }
+
+                var registered = FindAvaloniaProperty(owner.GetType(), "Offset");
+                if (registered is not null && registered.PropertyType == typeof(Vector))
+                {
+                    owner.SetValue(registered, offset);
+                }
+
+                break;
+            }
+        }
+    }
+
+    private bool TryGetScrollInfo(out Control owner, out IScrollable scrollable)
+    {
+        if (_cachedScrollable is not null
+            && _cachedScrollable.TryGetTarget(out var cachedScrollable)
+            && _cachedScrollOwner is not null
+            && _cachedScrollOwner.TryGetTarget(out var cachedOwner)
+            && cachedScrollable is not null
+            && cachedOwner is not null)
+        {
+            owner = cachedOwner;
+            scrollable = cachedScrollable;
+            return true;
+        }
+
+        if (Control is IScrollable direct)
+        {
+            owner = Control;
+            scrollable = direct;
+            CacheScrollable(owner, scrollable);
+            return true;
+        }
+
+        foreach (var visual in Control.GetVisualDescendants())
+        {
+            if (visual is Control candidate && visual is IScrollable candidateScrollable)
+            {
+                owner = candidate;
+                scrollable = candidateScrollable;
+                CacheScrollable(owner, scrollable);
+                return true;
+            }
+        }
+
+        owner = null!;
+        scrollable = null!;
+        return false;
+    }
+
+    private void CacheScrollable(Control owner, IScrollable scrollable)
+    {
+        _cachedScrollOwner = new WeakReference<Control>(owner);
+        _cachedScrollable = new WeakReference<IScrollable>(scrollable);
+    }
+
+    private static bool IsFiniteSize(Size size)
+        => double.IsFinite(size.Width) && double.IsFinite(size.Height) && size.Width >= 0 && size.Height >= 0;
+
+    private static double Clamp(double value, double min, double max)
+    {
+        if (max < min)
+        {
+            (min, max) = (max, min);
+        }
+
+        if (value < min)
+        {
+            return min;
+        }
+
+        if (value > max)
+        {
+            return max;
+        }
+
+        return value;
+    }
+
+    private static bool AreClose(double a, double b)
+        => Math.Abs(a - b) < 0.001;
+
+    private Point GetOffsetRelativeToParent()
+    {
+        var parent = FindOffsetParentControl();
+        if (parent is null)
+        {
+            return Control.Bounds.Position;
+        }
+
+        var translated = Control.TranslatePoint(new Point(0, 0), parent);
+        if (translated.HasValue)
+        {
+            return translated.Value;
+        }
+
+        var deltaX = Control.Bounds.Left - parent.Bounds.Left;
+        var deltaY = Control.Bounds.Top - parent.Bounds.Top;
+        return new Point(deltaX, deltaY);
+    }
+
+    private Control? FindOffsetParentControl()
+    {
+        var parent = Control.Parent as Control;
+        while (parent is not null)
+        {
+            return parent;
+        }
+
+        return null;
+    }
+
+    private AvaloniaDomElement? FindOffsetParentElement()
+    {
+        var parentControl = FindOffsetParentControl();
+        return parentControl is null ? null : Host.Document.WrapControl(parentControl);
     }
 
     public virtual void addEventListener(string type, JsValue handler)
@@ -1760,6 +2055,11 @@ public class AvaloniaDomElement
 
         if (value is null)
         {
+            if (HandleStyleProperty(normalized, null))
+            {
+                return;
+            }
+
             if (_styleValues.Remove(normalized))
             {
                 ApplyStyleToControl(normalized, null);
@@ -1767,10 +2067,786 @@ public class AvaloniaDomElement
         }
         else
         {
+            if (HandleStyleProperty(normalized, value))
+            {
+                return;
+            }
+
             _styleValues[normalized] = value;
             ApplyStyleToControl(normalized, value);
         }
     }
+
+    private bool HandleStyleProperty(string normalizedName, string? value)
+    {
+        switch (normalizedName)
+        {
+            case "margin":
+                return ApplyMarginShorthand(value);
+            case "margin-top":
+                return ApplyMarginComponent(BoxSide.Top, value);
+            case "margin-right":
+                return ApplyMarginComponent(BoxSide.Right, value);
+            case "margin-bottom":
+                return ApplyMarginComponent(BoxSide.Bottom, value);
+            case "margin-left":
+                return ApplyMarginComponent(BoxSide.Left, value);
+            case "padding":
+                return ApplyPaddingShorthand(value);
+            case "padding-top":
+                return ApplyPaddingComponent(BoxSide.Top, value);
+            case "padding-right":
+                return ApplyPaddingComponent(BoxSide.Right, value);
+            case "padding-bottom":
+                return ApplyPaddingComponent(BoxSide.Bottom, value);
+            case "padding-left":
+                return ApplyPaddingComponent(BoxSide.Left, value);
+            case "border":
+                return ApplyBorderShorthand(value);
+            case "border-width":
+                return ApplyBorderWidthShorthand(value);
+            case "border-color":
+                return ApplyBorderColorShorthand(value);
+            case "border-style":
+                return ApplyBorderStyleShorthand(value);
+            case "border-top-width":
+                return ApplyBorderSideWidth(BoxSide.Top, value);
+            case "border-right-width":
+                return ApplyBorderSideWidth(BoxSide.Right, value);
+            case "border-bottom-width":
+                return ApplyBorderSideWidth(BoxSide.Bottom, value);
+            case "border-left-width":
+                return ApplyBorderSideWidth(BoxSide.Left, value);
+            case "border-top-color":
+                return ApplyBorderSideColor(BoxSide.Top, value);
+            case "border-right-color":
+                return ApplyBorderSideColor(BoxSide.Right, value);
+            case "border-bottom-color":
+                return ApplyBorderSideColor(BoxSide.Bottom, value);
+            case "border-left-color":
+                return ApplyBorderSideColor(BoxSide.Left, value);
+            case "border-top-style":
+                return ApplyBorderSideStyle(BoxSide.Top, value);
+            case "border-right-style":
+                return ApplyBorderSideStyle(BoxSide.Right, value);
+            case "border-bottom-style":
+                return ApplyBorderSideStyle(BoxSide.Bottom, value);
+            case "border-left-style":
+                return ApplyBorderSideStyle(BoxSide.Left, value);
+            default:
+                return false;
+        }
+    }
+
+    private bool ApplyMarginShorthand(string? value)
+    {
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            ClearAvaloniaProperty("Margin");
+            RemoveThicknessStyleValues("margin");
+            return true;
+        }
+
+        if (!TryParseThickness(value, allowNegative: true, allowAuto: true, out var thickness))
+        {
+            return false;
+        }
+
+        thickness = NormalizeThickness(thickness);
+        SetAvaloniaProperty("Margin", thickness);
+        UpdateThicknessStyleValues("margin", thickness);
+        return true;
+    }
+
+    private bool ApplyMarginComponent(BoxSide side, string? value)
+    {
+        var margin = GetThicknessProperty("Margin");
+
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            margin = SetThicknessSide(margin, side, 0);
+        }
+        else
+        {
+            if (!TryParseLength(value, GetAxisForSide(side), allowNegative: true, allowAuto: true, out var component))
+            {
+                return false;
+            }
+
+            if (double.IsNaN(component))
+            {
+                component = 0;
+            }
+
+            margin = SetThicknessSide(margin, side, component);
+        }
+
+        SetAvaloniaProperty("Margin", margin);
+        UpdateThicknessStyleValues("margin", margin);
+        return true;
+    }
+
+    private bool ApplyPaddingShorthand(string? value)
+    {
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            ClearAvaloniaProperty("Padding");
+            RemoveThicknessStyleValues("padding");
+            return true;
+        }
+
+        if (!TryParseThickness(value, allowNegative: false, allowAuto: false, out var thickness))
+        {
+            return false;
+        }
+
+        thickness = NormalizeThickness(thickness);
+        SetAvaloniaProperty("Padding", thickness);
+        UpdateThicknessStyleValues("padding", thickness);
+        return true;
+    }
+
+    private bool ApplyPaddingComponent(BoxSide side, string? value)
+    {
+        var padding = GetThicknessProperty("Padding");
+
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            padding = SetThicknessSide(padding, side, 0);
+        }
+        else
+        {
+            if (!TryParseLength(value, GetAxisForSide(side), allowNegative: false, allowAuto: false, out var component))
+            {
+                return false;
+            }
+
+            padding = SetThicknessSide(padding, side, component);
+        }
+
+        SetAvaloniaProperty("Padding", padding);
+        UpdateThicknessStyleValues("padding", padding);
+        return true;
+    }
+
+    private bool ApplyBorderShorthand(string? value)
+    {
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            ClearAvaloniaProperty("BorderThickness");
+            ClearAvaloniaProperty("BorderBrush");
+            RemoveThicknessStyleValues("border", "width");
+            RemoveBorderColorStyleValues();
+            RemoveBorderStyleEntries();
+            _styleValues.Remove("border");
+            return true;
+        }
+
+        var tokens = SplitCssTokens(value);
+        if (tokens.Count == 0)
+        {
+            return false;
+        }
+
+        var widthTokens = tokens.Where(IsLengthToken).ToArray();
+        if (widthTokens.Length > 0)
+        {
+            ApplyBorderWidthShorthand(string.Join(" ", widthTokens));
+        }
+
+        var styleToken = tokens.FirstOrDefault(IsBorderStyleToken);
+        if (styleToken is not null)
+        {
+            ApplyBorderStyleShorthand(styleToken);
+        }
+
+        var colorTokens = tokens.Except(widthTokens).Where(token => !IsBorderStyleToken(token)).ToArray();
+        if (colorTokens.Length > 0)
+        {
+            ApplyBorderColorShorthand(string.Join(" ", colorTokens));
+        }
+
+        _styleValues["border"] = value;
+        return true;
+    }
+
+    private bool ApplyBorderWidthShorthand(string? value)
+    {
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            ClearAvaloniaProperty("BorderThickness");
+            RemoveThicknessStyleValues("border", "width");
+            _styleValues.Remove("border-width");
+            return true;
+        }
+
+        if (!TryParseThickness(value, allowNegative: false, allowAuto: false, out var thickness))
+        {
+            return false;
+        }
+
+        thickness = NormalizeThickness(thickness);
+        SetAvaloniaProperty("BorderThickness", thickness);
+        UpdateThicknessStyleValues("border", thickness, "width");
+        return true;
+    }
+
+    private bool ApplyBorderColorShorthand(string? value)
+    {
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            ClearAvaloniaProperty("BorderBrush");
+            RemoveBorderColorStyleValues();
+            return true;
+        }
+
+        if (!TryParseBrush(value, out var brush))
+        {
+            return false;
+        }
+
+        SetAvaloniaProperty("BorderBrush", brush);
+        UpdateBorderColorStyleValues(value);
+        RefreshAggregateBorderColor();
+        return true;
+    }
+
+    private bool ApplyBorderStyleShorthand(string? value)
+    {
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            RemoveBorderStyleEntries();
+            return true;
+        }
+
+        _styleValues["border-style"] = value;
+        _styleValues["border-top-style"] = value;
+        _styleValues["border-right-style"] = value;
+        _styleValues["border-bottom-style"] = value;
+        _styleValues["border-left-style"] = value;
+        return true;
+    }
+
+    private bool ApplyBorderSideWidth(BoxSide side, string? value)
+    {
+        var thickness = GetThicknessProperty("BorderThickness");
+
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            thickness = SetThicknessSide(thickness, side, 0);
+        }
+        else
+        {
+            if (!TryParseLength(value, GetAxisForSide(side), allowNegative: false, allowAuto: false, out var component))
+            {
+                return false;
+            }
+
+            thickness = SetThicknessSide(thickness, side, component);
+        }
+
+        SetAvaloniaProperty("BorderThickness", thickness);
+        UpdateThicknessStyleValues("border", thickness, "width");
+        return true;
+    }
+
+    private bool ApplyBorderSideColor(BoxSide side, string? value)
+    {
+        var key = $"border-{SideToString(side)}-color";
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            _styleValues.Remove(key);
+            RefreshAggregateBorderColor();
+            return true;
+        }
+
+        if (!TryParseBrush(value, out var brush))
+        {
+            return false;
+        }
+
+        SetAvaloniaProperty("BorderBrush", brush);
+        _styleValues[key] = value;
+        RefreshAggregateBorderColor();
+        return true;
+    }
+
+    private bool ApplyBorderSideStyle(BoxSide side, string? value)
+    {
+        var key = $"border-{SideToString(side)}-style";
+        value = value?.Trim();
+
+        if (string.IsNullOrEmpty(value))
+        {
+            _styleValues.Remove(key);
+        }
+        else
+        {
+            _styleValues[key] = value;
+        }
+
+        RefreshAggregateBorderStyle();
+        return true;
+    }
+
+    private static string SideToString(BoxSide side)
+        => side switch
+        {
+            BoxSide.Top => "top",
+            BoxSide.Right => "right",
+            BoxSide.Bottom => "bottom",
+            BoxSide.Left => "left",
+            _ => "top"
+        };
+
+    private void UpdateThicknessStyleValues(string baseName, Thickness thickness, string? suffix = null)
+    {
+        var aggregateKey = suffix is null ? baseName : $"{baseName}-{suffix}";
+        _styleValues[aggregateKey] = FormatThicknessString(thickness);
+
+        SetSide(BoxSide.Top, thickness.Top);
+        SetSide(BoxSide.Right, thickness.Right);
+        SetSide(BoxSide.Bottom, thickness.Bottom);
+        SetSide(BoxSide.Left, thickness.Left);
+
+        void SetSide(BoxSide side, double value)
+        {
+            var key = $"{baseName}-{SideToString(side)}";
+            if (suffix is not null)
+            {
+                key = $"{key}-{suffix}";
+            }
+
+            _styleValues[key] = FormatCssLength(value);
+        }
+    }
+
+    private void RemoveThicknessStyleValues(string baseName, string? suffix = null)
+    {
+        var aggregateKey = suffix is null ? baseName : $"{baseName}-{suffix}";
+        _styleValues.Remove(aggregateKey);
+        foreach (BoxSide side in Enum.GetValues(typeof(BoxSide)))
+        {
+            var key = $"{baseName}-{SideToString(side)}";
+            if (suffix is not null)
+            {
+                key = $"{key}-{suffix}";
+            }
+
+            _styleValues.Remove(key);
+        }
+    }
+
+    private void UpdateBorderColorStyleValues(string value)
+    {
+        _styleValues["border-color"] = value;
+        _styleValues["border-top-color"] = value;
+        _styleValues["border-right-color"] = value;
+        _styleValues["border-bottom-color"] = value;
+        _styleValues["border-left-color"] = value;
+    }
+
+    private void RemoveBorderColorStyleValues()
+    {
+        _styleValues.Remove("border-color");
+        _styleValues.Remove("border-top-color");
+        _styleValues.Remove("border-right-color");
+        _styleValues.Remove("border-bottom-color");
+        _styleValues.Remove("border-left-color");
+    }
+
+    private void RemoveBorderStyleEntries()
+    {
+        _styleValues.Remove("border-style");
+        _styleValues.Remove("border-top-style");
+        _styleValues.Remove("border-right-style");
+        _styleValues.Remove("border-bottom-style");
+        _styleValues.Remove("border-left-style");
+    }
+
+    private Thickness GetThicknessProperty(string propertyName)
+    {
+        var property = FindAvaloniaProperty(Control.GetType(), propertyName);
+        if (property is null)
+        {
+            return default;
+        }
+
+        var raw = Control.GetValue(property);
+        return raw is Thickness thickness ? thickness : default;
+    }
+
+    private static Thickness SetThicknessSide(Thickness thickness, BoxSide side, double value)
+        => side switch
+        {
+            BoxSide.Top => new Thickness(thickness.Left, value, thickness.Right, thickness.Bottom),
+            BoxSide.Right => new Thickness(thickness.Left, thickness.Top, value, thickness.Bottom),
+            BoxSide.Bottom => new Thickness(thickness.Left, thickness.Top, thickness.Right, value),
+            BoxSide.Left => new Thickness(value, thickness.Top, thickness.Right, thickness.Bottom),
+            _ => thickness
+        };
+
+    private static LengthAxis GetAxisForSide(BoxSide side)
+        => side is BoxSide.Top or BoxSide.Bottom ? LengthAxis.Vertical : LengthAxis.Horizontal;
+
+    private static Thickness NormalizeThickness(Thickness thickness)
+        => new(
+            NormalizeThicknessComponent(thickness.Left),
+            NormalizeThicknessComponent(thickness.Top),
+            NormalizeThicknessComponent(thickness.Right),
+            NormalizeThicknessComponent(thickness.Bottom));
+
+    private static double NormalizeThicknessComponent(double value)
+        => double.IsNaN(value) ? 0 : value;
+
+    private string FormatThicknessString(Thickness thickness)
+        => string.Join(" ", new[]
+        {
+            FormatCssLength(thickness.Top),
+            FormatCssLength(thickness.Right),
+            FormatCssLength(thickness.Bottom),
+            FormatCssLength(thickness.Left)
+        });
+
+    private static string FormatCssLength(double value)
+    {
+        if (double.IsNaN(value))
+        {
+            return "auto";
+        }
+
+        return value.ToString("0.##", CultureInfo.InvariantCulture) + "px";
+    }
+
+    private void SetAvaloniaProperty<T>(string propertyName, T value)
+    {
+        var property = FindAvaloniaProperty(Control.GetType(), propertyName);
+        if (property is null)
+        {
+            return;
+        }
+
+        if (property is AvaloniaProperty<T> typed)
+        {
+            Control.SetValue(typed, value);
+            return;
+        }
+
+        Control.SetValue(property, value);
+    }
+
+    private void ClearAvaloniaProperty(string propertyName)
+    {
+        var property = FindAvaloniaProperty(Control.GetType(), propertyName);
+        if (property is not null)
+        {
+            Control.ClearValue(property);
+        }
+    }
+
+    private bool TryParseBrush(string value, out IBrush? brush)
+    {
+        brush = null;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        try
+        {
+            brush = Brush.Parse(value);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void RefreshAggregateBorderColor()
+    {
+        var top = _styleValues.TryGetValue("border-top-color", out var t) ? t : null;
+        var right = _styleValues.TryGetValue("border-right-color", out var r) ? r : null;
+        var bottom = _styleValues.TryGetValue("border-bottom-color", out var b) ? b : null;
+        var left = _styleValues.TryGetValue("border-left-color", out var l) ? l : null;
+
+        if (top is null && right is null && bottom is null && left is null)
+        {
+            _styleValues.Remove("border-color");
+            return;
+        }
+
+        if (top is not null && top == right && top == bottom && top == left)
+        {
+            _styleValues["border-color"] = top;
+            return;
+        }
+
+        var parts = new[] { top, right, bottom, left }
+            .Select(part => part ?? "currentcolor");
+        _styleValues["border-color"] = string.Join(" ", parts);
+    }
+
+    private void RefreshAggregateBorderStyle()
+    {
+        var top = _styleValues.TryGetValue("border-top-style", out var t) ? t : null;
+        var right = _styleValues.TryGetValue("border-right-style", out var r) ? r : null;
+        var bottom = _styleValues.TryGetValue("border-bottom-style", out var b) ? b : null;
+        var left = _styleValues.TryGetValue("border-left-style", out var l) ? l : null;
+
+        if (top is null && right is null && bottom is null && left is null)
+        {
+            _styleValues.Remove("border-style");
+            return;
+        }
+
+        if (top is not null && top == right && top == bottom && top == left)
+        {
+            _styleValues["border-style"] = top;
+            return;
+        }
+
+        var parts = new[] { top, right, bottom, left }
+            .Select(part => part ?? "none");
+        _styleValues["border-style"] = string.Join(" ", parts);
+    }
+
+    private bool TryParseThickness(string value, bool allowNegative, bool allowAuto, out Thickness thickness)
+    {
+        thickness = default;
+        var tokens = SplitCssTokens(value);
+        if (tokens.Count == 0)
+        {
+            return false;
+        }
+
+        double top;
+        double right;
+        double bottom;
+        double left;
+
+        if (tokens.Count == 1)
+        {
+            if (!TryParseLength(tokens[0], LengthAxis.Both, allowNegative, allowAuto, out var uniform))
+            {
+                return false;
+            }
+
+            top = right = bottom = left = uniform;
+        }
+        else if (tokens.Count == 2)
+        {
+            if (!TryParseLength(tokens[0], LengthAxis.Vertical, allowNegative, allowAuto, out var vertical)
+                || !TryParseLength(tokens[1], LengthAxis.Horizontal, allowNegative, allowAuto, out var horizontal))
+            {
+                return false;
+            }
+
+            top = bottom = vertical;
+            left = right = horizontal;
+        }
+        else if (tokens.Count == 3)
+        {
+            if (!TryParseLength(tokens[0], LengthAxis.Vertical, allowNegative, allowAuto, out top)
+                || !TryParseLength(tokens[1], LengthAxis.Horizontal, allowNegative, allowAuto, out var horizontal)
+                || !TryParseLength(tokens[2], LengthAxis.Vertical, allowNegative, allowAuto, out bottom))
+            {
+                return false;
+            }
+
+            left = right = horizontal;
+        }
+        else
+        {
+            if (!TryParseLength(tokens[0], LengthAxis.Vertical, allowNegative, allowAuto, out top)
+                || !TryParseLength(tokens[1], LengthAxis.Horizontal, allowNegative, allowAuto, out right)
+                || !TryParseLength(tokens[2], LengthAxis.Vertical, allowNegative, allowAuto, out bottom)
+                || !TryParseLength(tokens[3], LengthAxis.Horizontal, allowNegative, allowAuto, out left))
+            {
+                return false;
+            }
+        }
+
+        top = NormalizeThicknessComponent(top);
+        right = NormalizeThicknessComponent(right);
+        bottom = NormalizeThicknessComponent(bottom);
+        left = NormalizeThicknessComponent(left);
+
+        thickness = new Thickness(left, top, right, bottom);
+        return true;
+    }
+
+    private bool TryParseLength(string value, LengthAxis axis, bool allowNegative, bool allowAuto, out double result)
+    {
+        result = 0;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        if (allowAuto && string.Equals(trimmed, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            result = double.NaN;
+            return true;
+        }
+
+        switch (trimmed.ToLowerInvariant())
+        {
+            case "thin":
+                result = 1;
+                return true;
+            case "medium":
+                result = 3;
+                return true;
+            case "thick":
+                result = 5;
+                return true;
+        }
+
+        if (trimmed.EndsWith("px", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^2];
+        }
+        else if (trimmed.EndsWith("%", StringComparison.OrdinalIgnoreCase))
+        {
+            var numberPart = trimmed[..^1];
+            if (!double.TryParse(numberPart, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
+            {
+                return false;
+            }
+
+            var reference = GetReferenceSize(axis);
+            result = reference * (percent / 100.0);
+            return true;
+        }
+
+        if (!double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var numeric))
+        {
+            return false;
+        }
+
+        if (!allowNegative && numeric < 0)
+        {
+            numeric = 0;
+        }
+
+        result = numeric;
+        return true;
+    }
+
+    private double GetReferenceSize(LengthAxis axis)
+    {
+        var parent = Control.Parent as Control;
+        var size = parent?.Bounds.Size ?? default;
+        if (size.Width <= 0 && size.Height <= 0)
+        {
+            var topLevelSize = Host.TopLevel?.ClientSize ?? default;
+            if (topLevelSize.Width > 0 || topLevelSize.Height > 0)
+            {
+                size = topLevelSize;
+            }
+            else
+            {
+                size = Control.Bounds.Size;
+            }
+        }
+
+        return axis switch
+        {
+            LengthAxis.Vertical => size.Height,
+            LengthAxis.Horizontal => size.Width,
+            _ => Math.Max(size.Width, size.Height)
+        };
+    }
+
+    private static bool IsLengthToken(string token)
+    {
+        token = token.Trim();
+        return token.EndsWith("px", StringComparison.OrdinalIgnoreCase)
+           || token.EndsWith("%", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("thin", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("medium", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("thick", StringComparison.OrdinalIgnoreCase)
+           || double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+    }
+
+    private static bool IsBorderStyleToken(string token)
+        => token is "none" or "hidden" or "dotted" or "dashed" or "solid" or "double" or "groove" or "ridge" or "inset" or "outset";
+
+    private static List<string> SplitCssTokens(string value)
+    {
+        var tokens = new List<string>();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return tokens;
+        }
+
+        var builder = new StringBuilder();
+        var depth = 0;
+        foreach (var ch in value)
+        {
+            if ((char.IsWhiteSpace(ch) || ch == ',') && depth == 0)
+            {
+                if (builder.Length > 0)
+                {
+                    tokens.Add(builder.ToString().Trim());
+                    builder.Clear();
+                }
+
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                depth++;
+            }
+            else if (ch == ')')
+            {
+                depth = Math.Max(0, depth - 1);
+            }
+
+            builder.Append(ch);
+        }
+
+        if (builder.Length > 0)
+        {
+            tokens.Add(builder.ToString().Trim());
+        }
+
+        return tokens;
+    }
+
+    private static bool AllowsNegativeLengths(string propertyName)
+        => propertyName.Contains("Margin", StringComparison.OrdinalIgnoreCase);
+
+    private static bool AllowsAutoLength(string propertyName)
+        => propertyName.Contains("Width", StringComparison.OrdinalIgnoreCase)
+           || propertyName.Contains("Height", StringComparison.OrdinalIgnoreCase)
+           || propertyName.Contains("Margin", StringComparison.OrdinalIgnoreCase);
+
+    private static LengthAxis DetermineAxis(string propertyName)
+        => propertyName.Contains("Height", StringComparison.OrdinalIgnoreCase) ? LengthAxis.Vertical : LengthAxis.Horizontal;
 
     private void ApplyStyleToControl(string cssName, string? value)
     {
@@ -1835,7 +2911,7 @@ public class AvaloniaDomElement
 
         try
         {
-            var converted = ConvertToPropertyValue(prop.PropertyType, value);
+            var converted = ConvertToPropertyValue(propertyName, prop.PropertyType, value);
             prop.SetValue(Control, converted);
         }
         catch
@@ -1858,7 +2934,7 @@ public class AvaloniaDomElement
             return true;
         }
 
-        var converted = ConvertToPropertyValue(registered.PropertyType, value);
+        var converted = ConvertToPropertyValue(propertyName, registered.PropertyType, value);
 
         try
         {
@@ -1871,7 +2947,7 @@ public class AvaloniaDomElement
         }
     }
 
-    private static object? ConvertToPropertyValue(Type propertyType, string? value)
+    private object? ConvertToPropertyValue(string propertyName, Type propertyType, string? value)
     {
         if (value is null)
         {
@@ -1883,17 +2959,36 @@ public class AvaloniaDomElement
             return value;
         }
 
-        if (TryConvertFromString(propertyType, value, out var convertedFromString))
+        if (propertyType == typeof(double) || propertyType == typeof(double?))
         {
-            return convertedFromString;
+            if (string.Equals(value, "none", StringComparison.OrdinalIgnoreCase)
+                && propertyName.Contains("Max", StringComparison.OrdinalIgnoreCase))
+            {
+                return double.PositiveInfinity;
+            }
+
+            var axis = DetermineAxis(propertyName);
+            var allowNegative = AllowsNegativeLengths(propertyName);
+            var allowAuto = AllowsAutoLength(propertyName);
+            if (TryParseLength(value, axis, allowNegative, allowAuto, out var length))
+            {
+                return length;
+            }
         }
 
         if (propertyType == typeof(Thickness) || propertyType == typeof(Thickness?))
         {
-            if (TryParseThickness(value, out var thickness))
+            var allowNegative = string.Equals(propertyName, "Margin", StringComparison.OrdinalIgnoreCase);
+            var allowAuto = allowNegative;
+            if (TryParseThickness(value, allowNegative, allowAuto, out var thickness))
             {
                 return thickness;
             }
+        }
+
+        if (TryConvertFromString(propertyType, value, out var convertedFromString))
+        {
+            return convertedFromString;
         }
 
         if (propertyType == typeof(Color) || propertyType == typeof(Color?))
@@ -1952,38 +3047,6 @@ public class AvaloniaDomElement
         return false;
     }
 
-    private static bool TryParseThickness(string value, out Thickness thickness)
-    {
-        thickness = default;
-        var separators = new[] { ',', ' ' };
-        var parts = value.Split(separators, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0)
-        {
-            return false;
-        }
-
-        static bool TryParseDouble(string token, out double result)
-            => double.TryParse(token, NumberStyles.Any, CultureInfo.InvariantCulture, out result);
-
-        switch (parts.Length)
-        {
-            case 1 when TryParseDouble(parts[0], out var uniform):
-                thickness = new Thickness(uniform);
-                return true;
-            case 2 when TryParseDouble(parts[0], out var horizontal) && TryParseDouble(parts[1], out var vertical):
-                thickness = new Thickness(horizontal, vertical, horizontal, vertical);
-                return true;
-            case 4 when TryParseDouble(parts[0], out var left)
-                        && TryParseDouble(parts[1], out var top)
-                        && TryParseDouble(parts[2], out var right)
-                        && TryParseDouble(parts[3], out var bottom):
-                thickness = new Thickness(left, top, right, bottom);
-                return true;
-            default:
-                return false;
-        }
-    }
-
     private static AvaloniaProperty? FindAvaloniaProperty(Type controlType, string propertyName)
     {
         if (string.IsNullOrWhiteSpace(propertyName) || controlType is null)
@@ -2031,6 +3094,391 @@ public class AvaloniaDomElement
         }
 
         return null;
+    }
+
+    internal CssComputedStyle ComputeComputedStyle()
+        => ComputedStyleBuilder.Build(this);
+
+    private sealed class ComputedStyleBuilder
+    {
+        private readonly AvaloniaDomElement _element;
+        private readonly Control _control;
+        private readonly Dictionary<string, string> _values = new(StringComparer.OrdinalIgnoreCase);
+
+        private ComputedStyleBuilder(AvaloniaDomElement element)
+        {
+            _element = element;
+            _control = element.Control;
+        }
+
+        public static CssComputedStyle Build(AvaloniaDomElement element)
+        {
+            var builder = new ComputedStyleBuilder(element);
+            builder.Populate();
+            return new CssComputedStyle(builder._values);
+        }
+
+        private void Populate()
+        {
+            AddValue("box-sizing", "border-box");
+            AddValue("position", "static");
+
+            AddDimension("width", _control.Bounds.Width);
+            AddDimension("height", _control.Bounds.Height);
+            AddMinDimension("min-width", _control.MinWidth);
+            AddMinDimension("min-height", _control.MinHeight);
+            AddMaxDimension("max-width", _control.MaxWidth);
+            AddMaxDimension("max-height", _control.MaxHeight);
+
+            AddThicknessSet("margin", _control.Margin);
+
+            var padding = ResolveThickness("Padding", default);
+            AddThicknessSet("padding", padding);
+
+            var borderThickness = ResolveThickness("BorderThickness", (_control as Border)?.BorderThickness ?? default);
+            AddBorderThickness(borderThickness);
+            AddBorderStyles(borderThickness);
+
+            var borderBrush = ResolveBrush("BorderBrush", (_control as Border)?.BorderBrush);
+            AddBorderColors(borderBrush);
+
+            var cornerRadius = ResolveCornerRadius("CornerRadius", (_control as Border)?.CornerRadius ?? default);
+            AddCornerRadius(cornerRadius);
+
+            var background = ResolveBrush("Background", null);
+            AddBackground(background);
+
+            var foreground = ResolveBrush("Foreground", null);
+            AddForeground(foreground);
+
+            AddFontProperties();
+            AddOpacity();
+            AddVisibility();
+            AddDisplay();
+            AddOverflow();
+
+            AddValue("line-height", "normal");
+
+            foreach (var pair in _element.StyleValues)
+            {
+                if (pair.Value is null)
+                {
+                    continue;
+                }
+
+                var normalized = CssStyleDeclaration.NormalizePropertyName(pair.Key);
+                if (!_values.ContainsKey(normalized))
+                {
+                    _values[normalized] = pair.Value!;
+                }
+            }
+        }
+
+        private void AddValue(string propertyName, string value)
+            => _values[propertyName] = value;
+
+        private void AddDimension(string propertyName, double value)
+            => _values[propertyName] = FormatDimension(value);
+
+        private void AddMinDimension(string propertyName, double value)
+            => _values[propertyName] = FormatMinDimension(value);
+
+        private void AddMaxDimension(string propertyName, double value)
+            => _values[propertyName] = FormatMaxDimension(value);
+
+        private void AddThicknessSet(string prefix, Thickness thickness)
+        {
+            var top = FormatFixedLength(thickness.Top);
+            var right = FormatFixedLength(thickness.Right);
+            var bottom = FormatFixedLength(thickness.Bottom);
+            var left = FormatFixedLength(thickness.Left);
+
+            _values[$"{prefix}-top"] = top;
+            _values[$"{prefix}-right"] = right;
+            _values[$"{prefix}-bottom"] = bottom;
+            _values[$"{prefix}-left"] = left;
+            _values[prefix] = string.Join(" ", new[] { top, right, bottom, left });
+        }
+
+        private void AddBorderThickness(Thickness thickness)
+        {
+            var top = FormatFixedLength(thickness.Top);
+            var right = FormatFixedLength(thickness.Right);
+            var bottom = FormatFixedLength(thickness.Bottom);
+            var left = FormatFixedLength(thickness.Left);
+
+            _values["border-top-width"] = top;
+            _values["border-right-width"] = right;
+            _values["border-bottom-width"] = bottom;
+            _values["border-left-width"] = left;
+            _values["border-width"] = string.Join(" ", new[] { top, right, bottom, left });
+        }
+
+        private void AddBorderStyles(Thickness thickness)
+        {
+            var top = thickness.Top > 0 ? "solid" : "none";
+            var right = thickness.Right > 0 ? "solid" : "none";
+            var bottom = thickness.Bottom > 0 ? "solid" : "none";
+            var left = thickness.Left > 0 ? "solid" : "none";
+
+            _values["border-top-style"] = top;
+            _values["border-right-style"] = right;
+            _values["border-bottom-style"] = bottom;
+            _values["border-left-style"] = left;
+            _values["border-style"] = string.Join(" ", new[] { top, right, bottom, left });
+        }
+
+        private void AddBorderColors(IBrush? brush)
+        {
+            var color = FormatColor(brush);
+            _values["border-top-color"] = color;
+            _values["border-right-color"] = color;
+            _values["border-bottom-color"] = color;
+            _values["border-left-color"] = color;
+            _values["border-color"] = string.Join(" ", new[] { color, color, color, color });
+        }
+
+        private void AddCornerRadius(CornerRadius cornerRadius)
+        {
+            var topLeft = FormatFixedLength(cornerRadius.TopLeft);
+            var topRight = FormatFixedLength(cornerRadius.TopRight);
+            var bottomRight = FormatFixedLength(cornerRadius.BottomRight);
+            var bottomLeft = FormatFixedLength(cornerRadius.BottomLeft);
+
+            _values["border-top-left-radius"] = topLeft;
+            _values["border-top-right-radius"] = topRight;
+            _values["border-bottom-right-radius"] = bottomRight;
+            _values["border-bottom-left-radius"] = bottomLeft;
+            _values["border-radius"] = string.Join(" ", new[] { topLeft, topRight, bottomRight, bottomLeft });
+        }
+
+        private void AddBackground(IBrush? brush)
+        {
+            _values["background-color"] = FormatColor(brush);
+            _values["background-image"] = "none";
+        }
+
+        private void AddForeground(IBrush? brush)
+        {
+            var color = brush is null ? "rgba(0, 0, 0, 1)" : FormatColor(brush);
+            _values["color"] = color;
+        }
+
+        private void AddFontProperties()
+        {
+            TryGetPropertyValue<FontFamily>("FontFamily", out var fontFamily);
+            var family = fontFamily?.ToString() ?? "Segoe UI";
+
+            if (!TryGetPropertyValue<double>("FontSize", out var fontSize) || fontSize <= 0)
+            {
+                fontSize = 12d;
+            }
+
+            if (!TryGetPropertyValue<FontWeight>("FontWeight", out var fontWeight))
+            {
+                fontWeight = FontWeight.Normal;
+            }
+
+            if (!TryGetPropertyValue<FontStyle>("FontStyle", out var fontStyle))
+            {
+                fontStyle = FontStyle.Normal;
+            }
+
+            AddValue("font-family", family);
+            AddValue("font-size", FormatFixedLength(fontSize));
+            AddValue("font-weight", FormatFontWeight(fontWeight));
+            AddValue("font-style", fontStyle.ToString().ToLowerInvariant());
+        }
+
+        private void AddOpacity()
+            => AddValue("opacity", FormatNumber(_control.Opacity));
+
+        private void AddVisibility()
+        {
+            var visible = _control.IsVisible ? "visible" : "hidden";
+            AddValue("visibility", visible);
+        }
+
+        private void AddDisplay()
+        {
+            var display = _control switch
+            {
+                TextBlock => "inline",
+                _ => "block"
+            };
+
+            AddValue("display", display);
+        }
+
+        private void AddOverflow()
+        {
+            string overflowX;
+            string overflowY;
+
+            if (_control is ScrollViewer viewer)
+            {
+                overflowX = MapOverflow(viewer.HorizontalScrollBarVisibility);
+                overflowY = MapOverflow(viewer.VerticalScrollBarVisibility);
+            }
+            else
+            {
+                overflowX = "visible";
+                overflowY = "visible";
+            }
+
+            AddValue("overflow-x", overflowX);
+            AddValue("overflow-y", overflowY);
+            AddValue("overflow", overflowX == overflowY ? overflowX : $"{overflowX} {overflowY}");
+        }
+
+        private Thickness ResolveThickness(string propertyName, Thickness fallback)
+        {
+            if (TryGetPropertyValue(propertyName, out Thickness thickness))
+            {
+                return thickness;
+            }
+
+            return fallback;
+        }
+
+        private CornerRadius ResolveCornerRadius(string propertyName, CornerRadius fallback)
+        {
+            if (TryGetPropertyValue(propertyName, out CornerRadius radius))
+            {
+                return radius;
+            }
+
+            return fallback;
+        }
+
+        private IBrush? ResolveBrush(string propertyName, IBrush? fallback)
+        {
+            if (TryGetPropertyValue(propertyName, out IBrush brush) && brush is not null)
+            {
+                return brush;
+            }
+
+            return fallback;
+        }
+
+        private bool TryGetPropertyValue<T>(string propertyName, out T value)
+        {
+            var property = FindAvaloniaProperty(_control.GetType(), propertyName);
+            if (property is null)
+            {
+                value = default!;
+                return false;
+            }
+
+            var raw = _control.GetValue(property);
+            if (raw is T typed)
+            {
+                value = typed;
+                return true;
+            }
+
+            if (raw is null)
+            {
+                value = default!;
+                return false;
+            }
+
+            try
+            {
+                value = (T)raw;
+                return true;
+            }
+            catch
+            {
+                value = default!;
+                return false;
+            }
+        }
+
+        private static string FormatDimension(double value)
+        {
+            if (!double.IsFinite(value))
+            {
+                return "auto";
+            }
+
+            return FormatFixedLength(value);
+        }
+
+        private static string FormatMinDimension(double value)
+        {
+            if (!double.IsFinite(value))
+            {
+                return "0px";
+            }
+
+            return FormatFixedLength(value);
+        }
+
+        private static string FormatMaxDimension(double value)
+        {
+            if (!double.IsFinite(value) || value == double.PositiveInfinity)
+            {
+                return "none";
+            }
+
+            return FormatFixedLength(value);
+        }
+
+        private static string FormatFixedLength(double value)
+        {
+            var normalized = Normalize(value);
+            return $"{normalized.ToString("0.##", CultureInfo.InvariantCulture)}px";
+        }
+
+        private static double Normalize(double value)
+        {
+            if (!double.IsFinite(value))
+            {
+                return 0;
+            }
+
+            return Math.Abs(value) < 0.0005 ? 0 : value;
+        }
+
+        private static string FormatFontWeight(FontWeight fontWeight)
+        {
+            var text = fontWeight.ToString();
+            return string.IsNullOrEmpty(text) ? "normal" : text.ToLowerInvariant();
+        }
+
+        private static string FormatNumber(double value)
+        {
+            if (!double.IsFinite(value))
+            {
+                return "1";
+            }
+
+            var normalized = Normalize(value);
+            return normalized.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatColor(IBrush? brush)
+        {
+            if (brush is ISolidColorBrush solid)
+            {
+                var color = solid.Color;
+                var alpha = Math.Round(color.A / 255d, 3);
+                return $"rgba({color.R}, {color.G}, {color.B}, {alpha.ToString(CultureInfo.InvariantCulture)})";
+            }
+
+            return brush?.ToString() ?? "rgba(0, 0, 0, 0)";
+        }
+
+        private static string MapOverflow(ScrollBarVisibility visibility)
+            => visibility switch
+            {
+                ScrollBarVisibility.Auto => "auto",
+                ScrollBarVisibility.Hidden => "hidden",
+                ScrollBarVisibility.Disabled => "hidden",
+                ScrollBarVisibility.Visible => "scroll",
+                _ => "auto"
+            };
     }
 
     private IEnumerable<AvaloniaDomElement> GetChildElements()
@@ -2710,7 +4158,7 @@ public sealed class CssStyleDeclaration : DynamicObject
         return builder.ToString();
     }
 
-    private static string ToCamelCase(string cssName)
+    internal static string ToCamelCase(string cssName)
     {
         var property = ToPropertyName(cssName);
         if (string.IsNullOrEmpty(property))
@@ -2725,6 +4173,83 @@ public sealed class CssStyleDeclaration : DynamicObject
 
         return char.ToLowerInvariant(property[0]) + property.Substring(1);
     }
+}
+
+public sealed class CssComputedStyle : DynamicObject
+{
+    private readonly Dictionary<string, string> _values;
+    private readonly Dictionary<string, string> _camelCaseValues;
+
+    internal static CssComputedStyle Empty { get; } = new(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+    internal CssComputedStyle(Dictionary<string, string> values)
+    {
+        _values = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
+        _camelCaseValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pair in _values)
+        {
+            var camel = CssStyleDeclaration.ToCamelCase(pair.Key);
+            _camelCaseValues[camel] = pair.Value;
+        }
+    }
+
+    public int length => _values.Count;
+
+    public override bool TryGetMember(GetMemberBinder binder, out object? result)
+    {
+        if (_camelCaseValues.TryGetValue(binder.Name, out var camelValue))
+        {
+            result = camelValue;
+            return true;
+        }
+
+        var normalized = CssStyleDeclaration.NormalizePropertyName(binder.Name);
+        if (_values.TryGetValue(normalized, out var value))
+        {
+            result = value;
+            return true;
+        }
+
+        result = string.Empty;
+        return true;
+    }
+
+    public override bool TryGetIndex(GetIndexBinder binder, object[] indexes, out object? result)
+    {
+        if (indexes.Length == 1 && indexes[0] is string name)
+        {
+            result = getPropertyValue(name);
+            return true;
+        }
+
+        result = null;
+        return false;
+    }
+
+    public string? getPropertyValue(string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            return string.Empty;
+        }
+
+        var normalized = CssStyleDeclaration.NormalizePropertyName(propertyName);
+        return _values.TryGetValue(normalized, out var value) ? value : string.Empty;
+    }
+
+    public string item(int index)
+    {
+        if (index < 0 || index >= _values.Count)
+        {
+            return string.Empty;
+        }
+
+        return _values.ElementAt(index).Key;
+    }
+
+    public override IEnumerable<string> GetDynamicMemberNames()
+        => _camelCaseValues.Keys;
 }
 
 public sealed class DomRect
