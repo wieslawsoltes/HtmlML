@@ -295,6 +295,67 @@ buttons.append.addEventListener('click', () => {
 });
 """),
             new Preset(
+                "Avalonia properties",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16">
+  <StackPanel Spacing="12">
+    <Border Name="sampleBorder"
+            Width="200"
+            Height="120"
+            HorizontalAlignment="Left"
+            CornerRadius="8"
+            Background="#2b2d42">
+      <TextBlock Name="sampleText"
+                 Text="Click the buttons to update properties"
+                 TextWrapping="Wrap"
+                 Foreground="White"
+                 HorizontalAlignment="Center"
+                 VerticalAlignment="Center"
+                 Margin="12" />
+    </Border>
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="brushBtn" Content="Set Accent Colors" />
+      <Button Name="thicknessBtn" Content="Set Padding" />
+      <Button Name="radiusBtn" Content="Set CornerRadius" />
+      <Button Name="resetBtn" Content="Reset" />
+    </StackPanel>
+  </StackPanel>
+</Border>
+""",
+                """
+const border = document.getElementById('sampleBorder');
+const text = document.getElementById('sampleText');
+const brushBtn = document.getElementById('brushBtn');
+const thicknessBtn = document.getElementById('thicknessBtn');
+const radiusBtn = document.getElementById('radiusBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+brushBtn.addEventListener('click', () => {
+  border.setAttribute('background', '#ff7b7b');
+  border.setAttribute('border-brush', '#feb47b');
+  text.style.setProperty('foreground', '#1b1b1d');
+});
+
+thicknessBtn.addEventListener('click', () => {
+  border.setAttribute('padding', '24,12');
+  border.setAttribute('border-thickness', '2');
+  border.setAttribute('border-brush', '#1b1b1d');
+});
+
+radiusBtn.addEventListener('click', () => {
+  border.setAttribute('corner-radius', '0,24,0,24');
+});
+
+resetBtn.addEventListener('click', () => {
+  border.setAttribute('background', '#2b2d42');
+  border.setAttribute('padding', '0');
+  border.setAttribute('border-thickness', '0');
+  border.setAttribute('border-brush', 'Transparent');
+  border.setAttribute('corner-radius', '8');
+  text.style.setProperty('foreground', 'White');
+});
+"""),
+            new Preset(
                 "ClassList & Dataset",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16">
