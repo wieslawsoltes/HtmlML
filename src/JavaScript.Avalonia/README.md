@@ -13,6 +13,7 @@ The library was originally extracted from the HtmlML project and is now a standa
 - **Canvas 2D surface** on any `Control` via `getContext('2d')`, backed by a browser-style `CanvasRenderingContext2D` that records commands against Avalonia's `DrawingContext`.
 - **Timers and animation** via `window.setTimeout`, `window.requestAnimationFrame`, and `window.cancelAnimationFrame` bound to Avalonia’s dispatcher and `TopLevel.RequestAnimationFrame`.
 - **Console output** routed to `System.Console.WriteLine` for easy debugging.
+- **TypeScript transpilation** for `.ts`/`.tsx`/`.mts`/`.cts` modules using the embedded TypeScript compiler, including optional library registration for declaration files.
 - **Extensibility hooks**: override `CreateDocument`, supply a custom element factory, or derive your own `AvaloniaDomElement` to add behaviour.
 
 ## Getting Started
@@ -44,6 +45,31 @@ if (output) {
 ```
 
 Scripts can be embedded strings, loaded from files, or resolved through Avalonia’s `avares://` resource scheme using `ExecuteScriptUri`.
+
+## TypeScript Support
+
+`JintAvaloniaHost` includes an embedded [TypeScript](https://www.typescriptlang.org/) compiler. Any `.ts`, `.tsx`, `.mts`, or `.cts` file resolved through `require()` or `window.importScripts()` is automatically transpiled to CommonJS before execution. Diagnostics emitted by the compiler are forwarded to `Console.Error` so you can surface syntax issues during development.
+
+The host exposes the runtime through `JintAvaloniaHost.TypeScript`, making it easy to register declaration files or customise compiler options:
+
+```csharp
+var host = new JintAvaloniaHost(topLevel);
+
+// Provide extra type declarations (for example, to describe native functions you expose).
+host.TypeScript.AddLibrary("interop.d.ts", "declare function invokeNative(arg: string): number;");
+
+// Tighten compiler checks or tweak module/target selection.
+host.TypeScript.DefaultOptions.Strict = true;
+host.TypeScript.DefaultOptions.Target = TypeScriptScriptTarget.ES2020;
+
+// Make the native function available at runtime.
+host.Engine.SetValue("invokeNative", new Func<string, int>(_ => 42));
+
+host.ScriptBaseDirectory = Path.Combine(AppContext.BaseDirectory, "scripts");
+host.ExecuteScriptText("const mod = require('./sample.ts'); console.log(mod.answer);");
+```
+
+For convenience you can also load declaration files from disk via `TypeScriptRuntime.AddLibraryFromFile(path)`. Because declaration files are prepended to the code being compiled, they never emit runtime output but still contribute type information when `Strict` or other TypeScript checks are enabled.
 
 ## DOM API
 
