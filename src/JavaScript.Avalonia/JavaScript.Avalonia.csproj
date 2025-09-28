@@ -23,7 +23,9 @@
     <PackageReference Include="Jint" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="TypeScript/typescript.js" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>
-

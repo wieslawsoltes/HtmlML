@@ -248,4 +248,56 @@ body.replaceChild(replacement, second);
             Directory.Delete(tempDir, true);
         }
     }
+
+    [AvaloniaFact]
+    public void Require_TranspilesTypeScriptModule()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var modulePath = Path.Combine(tempDir, "answer.ts");
+            File.WriteAllText(modulePath, "export const answer: number = 21 * 2;");
+
+            host.ScriptBaseDirectory = tempDir;
+            host.ExecuteScriptText("const mod = require('./answer.ts'); globalThis.transpiledAnswer = mod.answer;");
+
+            Assert.Equal(42d, Convert.ToDouble(host.Engine.GetValue("transpiledAnswer").ToObject()));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void TypeScriptRuntime_RespectsRegisteredLibraries()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        host.TypeScript.DefaultOptions.Strict = true;
+        host.TypeScript.AddLibrary("typed-add.d.ts", "declare function typedAdd(a: number, b: number): number;");
+
+        var inlineResult = host.TypeScript.Transpile("inline.ts", "const value = typedAdd(1, 2); export const result = value;", host.TypeScript.DefaultOptions);
+        Assert.Empty(inlineResult.Diagnostics);
+
+        host.Engine.SetValue("typedAdd", new Func<double, double, double>((a, b) => a + b));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var modulePath = Path.Combine(tempDir, "typed-module.ts");
+            File.WriteAllText(modulePath, "const sum: number = typedAdd(19, 23); export const value = sum;");
+
+            host.ScriptBaseDirectory = tempDir;
+            host.ExecuteScriptText("const mod = require('./typed-module.ts'); globalThis.typeLibValue = mod.value;");
+
+            Assert.Equal(42d, Convert.ToDouble(host.Engine.GetValue("typeLibValue").ToObject()));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
 }
