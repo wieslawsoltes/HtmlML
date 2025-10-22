@@ -76,7 +76,7 @@ To create a custom tag, inherit from `HtmlElementBase` or an appropriate Avaloni
 
 ## License
 
-HtmlML is licensed under the [GNU AGPL v3](https://www.gnu.org/licenses/agpl-3.0.html). Commercial licensing is available on request.
+HtmlML is licensed under the MIT. See [LICENSE](../../LICENSE).
 
 ## Acknowledgements
 
