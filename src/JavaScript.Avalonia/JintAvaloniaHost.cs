@@ -30,6 +30,7 @@ public class JintAvaloniaHost
     private readonly Dictionary<string, JsValue> _moduleCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
     private readonly Stack<JsValue> _pendingModuleResults = new();
+    private TypeScriptRuntime? _typeScriptRuntime;
 
     public string ScriptBaseDirectory { get; set; } = AppContext.BaseDirectory;
 
@@ -62,9 +63,14 @@ public class JintAvaloniaHost
         TopLevel.Closed += OnTopLevelClosed;
     }
 
+    public TypeScriptRuntime TypeScript => _typeScriptRuntime ??= CreateTypeScriptRuntime();
+
+    protected virtual TypeScriptRuntime CreateTypeScriptRuntime() => new(Engine);
+
     protected virtual void ConfigureEngineOptions(Options options)
     {
         options.Strict();
+        options.ExperimentalFeatures = ExperimentalFeature.Generators;
     }
 
     protected virtual object CreateConsoleObject() => new ConsoleJs();
@@ -568,6 +574,7 @@ public class JintAvaloniaHost
         }
 
         var content = File.ReadAllText(fullPath);
+        content = TransformModuleContent(fullPath, content);
         var directory = Path.GetDirectoryName(fullPath) ?? ScriptBaseDirectory;
         return new ModuleSource(ModuleKind.File, fullPath, content, fullPath, directory, null);
     }
@@ -577,6 +584,7 @@ public class JintAvaloniaHost
         using var stream = AssetLoader.Open(uri);
         using var reader = new StreamReader(stream);
         var content = reader.ReadToEnd();
+        content = TransformModuleContent(uri.ToString(), content);
         var baseUri = new Uri(uri, "./");
         return new ModuleSource(ModuleKind.Avares, uri.ToString(), content, uri.ToString(), null, baseUri);
     }
@@ -584,8 +592,57 @@ public class JintAvaloniaHost
     private ModuleSource LoadModuleFromHttp(Uri uri)
     {
         var content = s_httpClient.GetStringAsync(uri).GetAwaiter().GetResult();
+        content = TransformModuleContent(uri.ToString(), content);
         var baseUri = new Uri(uri, "./");
         return new ModuleSource(ModuleKind.Http, uri.ToString(), content, uri.ToString(), null, baseUri);
+    }
+
+    private string TransformModuleContent(string? fileName, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return content;
+        }
+
+        if (!IsTypeScriptFile(fileName))
+        {
+            return content;
+        }
+
+        try
+        {
+            var result = TypeScript.Transpile(fileName ?? "module.ts", content);
+            if (result.Diagnostics.Count > 0)
+            {
+                foreach (var diagnostic in result.Diagnostics)
+                {
+                    if (!string.IsNullOrWhiteSpace(diagnostic))
+                    {
+                        Console.Error.WriteLine($"TypeScript: {diagnostic}");
+                    }
+                }
+            }
+
+            return string.IsNullOrEmpty(result.Code) ? string.Empty : result.Code;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"TypeScript transpilation failed for '{fileName}': {ex.Message}");
+            return content;
+        }
+    }
+
+    private static bool IsTypeScriptFile(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        return fileName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".mts", StringComparison.OrdinalIgnoreCase) ||
+               fileName.EndsWith(".cts", StringComparison.OrdinalIgnoreCase);
     }
 
     private void PushModuleResultFrame()

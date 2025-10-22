@@ -18,4 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\JavaScript.Avalonia\JavaScript.Avalonia.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Scripts\**\*.*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
