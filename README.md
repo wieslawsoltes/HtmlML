@@ -198,7 +198,7 @@ Contributions, bug reports, and feature requests are welcome! Please open an iss
 
 ## License
 
-Both HtmlML and JavaScript.Avalonia are distributed under the terms of the [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html).
+Both HtmlML and JavaScript.Avalonia are distributed under the terms of the [MIT](LICENSE).
 
 If your organisation requires a different licensing arrangement, please reach out to discuss commercial options.
 

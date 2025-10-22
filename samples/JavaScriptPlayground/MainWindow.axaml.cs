@@ -1185,6 +1185,180 @@ renderScene('Sketch scene rendered with rough.js — adjust the slider or change
 """
             ),
             new Preset(
+                "Canvas 2D + TypeScript rough.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas 2D with rough.js (TypeScript module)" FontWeight="SemiBold" Foreground="#1f2937" />
+    <TextBlock Text="The script imports a local TypeScript helper that pulls rough.js from esm.sh and drives the canvas." TextWrapping="Wrap" Foreground="#475569" />
+    <Border Name="tsRoughSurface" Width="560" Height="320" Background="#ffffff" BorderBrush="#e2e8f0" BorderThickness="1" CornerRadius="6" />
+    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+      <TextBlock Text="Roughness:" VerticalAlignment="Center" />
+      <Slider Name="tsRoughness" Minimum="0.5" Maximum="2.5" Value="1.0" Width="160" />
+      <Button Name="tsRoughRender" Content="Render once" />
+      <Button Name="tsRoughAnimate" Content="Toggle animation" />
+      <Button Name="tsRoughPalette" Content="Next palette" />
+    </StackPanel>
+    <TextBlock Name="tsRoughStatus" Foreground="#334155" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('tsRoughSurface');
+const slider = document.getElementById('tsRoughness');
+const renderBtn = document.getElementById('tsRoughRender');
+const animateBtn = document.getElementById('tsRoughAnimate');
+const paletteBtn = document.getElementById('tsRoughPalette');
+const status = document.getElementById('tsRoughStatus');
+
+const { createRoughSketch } = require('./Scripts/rough-sketch.ts');
+
+if (!surface) {
+  throw new Error('tsRoughSurface element not found');
+}
+
+const getSliderValue = () => {
+  if (!slider) {
+    return 1;
+  }
+
+  const raw = slider.Value ?? slider.value ?? slider.getAttribute?.('value') ?? slider.getAttribute?.('Value');
+  const numeric = typeof raw === 'number' ? raw : parseFloat(raw ?? '1');
+  return Number.isFinite(numeric) ? numeric : 1;
+};
+
+const controller = createRoughSketch({
+  surface,
+  initialRoughness: getSliderValue(),
+  notify: message => {
+    if (status) {
+      status.textContent = message;
+    }
+  }
+});
+
+let isAnimating = false;
+
+const renderStatic = () => {
+  controller.stop();
+  controller.setRoughness(getSliderValue());
+  controller.render();
+};
+
+renderBtn?.addEventListener('click', () => {
+  isAnimating = false;
+  renderStatic();
+});
+
+animateBtn?.addEventListener('click', () => {
+  isAnimating = !isAnimating;
+  controller.stop();
+  controller.setRoughness(getSliderValue());
+  if (isAnimating) {
+    controller.start();
+    if (status) {
+      status.textContent = 'Animating canvas via TypeScript rough.js helper';
+    }
+  } else {
+    if (status) {
+      status.textContent = 'Animation paused';
+    }
+  }
+});
+
+paletteBtn?.addEventListener('click', () => {
+  const palette = controller.cyclePalette();
+  if (status) {
+    status.textContent = `Palette switched to ${palette.join(', ')}`;
+  }
+  if (isAnimating) {
+    controller.start();
+  }
+});
+
+const handleSliderChange = () => {
+  controller.setRoughness(getSliderValue());
+  if (!isAnimating) {
+    controller.render();
+  }
+};
+
+slider?.addEventListener('pointerup', handleSliderChange);
+slider?.addEventListener('input', handleSliderChange);
+slider?.addEventListener('valuechanged', handleSliderChange);
+slider?.addEventListener('keydown', evt => {
+  if (evt.key === 'ArrowLeft' || evt.key === 'ArrowRight') {
+    handleSliderChange();
+  }
+});
+
+controller.render();
+if (status) {
+  status.textContent = 'TypeScript helper loaded rough.js and rendered the initial scene';
+}
+"""
+            ),
+            new Preset(
+                "TypeScript + xterm.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="xterm.js headless (TypeScript)" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
+    <TextBlock Text="Renders the @xterm/headless buffer onto a CanvasRenderingContext2D using a TypeScript helper module." TextWrapping="Wrap" Foreground="#475569" />
+    <Border Name="xtermSurface" Width="720" Height="360" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
+    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+      <TextBox Name="xtermInput" Width="260" Watermark="Enter command (help, demo, uptime, clear)" />
+      <Button Name="xtermSend" Content="Send" />
+      <Button Name="xtermDemo" Content="Run demo" />
+      <Button Name="xtermClear" Content="Clear" />
+    </StackPanel>
+    <TextBlock Name="xtermStatus" Foreground="#334155" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+try {
+  require('./Scripts/xterm-demo.ts');
+} catch (error) {
+  const status = document.getElementById('xtermStatus');
+  if (status) {
+    status.textContent = `Failed to load xterm demo: ${error}`;
+  }
+  throw error;
+}
+"""
+            ),
+            new Preset(
+                "JavaScript + xterm.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="xterm.js headless (JavaScript)" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
+    <TextBlock Text="Loads the plain JavaScript helper that integrates the headless xterm.js bundle into the canvas renderer." TextWrapping="Wrap" Foreground="#475569" />
+    <Border Name="xtermJsSurface" Width="720" Height="360" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
+    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+      <TextBox Name="xtermJsInput" Width="260" Watermark="Enter command (help, demo, uptime, clear)" />
+      <Button Name="xtermJsSend" Content="Send" />
+      <Button Name="xtermJsDemo" Content="Run demo" />
+      <Button Name="xtermJsClear" Content="Clear" />
+    </StackPanel>
+    <TextBlock Name="xtermJsStatus" Foreground="#334155" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+try {
+  require('./Scripts/xterm-browser.js');
+} catch (error) {
+  const status = document.getElementById('xtermJsStatus');
+  if (status) {
+    status.textContent = `Failed to load JavaScript xterm demo: ${error}`;
+  }
+  throw error;
+}
+"""
+            ),
+            new Preset(
                 "Canvas 2D + Chart.js",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
