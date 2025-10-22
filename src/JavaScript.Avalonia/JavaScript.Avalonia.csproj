@@ -9,7 +9,7 @@
   <PropertyGroup>
     <Description>JavaScript integration helpers for Avalonia applications.</Description>
     <PackageId>JavaScript.Avalonia</PackageId>
-    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>avalonia;javascript;jint</PackageTags>
   </PropertyGroup>
   <PropertyGroup>
