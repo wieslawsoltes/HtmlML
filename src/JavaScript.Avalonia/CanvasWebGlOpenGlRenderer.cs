@@ -974,6 +974,8 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             _api.PixelStorei(_context.UNPACK_ALIGNMENT, texture.UnpackAlignment);
+            var nativeInternalFormat = GetNativeTextureInternalFormat(texture);
+            var nativeType = GetNativeTextureType(texture.Type);
             var bytes = ToBytes(texture.Pixels, texture.Type, elementBuffer: false);
             if (texture.UnpackFlipY && texture.Format == _context.RGBA && texture.Type == _context.UNSIGNED_BYTE)
             {
@@ -982,11 +984,11 @@ internal sealed partial class CanvasWebGlRenderingContext
 
             if (bytes.Length == 0)
             {
-                gl.TexImage2D(texture.Target, texture.Level, texture.InternalFormat, texture.Width, texture.Height, texture.Border, texture.Format, texture.Type, IntPtr.Zero);
+                gl.TexImage2D(texture.Target, texture.Level, nativeInternalFormat, texture.Width, texture.Height, texture.Border, texture.Format, nativeType, IntPtr.Zero);
             }
             else
             {
-                WithPinned(bytes, ptr => gl.TexImage2D(texture.Target, texture.Level, texture.InternalFormat, texture.Width, texture.Height, texture.Border, texture.Format, texture.Type, ptr));
+                WithPinned(bytes, ptr => gl.TexImage2D(texture.Target, texture.Level, nativeInternalFormat, texture.Width, texture.Height, texture.Border, texture.Format, nativeType, ptr));
             }
 
             if (texture.GenerateMipmap)
@@ -996,6 +998,32 @@ internal sealed partial class CanvasWebGlRenderingContext
 
             texture.NativeDirty = false;
         }
+
+        private int GetNativeTextureInternalFormat(WebGlTexture texture)
+        {
+            if (texture.InternalFormat is 0x881A or 0x881B or 0x8814)
+            {
+                return texture.InternalFormat;
+            }
+
+            if (texture.InternalFormat == _context.RGBA && IsHalfFloatTextureType(texture.Type))
+            {
+                return _context.RGBA16F;
+            }
+
+            if (texture.InternalFormat == _context.RGBA && texture.Type == _context.FLOAT)
+            {
+                return _context.RGBA32F;
+            }
+
+            return texture.InternalFormat;
+        }
+
+        private int GetNativeTextureType(int type)
+            => type == _context.HALF_FLOAT_OES ? _context.HALF_FLOAT : type;
+
+        private bool IsHalfFloatTextureType(int type)
+            => type == _context.HALF_FLOAT || type == _context.HALF_FLOAT_OES;
 
         private void ApplyUniforms(GlInterface gl, WebGlProgram program, WebGlDrawCommand command)
         {
@@ -1155,6 +1183,7 @@ internal sealed partial class CanvasWebGlRenderingContext
                 ushort[] values => ToByteArray(values),
                 int[] values => ToByteArray(values),
                 uint[] values => ToByteArray(values),
+                float[] values when IsHalfFloatElementType(preferredElementType) => ToHalfFloatByteArray(values),
                 float[] values => ToByteArray(values),
                 double[] values => ConvertDoubles(values, preferredElementType, elementBuffer),
                 _ => ConvertEnumerable(data, preferredElementType, elementBuffer)
@@ -1183,6 +1212,11 @@ internal sealed partial class CanvasWebGlRenderingContext
                 return ToByteArray(values.Select(static v => (int)Math.Round(v)).ToArray());
             }
 
+            if (IsHalfFloatElementType(preferredElementType))
+            {
+                return ToHalfFloatByteArray(values.Select(static v => (float)v));
+            }
+
             return ToByteArray(values.Select(static v => (float)v).ToArray());
         }
 
@@ -1206,6 +1240,12 @@ internal sealed partial class CanvasWebGlRenderingContext
             var bytes = MemoryMarshal.AsBytes(values.AsSpan()).ToArray();
             return bytes;
         }
+
+        private static byte[] ToHalfFloatByteArray(IEnumerable<float> values)
+            => ToByteArray(values.Select(static value => BitConverter.HalfToUInt16Bits((Half)value)).ToArray());
+
+        private static bool IsHalfFloatElementType(int elementType)
+            => elementType is 0x140B or 0x8D61;
 
         private static byte[] FlipRgbaRows(byte[] bytes, int width, int height)
         {
