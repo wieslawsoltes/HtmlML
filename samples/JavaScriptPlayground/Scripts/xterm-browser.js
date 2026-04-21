@@ -176,6 +176,147 @@ const updateStatus = (message) => {
   }
 };
 
+const getNavigatorClipboard = () => {
+  const nav = typeof navigator !== 'undefined'
+    ? navigator
+    : (typeof window !== 'undefined' ? window.navigator : null);
+  return nav && nav.clipboard ? nav.clipboard : null;
+};
+
+const writeClipboardText = (text) => {
+  const clipboard = getNavigatorClipboard();
+  if (!clipboard || typeof clipboard.writeText !== 'function') {
+    updateStatus('Clipboard API unavailable.');
+    return false;
+  }
+
+  try {
+    clipboard.writeText(String(text || ''));
+    return true;
+  } catch (error) {
+    updateStatus(`Clipboard write failed: ${error}`);
+    return false;
+  }
+};
+
+const readClipboardText = () => {
+  const clipboard = getNavigatorClipboard();
+  if (!clipboard || typeof clipboard.readText !== 'function') {
+    updateStatus('Clipboard API unavailable.');
+    return '';
+  }
+
+  try {
+    const value = clipboard.readText();
+    if (value && typeof value.then === 'function') {
+      updateStatus('Async clipboard reads are not supported by this sample host.');
+      return '';
+    }
+
+    return typeof value === 'string' ? value : String(value ?? '');
+  } catch (error) {
+    updateStatus(`Clipboard read failed: ${error}`);
+    return '';
+  }
+};
+
+const terminalLineToString = (line, scratch) => {
+  if (!line) {
+    return '';
+  }
+
+  if (typeof line.translateToString === 'function') {
+    return line.translateToString(true);
+  }
+
+  let text = '';
+  for (let col = 0; col < terminal.cols; col++) {
+    const cell = line.getCell(col, scratch);
+    const chars = cell && typeof cell.getChars === 'function' ? cell.getChars() : ' ';
+    text += chars || ' ';
+  }
+
+  return text.replace(/\s+$/g, '');
+};
+
+const getVisibleTerminalText = () => {
+  const buffer = terminal.buffer.active;
+  const viewportTop = buffer.viewportY;
+  const scratch = buffer.getNullCell();
+  const lines = [];
+
+  for (let row = 0; row < terminal.rows; row++) {
+    lines.push(terminalLineToString(buffer.getLine(viewportTop + row), scratch));
+  }
+
+  while (lines.length > 0 && lines[lines.length - 1].trim().length === 0) {
+    lines.pop();
+  }
+
+  return lines.join('\n');
+};
+
+const isCopyShortcut = (event) => {
+  const key = String(event?.key || '').toLowerCase();
+  return key === 'c' && (event?.metaKey || (event?.ctrlKey && event?.shiftKey));
+};
+
+const isPasteShortcut = (event) => {
+  const key = String(event?.key || '').toLowerCase();
+  return key === 'v' && (event?.metaKey || (event?.ctrlKey && event?.shiftKey));
+};
+
+const copyTerminalText = () => {
+  const text = getVisibleTerminalText();
+  if (!text) {
+    updateStatus('No terminal text to copy.');
+    return false;
+  }
+
+  if (writeClipboardText(text)) {
+    updateStatus(`Copied ${text.length} characters from terminal.`);
+    return true;
+  }
+
+  return false;
+};
+
+const pasteClipboardText = () => {
+  const text = readClipboardText();
+  if (!text) {
+    updateStatus('Clipboard is empty.');
+    return false;
+  }
+
+  if (activeShellSession) {
+    sendToActiveShellSession(text);
+    updateStatus(`Pasted ${text.length} characters to ${activeShellCommand || 'terminal'}.`);
+    return true;
+  }
+
+  draftInput += text;
+  syncInputBox();
+  renderPrompt();
+  updateStatus(`Pasted ${text.length} characters.`);
+  return true;
+};
+
+const handleClipboardShortcut = (event) => {
+  if (isCopyShortcut(event)) {
+    event.preventDefault && event.preventDefault();
+    copyTerminalText();
+    return true;
+  }
+
+  if (isPasteShortcut(event)) {
+    event.preventDefault && event.preventDefault();
+    pasteClipboardText();
+    return true;
+  }
+
+  return false;
+};
+
 const ensureElements = () => {
   if (!surface || !ctx) {
     updateStatus('Canvas surface unavailable.');
@@ -481,7 +622,7 @@ const startActiveShellSession = (command) => {
   lastSessionRows = terminal.rows;
   activeShellPollTimer = startInterval(pollActiveShellSession, 50);
   pollActiveShellSession();
-  updateStatus(`Started ${activeShellCommand} in ${terminal.cols}x${terminal.rows} terminal context. Focus the canvas for keyboard and mouse; use Ctrl+C or Clear to stop.`);
+  updateStatus(`Started ${activeShellCommand} in ${terminal.cols}x${terminal.rows} terminal context. Focus the canvas for keyboard/mouse; use Cmd+C/V or Ctrl+Shift+C/V for clipboard.`);
   return true;
 };
 
@@ -829,6 +970,7 @@ commands.help = () => {
     runWriter(`  cwd        ${hostShell.cwd || ''}`);
     if (canStartHostTerminal) {
       runWriter('  mc/btop    Start in a terminal context; focus canvas to send keys.');
+      runWriter('  clipboard Copy with Cmd+C or Ctrl+Shift+C; paste with Cmd+V or Ctrl+Shift+V.');
     } else {
       runWriter('  note       No PTY bridge: full-screen TUIs like mc or btop are not supported.');
     }
@@ -1044,6 +1186,11 @@ const bindInput = () => {
   });
   addListener(input, 'keydown', (event) => {
     if (activeShellSession) {
+      if (handleClipboardShortcut(event)) {
+        defer(clearInputBox);
+        return;
+      }
+
       const sequence = keyToTerminalSequence(event);
       if (sequence) {
         sendToActiveShellSession(sequence);
@@ -1117,6 +1264,10 @@ const bindInput = () => {
     event.preventDefault && event.preventDefault();
   });
   addListener(surface, 'keydown', (event) => {
+    if (handleClipboardShortcut(event)) {
+      return;
+    }
+
     if (activeShellSession) {
       const sequence = keyToTerminalSequence(event);
       if (sequence) {
