@@ -72,6 +72,19 @@ globalThis.domValue = input.value;
     }
 
     [AvaloniaFact]
+    public void NavigatorClipboard_RoundTripsText()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+
+        host.ExecuteScriptText("""
+navigator.clipboard.writeText('clipboard text');
+globalThis.clipboardText = navigator.clipboard.readText();
+""");
+
+        Assert.Equal("clipboard text", Assert.IsType<string>(host.Engine.GetValue("clipboardText").ToObject()));
+    }
+
+    [AvaloniaFact]
     public void CanvasTarget_CanReceiveFocusFromDom()
     {
         var surface = new Border { Name = "surface", Width = 320, Height = 180 };
