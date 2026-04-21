@@ -1045,6 +1045,45 @@ function printBanner() {
 }
 
 function bindInput() {
+  const surfaceElement = surface as any;
+  if (typeof surfaceElement?.__xtermCleanup === 'function') {
+    try {
+      surfaceElement.__xtermCleanup();
+    } catch (error) {
+      // Ignore stale cleanup failures from a previous script execution.
+    }
+  }
+
+  const cleanupHandlers: Array<() => void> = [];
+  const addListener = (target: any, type: string, handler: (...args: any[]) => void) => {
+    if (!target || typeof target.addEventListener !== 'function') {
+      return;
+    }
+
+    target.addEventListener(type, handler);
+    cleanupHandlers.push(() => {
+      if (typeof target.removeEventListener === 'function') {
+        target.removeEventListener(type, handler);
+      }
+    });
+  };
+
+  surfaceElement.__xtermCleanup = () => {
+    stopDemoStream();
+    stopActiveShellSession();
+    while (cleanupHandlers.length > 0) {
+      const cleanup = cleanupHandlers.pop();
+      try {
+        cleanup?.();
+      } catch (error) {
+        // Continue removing the rest of the previous script handlers.
+      }
+    }
+    if (surfaceElement.__xtermCleanup) {
+      surfaceElement.__xtermCleanup = null;
+    }
+  };
+
   const submit = (rawValue?: string) => {
     const value = typeof rawValue === 'string'
       ? rawValue
@@ -1057,19 +1096,19 @@ function bindInput() {
     }
   };
 
-  sendButton?.addEventListener('click', submit);
-  (inputBox as any)?.addEventListener?.('input', () => {
+  addListener(sendButton, 'click', submit);
+  addListener(inputBox as any, 'input', () => {
     const value = String((inputBox as any)?.value ?? '');
     setDraftInput(value);
   });
-  (inputBox as any)?.addEventListener?.('keydown', (event: any) => {
+  addListener(inputBox as any, 'keydown', (event: any) => {
     if (event?.key === 'Enter') {
       event.preventDefault?.();
       submit();
     }
   });
 
-  clearButton?.addEventListener('click', () => {
+  addListener(clearButton, 'click', () => {
     stopDemoStream();
     stopActiveShellSession();
     clearDraftInput(false);
@@ -1078,7 +1117,7 @@ function bindInput() {
     updateStatus('Terminal cleared and banner restored.');
   });
 
-  demoButton?.addEventListener('click', () => {
+  addListener(demoButton, 'click', () => {
     stopDemoStream();
     stopActiveShellSession();
     clearDraftInput(false);
@@ -1087,31 +1126,31 @@ function bindInput() {
     renderPrompt();
   });
 
-  (surface as any)?.addEventListener?.('pointerdown', (event: any) => {
-    (surface as any)?.focus?.();
+  addListener(surfaceElement, 'pointerdown', (event: any) => {
+    surfaceElement?.focus?.();
     if (sendTerminalMouseEvent(event, 'down')) {
       event.preventDefault?.();
     }
   });
-  (surface as any)?.addEventListener?.('click', () => {
-    (surface as any)?.focus?.();
+  addListener(surfaceElement, 'click', () => {
+    surfaceElement?.focus?.();
   });
-  (surface as any)?.addEventListener?.('pointermove', (event: any) => {
+  addListener(surfaceElement, 'pointermove', (event: any) => {
     if (sendTerminalMouseEvent(event, 'move')) {
       event.preventDefault?.();
     }
   });
-  (surface as any)?.addEventListener?.('pointerup', (event: any) => {
+  addListener(surfaceElement, 'pointerup', (event: any) => {
     if (sendTerminalMouseEvent(event, 'up')) {
       event.preventDefault?.();
     }
   });
-  (surface as any)?.addEventListener?.('wheel', (event: any) => {
+  addListener(surfaceElement, 'wheel', (event: any) => {
     if (sendTerminalMouseEvent(event, 'wheel')) {
       event.preventDefault?.();
     }
   });
-  (surface as any)?.addEventListener?.('textinput', (event: any) => {
+  addListener(surfaceElement, 'textinput', (event: any) => {
     const data = typeof event?.data === 'string' ? event.data : '';
     if (!data) {
       return;
@@ -1128,7 +1167,7 @@ function bindInput() {
     renderPrompt();
     event.preventDefault?.();
   });
-  (surface as any)?.addEventListener?.('keydown', (event: any) => {
+  addListener(surfaceElement, 'keydown', (event: any) => {
     if (activeShellSession) {
       const sequence = keyToTerminalSequence(event);
       if (sequence) {
