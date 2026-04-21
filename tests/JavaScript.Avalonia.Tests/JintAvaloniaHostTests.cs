@@ -1243,6 +1243,166 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
     }
 
     [AvaloniaFact]
+    public void WebGl_FramebufferBindingsExposeRenderTargetState()
+    {
+        var root = new Border
+        {
+            Name = "webglSurface",
+            Width = 128,
+            Height = 96,
+            Background = Brushes.White
+        };
+        var window = new Window
+        {
+            Width = 180,
+            Height = 140,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.Engine.Execute("""
+const surface = document.getElementById('webglSurface');
+const gl = surface.getContext('webgl');
+const texture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, texture);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 32, 16, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+const depth = gl.createRenderbuffer();
+gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, 32, 16);
+
+const framebuffer = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+
+globalThis.framebufferComplete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+globalThis.framebufferBound = gl.getParameter(gl.FRAMEBUFFER_BINDING) === framebuffer;
+globalThis.renderbufferBound = gl.getParameter(gl.RENDERBUFFER_BINDING) === depth;
+gl.clearColor(0, 0, 0, 1);
+gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+globalThis.framebufferCleared = gl.getParameter(gl.FRAMEBUFFER_BINDING) === null;
+""");
+
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("framebufferComplete").ToObject()));
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("framebufferBound").ToObject()));
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("renderbufferBound").ToObject()));
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("framebufferCleared").ToObject()));
+    }
+
+    [AvaloniaFact]
+    public void ThreeJs_CanCompositeWebGlRenderTarget()
+    {
+        var root = new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border { Name = "targetSurface", Width = 220, Height = 160, Background = Brushes.White },
+                    new TextBlock { Name = "targetStatus" }
+                }
+            }
+        };
+        var window = new Window
+        {
+            Width = 300,
+            Height = 240,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.Engine.Execute("""
+const surface = document.getElementById('targetSurface');
+const status = document.getElementById('targetStatus');
+const gl = surface.getContext('webgl');
+const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+const THREE = threeModule?.REVISION ? threeModule : window.THREE;
+
+const renderer = new THREE.WebGLRenderer({
+  canvas: surface,
+  context: gl,
+  antialias: false,
+  alpha: false
+});
+renderer.setSize(surface.offsetWidth, surface.offsetHeight, false);
+renderer.setPixelRatio(1);
+renderer.setClearColor(0xffffff, 1);
+renderer.autoClear = false;
+
+const target = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHeight, {
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  format: THREE.RGBAFormat,
+  stencilBuffer: false
+});
+
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+scene.add(new THREE.Mesh(
+  new THREE.PlaneGeometry(1.5, 1.1),
+  new THREE.MeshBasicMaterial({ color: 0xf97316 })
+));
+
+const screenScene = new THREE.Scene();
+const screenCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+screenScene.add(new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.ShaderMaterial({
+    uniforms: { tDiffuse: { value: target.texture } },
+    vertexShader: `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`,
+    fragmentShader: `
+uniform sampler2D tDiffuse;
+varying vec2 vUv;
+void main() {
+  gl_FragColor = texture2D(tDiffuse, vUv);
+}`
+  })
+));
+
+renderer.clear();
+renderer.setRenderTarget(target);
+renderer.clear();
+renderer.render(scene, camera);
+renderer.setRenderTarget(null);
+renderer.render(screenScene, screenCamera);
+status.textContent = gl.DrawCallCount > 0 && gl.CommandCount > 1 ? 'render target composited' : 'render target missing';
+""");
+
+        var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("targetStatus")).Control);
+        Assert.Equal("render target composited", status.Text);
+
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("targetSurface"));
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(surfaceElement.getContext("webgl"));
+        Assert.True(context.CommandCount > 1);
+
+        Dispatcher.UIThread.RunJobs();
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            Assert.True(
+                HasNonWhitePixel(frame!, 0, 0, 220, 160),
+                $"Expected Three.js render target composition to produce visible pixels. {context.LastDrawStatus}");
+        }
+    }
+
+    [AvaloniaFact]
     public void PaperJs_CanInitializeCanvasPreset()
     {
         var root = new Border
