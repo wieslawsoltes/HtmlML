@@ -255,6 +255,33 @@ public class CanvasRenderingContext2DTests
         Assert.Empty(window.GetVisualDescendants().OfType<CanvasDrawingSurface>());
     }
 
+    [AvaloniaFact]
+    public void NativeWebGlSurface_QueuesDrawsWhileOpenGlInitializes()
+    {
+        var canvasTarget = new CanvasOpenGlDrawingSurface
+        {
+            Width = 80,
+            Height = 40
+        };
+        var window = new Window
+        {
+            Width = 100,
+            Height = 80,
+            Content = new VisualLayerManager { Child = canvasTarget }
+        };
+
+        window.Show();
+
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(CanvasContextBridge.GetContext(canvasTarget, "webgl"));
+
+        context.drawArrays(context.TRIANGLES, 0, 3);
+
+        Assert.Equal(1, context.DrawCallCount);
+        Assert.Equal(1, context.TriangleCount);
+        Assert.Equal("Queued drawArrays mode 4 with 3 vertices", context.LastDrawStatus);
+        Assert.Empty(window.GetVisualDescendants().OfType<CanvasDrawingSurface>());
+    }
+
     private static Color ReadPixel(Bitmap bitmap, int x, int y)
     {
         var buffer = new byte[4];
