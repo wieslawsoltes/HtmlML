@@ -6,7 +6,7 @@ using Avalonia.OpenGL.Controls;
 
 namespace JavaScript.Avalonia;
 
-internal sealed class CanvasOpenGlDrawingSurface : OpenGlControlBase
+public sealed class CanvasOpenGlDrawingSurface : OpenGlControlBase
 {
     public CanvasOpenGlDrawingSurface()
     {
