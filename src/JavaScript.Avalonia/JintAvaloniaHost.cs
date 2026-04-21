@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input.Platform;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using Jint;
@@ -1236,7 +1237,7 @@ try {
             _host = host;
         }
 
-        public NavigatorJs navigator => _navigator ??= new NavigatorJs();
+        public NavigatorJs navigator => _navigator ??= new NavigatorJs(_host);
 
         public double devicePixelRatio => 1.0;
 
@@ -1386,9 +1387,19 @@ try {
 
     public sealed class NavigatorJs
     {
+        private readonly JintAvaloniaHost _host;
+        private ClipboardJs? _clipboard;
+
+        internal NavigatorJs(JintAvaloniaHost host)
+        {
+            _host = host;
+        }
+
         public string userAgent { get; } = $"JavaScript.Avalonia/{typeof(JintAvaloniaHost).Assembly.GetName().Version}";
 
         public string platform { get; } = GetPlatform();
+
+        public ClipboardJs clipboard => _clipboard ??= new ClipboardJs(_host);
 
         private static string GetPlatform()
         {
@@ -1408,6 +1419,57 @@ try {
             }
 
             return RuntimeInformation.OSDescription;
+        }
+    }
+
+    public sealed class ClipboardJs
+    {
+        private readonly JintAvaloniaHost _host;
+        private string _lastText = string.Empty;
+
+        internal ClipboardJs(JintAvaloniaHost host)
+        {
+            _host = host;
+        }
+
+        public string readText()
+        {
+            try
+            {
+                var clipboard = _host.TopLevel.Clipboard;
+                var text = clipboard is null ? null : clipboard.GetTextAsync().GetAwaiter().GetResult();
+                if (text is not null)
+                {
+                    _lastText = text;
+                    return text;
+                }
+            }
+            catch
+            {
+                // Fall back to the last text written through this shim.
+            }
+
+            return _lastText;
+        }
+
+        public bool writeText(string? text)
+        {
+            _lastText = text ?? string.Empty;
+
+            try
+            {
+                var clipboard = _host.TopLevel.Clipboard;
+                if (clipboard is not null)
+                {
+                    clipboard.SetTextAsync(_lastText).GetAwaiter().GetResult();
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }
