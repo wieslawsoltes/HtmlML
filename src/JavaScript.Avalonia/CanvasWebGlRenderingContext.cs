@@ -5,41 +5,97 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Avalonia;
+using Avalonia.OpenGL;
 using Avalonia.Media;
 using Jint.Native;
 
 namespace JavaScript.Avalonia;
 
-internal sealed class CanvasWebGlRenderingContext
+internal sealed partial class CanvasWebGlRenderingContext
 {
     private readonly CanvasDrawingSurface _surface;
+    private readonly CanvasOpenGlDrawingSurface? _openGlSurface;
     private readonly CanvasRenderingContext2D _canvas2d;
+    private readonly object _commandLock = new();
+    private readonly List<WebGlCommand> _commands = new();
+    private readonly WebGlTexture?[] _textureUnits = new WebGlTexture?[32];
     private readonly Dictionary<int, WebGlVertexAttribState> _attributes = new();
     private readonly HashSet<int> _enabledAttributes = new();
+    private readonly HashSet<int> _enabledCaps = new();
     private readonly Dictionary<string, object?> _parameters = new(StringComparer.Ordinal);
     private readonly List<CanvasWebGlTriangle> _frameTriangles = new();
     private readonly double[] _clearColor = { 0, 0, 0, 0 };
+    private readonly double[] _blendColor = { 0, 0, 0, 0 };
     private readonly double[] _viewport = { 0, 0, 300, 150 };
+    private readonly double[] _scissor = { 0, 0, 300, 150 };
+    private readonly bool[] _colorMask = { true, true, true, true };
     private bool _frameHasClear;
+    private double _clearDepth = 1;
+    private int _clearStencil;
+    private bool _depthMask = true;
+    private int _depthFunc;
+    private int _blendSrcRgb;
+    private int _blendDstRgb;
+    private int _blendSrcAlpha;
+    private int _blendDstAlpha;
+    private int _blendEquationRgb;
+    private int _blendEquationAlpha;
+    private int _cullFaceMode;
+    private int _frontFaceMode;
+    private double _polygonOffsetFactor;
+    private double _polygonOffsetUnits;
+    private double _lineWidth = 1;
+    private int _unpackAlignment = 4;
+    private bool _unpackFlipY;
+    private bool _unpackPremultiplyAlpha;
+    private int _activeTextureUnit;
+    private string _openGlRenderBackend = "Avalonia OpenGL pending";
+    private OpenGlRenderer? _openGlRenderer;
     private WebGlBuffer? _arrayBuffer;
     private WebGlBuffer? _elementArrayBuffer;
     private WebGlProgram? _currentProgram;
     private WebGlVertexArrayObject? _currentVertexArray;
 
     public CanvasWebGlRenderingContext(CanvasDrawingSurface surface)
+        : this(surface, null)
+    {
+    }
+
+    public CanvasWebGlRenderingContext(CanvasDrawingSurface surface, CanvasOpenGlDrawingSurface? openGlSurface)
     {
         _surface = surface ?? throw new ArgumentNullException(nameof(surface));
+        _openGlSurface = openGlSurface;
         _canvas2d = _surface.Context;
+        _depthFunc = LESS;
+        _blendSrcRgb = ONE;
+        _blendDstRgb = ZERO;
+        _blendSrcAlpha = ONE;
+        _blendDstAlpha = ZERO;
+        _blendEquationRgb = FUNC_ADD;
+        _blendEquationAlpha = FUNC_ADD;
+        _cullFaceMode = BACK;
+        _frontFaceMode = CCW;
         InitializeParameters();
     }
 
     public object? canvas { get; set; }
 
-    public int CommandCount => _canvas2d.CommandCount;
+    public int CommandCount
+    {
+        get
+        {
+            lock (_commandLock)
+            {
+                return Math.Max(_canvas2d.CommandCount, _commands.Count);
+            }
+        }
+    }
+
     public int DrawCallCount { get; private set; }
     public int TriangleCount { get; private set; }
     public string LastDrawStatus { get; private set; } = "No draw call";
-    public string RenderBackend => _surface.LastWebGlRenderBackend;
+    public string RenderBackend => _openGlSurface?.RenderBackend ?? _openGlRenderBackend ?? _surface.LastWebGlRenderBackend;
+    public bool IsOpenGlBacked => RenderBackend.StartsWith("Avalonia OpenGL", StringComparison.Ordinal);
     public bool IsSkiaGpuBacked => string.Equals(RenderBackend, "Skia GRContext", StringComparison.Ordinal);
 
     public int DEPTH_BUFFER_BIT => 0x00000100;
@@ -353,12 +409,12 @@ internal sealed class CanvasWebGlRenderingContext
     {
         if (pname == VERSION)
         {
-            return "WebGL 1.0 (Avalonia Skia bridge)";
+            return "WebGL 1.0 (Avalonia OpenGL bridge)";
         }
 
         if (pname == SHADING_LANGUAGE_VERSION)
         {
-            return "WebGL GLSL ES 1.0 (Avalonia Skia bridge)";
+            return "WebGL GLSL ES 1.0 (Avalonia OpenGL bridge)";
         }
 
         if (pname == VENDOR)
@@ -378,7 +434,32 @@ internal sealed class CanvasWebGlRenderingContext
 
         if (pname == SCISSOR_BOX)
         {
-            return (double[])_viewport.Clone();
+            return (double[])_scissor.Clone();
+        }
+
+        if (pname == ARRAY_BUFFER_BINDING)
+        {
+            return _arrayBuffer;
+        }
+
+        if (pname == ELEMENT_ARRAY_BUFFER_BINDING)
+        {
+            return _currentVertexArray?.ElementArrayBuffer ?? _elementArrayBuffer;
+        }
+
+        if (pname == CURRENT_PROGRAM)
+        {
+            return _currentProgram;
+        }
+
+        if (pname == ACTIVE_TEXTURE)
+        {
+            return TEXTURE0 + _activeTextureUnit;
+        }
+
+        if (pname == TEXTURE_BINDING_2D)
+        {
+            return _textureUnits[_activeTextureUnit];
         }
 
         return _parameters.TryGetValue(pname.ToString(CultureInfo.InvariantCulture), out var value) ? value : 0;
@@ -395,6 +476,11 @@ internal sealed class CanvasWebGlRenderingContext
 
     public void deleteBuffer(WebGlBuffer? buffer)
     {
+        if (buffer is not null)
+        {
+            buffer.Deleted = true;
+        }
+
         if (ReferenceEquals(_arrayBuffer, buffer))
         {
             _arrayBuffer = null;
@@ -433,6 +519,7 @@ internal sealed class CanvasWebGlRenderingContext
         buffer.Target = target;
         buffer.Usage = usage;
         buffer.Data = ExtractArray(data);
+        buffer.NativeDirty = true;
     }
 
     public void bufferSubData(int target, int offset, object? data)
@@ -447,10 +534,12 @@ internal sealed class CanvasWebGlRenderingContext
         if (offset <= 0 || buffer.Data is null)
         {
             buffer.Data = replacement;
+            buffer.NativeDirty = true;
             return;
         }
 
         buffer.Data = replacement;
+        buffer.NativeDirty = true;
     }
 
     public WebGlShader createShader(int type) => new(type);
@@ -460,6 +549,7 @@ internal sealed class CanvasWebGlRenderingContext
         if (shader is not null)
         {
             shader.Source = source ?? string.Empty;
+            shader.NativeDirty = true;
         }
     }
 
@@ -468,6 +558,7 @@ internal sealed class CanvasWebGlRenderingContext
         if (shader is not null)
         {
             shader.Compiled = true;
+            shader.NativeDirty = true;
         }
     }
 
@@ -478,6 +569,10 @@ internal sealed class CanvasWebGlRenderingContext
 
     public void deleteShader(WebGlShader? shader)
     {
+        if (shader is not null)
+        {
+            shader.Deleted = true;
+        }
     }
 
     public WebGlProgram createProgram() => new();
@@ -487,6 +582,7 @@ internal sealed class CanvasWebGlRenderingContext
         if (program is not null && shader is not null && !program.Shaders.Contains(shader))
         {
             program.Shaders.Add(shader);
+            program.NativeDirty = true;
         }
     }
 
@@ -495,6 +591,7 @@ internal sealed class CanvasWebGlRenderingContext
         if (program is not null && !string.IsNullOrWhiteSpace(name))
         {
             program.AttributeLocations[name!] = index;
+            program.NativeDirty = true;
         }
     }
 
@@ -506,6 +603,7 @@ internal sealed class CanvasWebGlRenderingContext
         }
 
         program.Linked = true;
+        program.NativeDirty = true;
         program.ActiveUniforms.Clear();
         program.ActiveAttributes.Clear();
 
@@ -564,6 +662,11 @@ internal sealed class CanvasWebGlRenderingContext
 
     public void deleteProgram(WebGlProgram? program)
     {
+        if (program is not null)
+        {
+            program.Deleted = true;
+        }
+
         if (ReferenceEquals(_currentProgram, program))
         {
             _currentProgram = null;
@@ -658,9 +761,23 @@ internal sealed class CanvasWebGlRenderingContext
     public void uniform4i(object? location, object? x, object? y, object? z, object? w)
         => SetUniform(location, new[] { ToDouble(x), ToDouble(y), ToDouble(z), ToDouble(w) });
 
-    public void enableVertexAttribArray(int index) => _enabledAttributes.Add(index);
+    public void enableVertexAttribArray(int index)
+    {
+        _enabledAttributes.Add(index);
+        if (_currentVertexArray is not null)
+        {
+            _currentVertexArray.EnabledAttributes.Add(index);
+        }
+    }
 
-    public void disableVertexAttribArray(int index) => _enabledAttributes.Remove(index);
+    public void disableVertexAttribArray(int index)
+    {
+        _enabledAttributes.Remove(index);
+        if (_currentVertexArray is not null)
+        {
+            _currentVertexArray.EnabledAttributes.Remove(index);
+        }
+    }
 
     public void vertexAttribPointer(int index, int size, int type, bool normalized, int stride, int offset)
     {
@@ -705,17 +822,152 @@ internal sealed class CanvasWebGlRenderingContext
     }
 
     public WebGlTexture createTexture() => new();
-    public void deleteTexture(WebGlTexture? texture) { }
-    public void activeTexture(int texture) { }
-    public void bindTexture(int target, WebGlTexture? texture) { }
-    public void texParameteri(int target, int pname, int param) { }
-    public void texParameterf(int target, int pname, double param) { }
-    public void texImage2D(params object?[] args) { }
-    public void texSubImage2D(params object?[] args) { }
+
+    public void deleteTexture(WebGlTexture? texture)
+    {
+        if (texture is null)
+        {
+            return;
+        }
+
+        texture.Deleted = true;
+        for (var i = 0; i < _textureUnits.Length; i++)
+        {
+            if (ReferenceEquals(_textureUnits[i], texture))
+            {
+                _textureUnits[i] = null;
+            }
+        }
+    }
+
+    public void activeTexture(int texture)
+    {
+        _activeTextureUnit = Math.Clamp(texture - TEXTURE0, 0, _textureUnits.Length - 1);
+    }
+
+    public void bindTexture(int target, WebGlTexture? texture)
+    {
+        if (target != TEXTURE_2D)
+        {
+            return;
+        }
+
+        _textureUnits[_activeTextureUnit] = texture;
+        if (texture is not null)
+        {
+            texture.Target = target;
+        }
+    }
+
+    public void texParameteri(int target, int pname, int param)
+    {
+        if (GetBoundTexture(target) is { } texture)
+        {
+            texture.Parameters[pname] = param;
+            texture.NativeDirty = true;
+        }
+    }
+
+    public void texParameterf(int target, int pname, double param)
+    {
+        texParameteri(target, pname, (int)param);
+    }
+
+    public void texImage2D(params object?[] args)
+    {
+        if (args.Length < 6 || ToInt(args[0]) != TEXTURE_2D)
+        {
+            return;
+        }
+
+        var texture = GetBoundTexture(TEXTURE_2D);
+        if (texture is null)
+        {
+            return;
+        }
+
+        if (args.Length >= 9)
+        {
+            texture.Level = ToInt(args[1]);
+            texture.InternalFormat = ToInt(args[2]);
+            texture.Width = Math.Max(1, ToInt(args[3]));
+            texture.Height = Math.Max(1, ToInt(args[4]));
+            texture.Border = ToInt(args[5]);
+            texture.Format = ToInt(args[6]);
+            texture.Type = ToInt(args[7]);
+            texture.Pixels = ExtractArray(args[8]);
+        }
+        else
+        {
+            texture.Level = ToInt(args[1]);
+            texture.InternalFormat = ToInt(args[2]);
+            texture.Format = ToInt(args[3]);
+            texture.Type = ToInt(args[4]);
+            texture.Pixels = ExtractArray(args[5]);
+            texture.Width = Math.Max(1, texture.Width);
+            texture.Height = Math.Max(1, texture.Height);
+        }
+
+        texture.UnpackAlignment = _unpackAlignment;
+        texture.UnpackFlipY = _unpackFlipY;
+        texture.UnpackPremultiplyAlpha = _unpackPremultiplyAlpha;
+        texture.NativeDirty = true;
+    }
+
+    public void texSubImage2D(params object?[] args)
+    {
+        if (args.Length < 7 || ToInt(args[0]) != TEXTURE_2D)
+        {
+            return;
+        }
+
+        var texture = GetBoundTexture(TEXTURE_2D);
+        if (texture is null)
+        {
+            return;
+        }
+
+        if (args.Length >= 9)
+        {
+            texture.Format = ToInt(args[6]);
+            texture.Type = ToInt(args[7]);
+            texture.Pixels = ExtractArray(args[8]);
+        }
+        else
+        {
+            texture.Format = ToInt(args[3]);
+            texture.Type = ToInt(args[4]);
+            texture.Pixels = ExtractArray(args[5]);
+        }
+
+        texture.NativeDirty = true;
+    }
     public void compressedTexImage2D(params object?[] args) { }
     public void compressedTexSubImage2D(params object?[] args) { }
-    public void generateMipmap(int target) { }
-    public void pixelStorei(int pname, object? param) { }
+    public void generateMipmap(int target)
+    {
+        if (GetBoundTexture(target) is { } texture)
+        {
+            texture.GenerateMipmap = true;
+            texture.NativeDirty = true;
+        }
+    }
+
+    public void pixelStorei(int pname, object? param)
+    {
+        if (pname == UNPACK_ALIGNMENT)
+        {
+            _unpackAlignment = Math.Clamp(ToInt(param), 1, 8);
+        }
+        else if (pname == UNPACK_FLIP_Y_WEBGL)
+        {
+            _unpackFlipY = ToBool(param);
+        }
+        else if (pname == UNPACK_PREMULTIPLY_ALPHA_WEBGL)
+        {
+            _unpackPremultiplyAlpha = ToBool(param);
+        }
+    }
 
     public WebGlFramebuffer createFramebuffer() => new();
     public void bindFramebuffer(int target, WebGlFramebuffer? framebuffer) { }
@@ -736,7 +988,14 @@ internal sealed class CanvasWebGlRenderingContext
         _viewport[3] = height;
     }
 
-    public void scissor(double x, double y, double width, double height) { }
+    public void scissor(double x, double y, double width, double height)
+    {
+        _scissor[0] = x;
+        _scissor[1] = y;
+        _scissor[2] = width;
+        _scissor[3] = height;
+    }
+
     public void clearColor(double red, double green, double blue, double alpha)
     {
         _clearColor[0] = Math.Clamp(red, 0, 1);
@@ -745,41 +1004,105 @@ internal sealed class CanvasWebGlRenderingContext
         _clearColor[3] = Math.Clamp(alpha, 0, 1);
     }
 
-    public void clearDepth(double depth) { }
-    public void clearStencil(int stencil) { }
+    public void clearDepth(double depth) => _clearDepth = Math.Clamp(depth, 0, 1);
+
+    public void clearStencil(int stencil) => _clearStencil = stencil;
+
     public void clear(int mask)
     {
+        QueueClear(mask);
+        RequestNativeRender();
+
         if ((mask & COLOR_BUFFER_BIT) == 0)
         {
             return;
         }
 
-        _surface.ClearAll();
         _frameHasClear = true;
         _frameTriangles.Clear();
-        SyncWebGlFrame();
-        var width = GetSurfaceWidth();
-        var height = GetSurfaceHeight();
-        _canvas2d.fillStyle = ToCssColor(_clearColor);
-        _canvas2d.fillRect(0, 0, width, height);
+        if (ShouldUseSoftwareFallback)
+        {
+            _surface.ClearAll();
+            SyncWebGlFrame();
+            var width = GetSurfaceWidth();
+            var height = GetSurfaceHeight();
+            _canvas2d.fillStyle = ToCssColor(_clearColor);
+            _canvas2d.fillRect(0, 0, width, height);
+        }
+        else
+        {
+            _surface.ClearAll();
+            _surface.SetWebGlFrame(null);
+        }
     }
 
-    public void colorMask(bool red, bool green, bool blue, bool alpha) { }
-    public void depthMask(bool flag) { }
+    public void colorMask(bool red, bool green, bool blue, bool alpha)
+    {
+        _colorMask[0] = red;
+        _colorMask[1] = green;
+        _colorMask[2] = blue;
+        _colorMask[3] = alpha;
+    }
+
+    public void depthMask(bool flag) => _depthMask = flag;
+
     public void stencilMask(int mask) { }
     public void stencilMaskSeparate(int face, int mask) { }
-    public void enable(int cap) { }
-    public void disable(int cap) { }
-    public void depthFunc(int func) { }
-    public void blendFunc(int sfactor, int dfactor) { }
-    public void blendFuncSeparate(int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) { }
-    public void blendEquation(int mode) { }
-    public void blendEquationSeparate(int modeRGB, int modeAlpha) { }
-    public void blendColor(double red, double green, double blue, double alpha) { }
-    public void cullFace(int mode) { }
-    public void frontFace(int mode) { }
-    public void polygonOffset(double factor, double units) { }
-    public void lineWidth(double width) { }
+
+    public void enable(int cap) => _enabledCaps.Add(cap);
+
+    public void disable(int cap) => _enabledCaps.Remove(cap);
+
+    public void depthFunc(int func) => _depthFunc = func;
+
+    public void blendFunc(int sfactor, int dfactor)
+    {
+        _blendSrcRgb = sfactor;
+        _blendDstRgb = dfactor;
+        _blendSrcAlpha = sfactor;
+        _blendDstAlpha = dfactor;
+    }
+
+    public void blendFuncSeparate(int srcRGB, int dstRGB, int srcAlpha, int dstAlpha)
+    {
+        _blendSrcRgb = srcRGB;
+        _blendDstRgb = dstRGB;
+        _blendSrcAlpha = srcAlpha;
+        _blendDstAlpha = dstAlpha;
+    }
+
+    public void blendEquation(int mode)
+    {
+        _blendEquationRgb = mode;
+        _blendEquationAlpha = mode;
+    }
+
+    public void blendEquationSeparate(int modeRGB, int modeAlpha)
+    {
+        _blendEquationRgb = modeRGB;
+        _blendEquationAlpha = modeAlpha;
+    }
+
+    public void blendColor(double red, double green, double blue, double alpha)
+    {
+        _blendColor[0] = Math.Clamp(red, 0, 1);
+        _blendColor[1] = Math.Clamp(green, 0, 1);
+        _blendColor[2] = Math.Clamp(blue, 0, 1);
+        _blendColor[3] = Math.Clamp(alpha, 0, 1);
+    }
+
+    public void cullFace(int mode) => _cullFaceMode = mode;
+
+    public void frontFace(int mode) => _frontFaceMode = mode;
+
+    public void polygonOffset(double factor, double units)
+    {
+        _polygonOffsetFactor = factor;
+        _polygonOffsetUnits = units;
+    }
+
+    public void lineWidth(double width) => _lineWidth = Math.Max(1, width);
+
     public void hint(int target, int mode) { }
     public void stencilFunc(int func, int reference, int mask) { }
     public void stencilFuncSeparate(int face, int func, int reference, int mask) { }
@@ -789,6 +1112,28 @@ internal sealed class CanvasWebGlRenderingContext
     public void drawArrays(int mode, int first, int count)
     {
         DrawCallCount++;
+        TriangleCount += EstimateTriangleCount(mode, count);
+        QueueDraw(new WebGlDrawCommand(
+            mode,
+            first,
+            count,
+            UNSIGNED_SHORT,
+            0,
+            Indexed: false,
+            _currentProgram,
+            SnapshotAttributes(),
+            SnapshotEnabledAttributes(),
+            null,
+            SnapshotTextures(),
+            SnapshotPipelineState()));
+        RequestNativeRender();
+        LastDrawStatus = $"Queued drawArrays mode {mode} with {count} vertices";
+
+        if (!ShouldUseSoftwareFallback)
+        {
+            return;
+        }
+
         if (mode != TRIANGLES)
         {
             LastDrawStatus = $"Unsupported drawArrays mode {mode}";
@@ -802,13 +1147,41 @@ internal sealed class CanvasWebGlRenderingContext
     public void drawElements(int mode, int count, int type, int offset)
     {
         DrawCallCount++;
+        TriangleCount += EstimateTriangleCount(mode, count);
+        var elementBuffer = _currentVertexArray?.ElementArrayBuffer ?? _elementArrayBuffer;
+        if (elementBuffer is not null)
+        {
+            elementBuffer.ElementTypeHint = type;
+        }
+
+        QueueDraw(new WebGlDrawCommand(
+            mode,
+            0,
+            count,
+            type,
+            offset,
+            Indexed: true,
+            _currentProgram,
+            SnapshotAttributes(),
+            SnapshotEnabledAttributes(),
+            elementBuffer,
+            SnapshotTextures(),
+            SnapshotPipelineState()));
+        RequestNativeRender();
+        LastDrawStatus = $"Queued drawElements mode {mode} with {count} indices";
+
+        if (!ShouldUseSoftwareFallback)
+        {
+            return;
+        }
+
         if (mode != TRIANGLES)
         {
             LastDrawStatus = $"Unsupported drawElements mode {mode}";
             return;
         }
 
-        var source = (_currentVertexArray?.ElementArrayBuffer ?? _elementArrayBuffer)?.Data;
+        var source = elementBuffer?.Data;
         var indices = ExtractIndices(source, type, count, offset);
         DrawTriangles(indices);
     }
@@ -819,8 +1192,9 @@ internal sealed class CanvasWebGlRenderingContext
     public void drawArraysInstanced(int mode, int first, int count, int instanceCount)
         => drawArrays(mode, first, count);
 
-    public void flush() { }
-    public void finish() { }
+    public void flush() => RequestNativeRender();
+
+    public void finish() => RequestNativeRender();
 
     public bool isBuffer(WebGlBuffer? value) => value is not null;
     public bool isProgram(WebGlProgram? value) => value is not null;
@@ -852,11 +1226,6 @@ internal sealed class CanvasWebGlRenderingContext
         var projection = GetUniformMatrix(program, "projectionMatrix", Matrix4.Identity);
         var matrix = projection * modelView;
         var defaultColor = GetUniformColor(program);
-        WebGlVertexAttribState? uvState = null;
-        var useLavaShader = IsLavaShader(program) &&
-            TryGetAttribute(attributes, program, "uv", out uvState) &&
-            uvState.Buffer?.Data is not null;
-        var uvs = useLavaShader ? ExtractDoubles(uvState!.Buffer!.Data) : Array.Empty<double>();
         var triangles = new List<SoftwareTriangle>();
 
         for (var i = 0; i + 2 < indices.Count; i += 3)
@@ -870,23 +1239,11 @@ internal sealed class CanvasWebGlRenderingContext
                 continue;
             }
 
-            var color = defaultColor;
-            if (useLavaShader)
-            {
-                var uv0 = ReadAttributeVector2(uvs, uvState!, indices[i]);
-                var uv1 = ReadAttributeVector2(uvs, uvState!, indices[i + 1]);
-                var uv2 = ReadAttributeVector2(uvs, uvState!, indices[i + 2]);
-                var u = (uv0.X + uv1.X + uv2.X) / 3.0;
-                var v = (uv0.Y + uv1.Y + uv2.Y) / 3.0;
-                color = EvaluateLavaShader(program, u, v);
-            }
-
-            triangles.Add(new SoftwareTriangle(p0.Value, p1.Value, p2.Value, color));
+            triangles.Add(new SoftwareTriangle(p0.Value, p1.Value, p2.Value, defaultColor));
         }
 
-        TriangleCount += triangles.Count;
         LastDrawStatus = triangles.Count > 0
-            ? useLavaShader ? $"Drew {triangles.Count} lava-shaded triangle(s)" : $"Drew {triangles.Count} triangle(s)"
+            ? $"Drew {triangles.Count} software fallback triangle(s)"
             : "No complete triangles";
 
         var orderedTriangles = triangles.OrderBy(t => t.Depth).ToArray();
@@ -939,21 +1296,6 @@ internal sealed class CanvasWebGlRenderingContext
         return new ProjectedVertex(screenX, screenY, ndcZ);
     }
 
-    private static AttributeVector2 ReadAttributeVector2(double[] values, WebGlVertexAttribState state, int vertexIndex)
-    {
-        var componentCount = Math.Max(1, state.Size);
-        var stride = state.Stride > 0 ? state.Stride / SizeOfType(state.Type) : componentCount;
-        var start = state.Offset / SizeOfType(state.Type) + vertexIndex * stride;
-        if (start < 0 || start >= values.Length)
-        {
-            return default;
-        }
-
-        var x = values[start];
-        var y = componentCount > 1 && start + 1 < values.Length ? values[start + 1] : 0;
-        return new AttributeVector2(x, y);
-    }
-
     private Matrix4 GetUniformMatrix(WebGlProgram program, string name, Matrix4 fallback)
     {
         if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length < 16)
@@ -966,7 +1308,7 @@ internal sealed class CanvasWebGlRenderingContext
 
     private double[] GetUniformColor(WebGlProgram program)
     {
-        var color = new[] { 1d, 1d, 1d, 1d };
+        var color = new[] { 0.1d, 0.45d, 0.95d, 1d };
         if (program.UniformValues.TryGetValue("diffuse", out var diffuseValue) && diffuseValue is double[] diffuse && diffuse.Length >= 3)
         {
             color[0] = diffuse[0];
@@ -980,110 +1322,6 @@ internal sealed class CanvasWebGlRenderingContext
         }
 
         return color;
-    }
-
-    private bool IsLavaShader(WebGlProgram program)
-    {
-        var uniforms = program.ActiveUniforms.Select(static symbol => symbol.Name).ToHashSet(StringComparer.Ordinal);
-        return uniforms.Contains("time") &&
-            uniforms.Contains("uvScale") &&
-            uniforms.Contains("texture1") &&
-            uniforms.Contains("texture2");
-    }
-
-    private double[] EvaluateLavaShader(WebGlProgram program, double u, double v)
-    {
-        var time = GetUniformScalar(program, "time", 1.0);
-        var uvScale = GetUniformVector2(program, "uvScale", 1.0, 1.0);
-        var scaledU = u * uvScale.X;
-        var scaledV = v * uvScale.Y;
-
-        var noise = LavaNoise(scaledU, scaledV, time);
-        var t1x = (scaledU + 1.5 * time * 0.02 + noise.X * 2.0) * 2.0;
-        var t1y = (scaledV - 1.5 * time * 0.02 + noise.Y * 2.0) * 2.0;
-        var t2x = (scaledU - 0.5 * time * 0.01 - noise.Y * 0.2) * 2.0;
-        var t2y = (scaledV + 2.0 * time * 0.01 + noise.Z * 0.2) * 2.0;
-
-        var p = LavaNoise(t1x, t1y, time * 0.33).W;
-        var lava = LavaTexture(t2x, t2y, time);
-        var heat = Math.Clamp(p * 1.9 + 0.2, 0, 2.8);
-        var r = lava.X * heat + lava.X * lava.X - 0.1;
-        var g = lava.Y * heat + lava.Y * lava.Y - 0.1;
-        var b = lava.Z * heat + lava.Z * lava.Z - 0.1;
-
-        if (r > 1.0)
-        {
-            g += Math.Clamp(r - 2.0, 0.0, 100.0);
-            b += Math.Clamp(r - 2.0, 0.0, 100.0);
-        }
-
-        if (g > 1.0)
-        {
-            r += g - 1.0;
-            b += g - 1.0;
-        }
-
-        if (b > 1.0)
-        {
-            r += b - 1.0;
-            g += b - 1.0;
-        }
-
-        var fogDensity = GetUniformScalar(program, "fogDensity", 0.45);
-        var fogFactor = Math.Clamp(fogDensity * 0.18, 0, 0.5);
-        var fogColor = GetUniformVector3(program, "fogColor", 0, 0, 0);
-
-        return new[]
-        {
-            Mix(Math.Clamp(r, 0, 1), fogColor.X, fogFactor),
-            Mix(Math.Clamp(g, 0, 1), fogColor.Y, fogFactor),
-            Mix(Math.Clamp(b, 0, 1), fogColor.Z, fogFactor),
-            1d
-        };
-    }
-
-    private double GetUniformScalar(WebGlProgram program, string name, double fallback)
-    {
-        if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length == 0)
-        {
-            return fallback;
-        }
-
-        return values[0];
-    }
-
-    private AttributeVector2 GetUniformVector2(WebGlProgram program, string name, double fallbackX, double fallbackY)
-    {
-        if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length < 2)
-        {
-            return new AttributeVector2(fallbackX, fallbackY);
-        }
-
-        return new AttributeVector2(values[0], values[1]);
-    }
-
-    private AttributeVector3 GetUniformVector3(WebGlProgram program, string name, double fallbackX, double fallbackY, double fallbackZ)
-    {
-        if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length < 3)
-        {
-            return new AttributeVector3(fallbackX, fallbackY, fallbackZ);
-        }
-
-        return new AttributeVector3(values[0], values[1], values[2]);
-    }
-
-    private bool TryGetAttribute(
-        IReadOnlyDictionary<int, WebGlVertexAttribState> attributes,
-        WebGlProgram program,
-        string name,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out WebGlVertexAttribState? state)
-    {
-        if (!program.AttributeLocations.TryGetValue(name, out var location))
-        {
-            location = GetOrCreateAttribLocation(program, name);
-        }
-
-        return attributes.TryGetValue(location, out state);
     }
 
     private void SetUniform(object? location, double[] values)
@@ -1330,30 +1568,6 @@ internal sealed class CanvasWebGlRenderingContext
     private static double ToDouble(object? value)
         => TryConvertToDouble(value, out var result) ? result : 0d;
 
-    private static AttributeVector4 LavaNoise(double x, double y, double time)
-    {
-        var n1 = Fract(Math.Sin(x * 12.9898 + y * 78.233 + time * 0.91) * 43758.5453);
-        var n2 = Fract(Math.Sin((x + 7.37) * 26.651 + (y - 2.11) * 47.853 + time * 1.37) * 24634.6345);
-        var n3 = Fract(Math.Sin((x - 3.19) * 18.423 + (y + 9.41) * 99.121 + time * 0.61) * 56473.2361);
-        var n4 = (n1 + n2 + n3) / 3.0;
-        return new AttributeVector4(n1, n2, n3, n4);
-    }
-
-    private static AttributeVector3 LavaTexture(double x, double y, double time)
-    {
-        var veins = Math.Pow(Math.Abs(Math.Sin(x * 3.2 + Math.Sin(y * 5.7 + time * 0.2))), 0.42);
-        var cells = LavaNoise(x * 0.8, y * 1.3, time).W;
-        var heat = Math.Clamp(0.35 + veins * 0.8 + cells * 0.55, 0, 1);
-        return new AttributeVector3(
-            0.45 + heat * 0.75,
-            0.05 + heat * heat * 0.5,
-            Math.Max(0, heat - 0.82) * 0.22);
-    }
-
-    private static double Fract(double value) => value - Math.Floor(value);
-
-    private static double Mix(double a, double b, double t) => a * (1 - t) + b * t;
-
     private static int SizeOfType(int type)
         => type switch
         {
@@ -1364,12 +1578,6 @@ internal sealed class CanvasWebGlRenderingContext
         };
 
     private readonly record struct ProjectedVertex(double X, double Y, double Z);
-
-    private readonly record struct AttributeVector2(double X, double Y);
-
-    private readonly record struct AttributeVector3(double X, double Y, double Z);
-
-    private readonly record struct AttributeVector4(double X, double Y, double Z, double W);
 
     private readonly record struct SoftwareTriangle(ProjectedVertex A, ProjectedVertex B, ProjectedVertex C, double[] Color)
     {
@@ -1454,6 +1662,10 @@ internal sealed class WebGlBuffer
     public Array? Data { get; set; }
     public int Target { get; set; }
     public int Usage { get; set; }
+    public int ElementTypeHint { get; set; }
+    public int NativeId { get; set; }
+    public bool NativeDirty { get; set; } = true;
+    public bool Deleted { get; set; }
 }
 
 internal sealed class WebGlShader
@@ -1466,6 +1678,10 @@ internal sealed class WebGlShader
     public int Type { get; }
     public string Source { get; set; } = string.Empty;
     public bool Compiled { get; set; }
+    public int NativeId { get; set; }
+    public bool NativeDirty { get; set; } = true;
+    public string NativeInfoLog { get; set; } = string.Empty;
+    public bool Deleted { get; set; }
 }
 
 internal sealed class WebGlProgram
@@ -1477,6 +1693,11 @@ internal sealed class WebGlProgram
     public Dictionary<string, WebGlUniformLocation> UniformLocations { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, object?> UniformValues { get; } = new(StringComparer.Ordinal);
     public bool Linked { get; set; }
+    public int NativeId { get; set; }
+    public bool NativeDirty { get; set; } = true;
+    public bool NativeLinked { get; set; }
+    public string NativeInfoLog { get; set; } = string.Empty;
+    public bool Deleted { get; set; }
 }
 
 internal sealed record WebGlShaderSymbol(string Name, int Type, int Size);
@@ -1521,7 +1742,33 @@ internal sealed class WebGlShaderPrecisionFormat
     public int precision { get; }
 }
 
-internal sealed class WebGlTexture;
+internal sealed class WebGlTexture
+{
+    public int Target { get; set; } = 0x0DE1;
+    public int Level { get; set; }
+    public int InternalFormat { get; set; } = 0x1908;
+    public int Width { get; set; } = 1;
+    public int Height { get; set; } = 1;
+    public int Border { get; set; }
+    public int Format { get; set; } = 0x1908;
+    public int Type { get; set; } = 0x1401;
+    public Array? Pixels { get; set; }
+    public int UnpackAlignment { get; set; } = 4;
+    public bool UnpackFlipY { get; set; }
+    public bool UnpackPremultiplyAlpha { get; set; }
+    public bool GenerateMipmap { get; set; }
+    public Dictionary<int, int> Parameters { get; } = new()
+    {
+        [0x2800] = 0x2601,
+        [0x2801] = 0x2601,
+        [0x2802] = 0x812F,
+        [0x2803] = 0x812F
+    };
+
+    public int NativeId { get; set; }
+    public bool NativeDirty { get; set; } = true;
+    public bool Deleted { get; set; }
+}
 
 internal sealed class WebGlFramebuffer;
 
@@ -1533,4 +1780,5 @@ internal sealed class WebGlVertexArrayObject
 {
     internal WebGlBuffer? ElementArrayBuffer { get; set; }
     internal Dictionary<int, WebGlVertexAttribState> Attributes { get; } = new();
+    internal HashSet<int> EnabledAttributes { get; } = new();
 }

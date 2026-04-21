@@ -16,6 +16,7 @@ internal static class CanvasContextBridge
         private readonly Control _target;
         private readonly CanvasDrawingSurface _surface;
         private readonly CanvasRenderingContext2D _context;
+        private CanvasOpenGlDrawingSurface? _openGlSurface;
         private CanvasWebGlRenderingContext? _webGlContext;
         private AdornerLayer? _layer;
 
@@ -37,7 +38,27 @@ internal static class CanvasContextBridge
 
         public CanvasRenderingContext2D Context => _context;
 
-        public CanvasWebGlRenderingContext WebGlContext => _webGlContext ??= new CanvasWebGlRenderingContext(_surface);
+        public CanvasWebGlRenderingContext WebGlContext
+        {
+            get
+            {
+                if (_webGlContext is not null)
+                {
+                    return _webGlContext;
+                }
+
+                _openGlSurface = new CanvasOpenGlDrawingSurface();
+                _webGlContext = new CanvasWebGlRenderingContext(_surface, _openGlSurface);
+                _openGlSurface.Context = _webGlContext;
+
+                if (_layer is not null)
+                {
+                    AttachSurface(_openGlSurface);
+                }
+
+                return _webGlContext;
+            }
+        }
 
         public CanvasDrawingSurface Surface => _surface;
 
@@ -106,6 +127,11 @@ internal static class CanvasContextBridge
             layer.Children.Add(_surface);
             _layer = layer;
             _surface.InvalidateVisual();
+
+            if (_openGlSurface is not null)
+            {
+                AttachSurface(_openGlSurface);
+            }
         }
 
         private void DetachFromLayer()
@@ -113,10 +139,31 @@ internal static class CanvasContextBridge
             if (_layer is { } layer)
             {
                 layer.Children.Remove(_surface);
+                if (_openGlSurface is not null)
+                {
+                    layer.Children.Remove(_openGlSurface);
+                }
+
                 _layer = null;
             }
 
             AdornerLayer.SetAdornedElement(_surface, null);
+            if (_openGlSurface is not null)
+            {
+                AdornerLayer.SetAdornedElement(_openGlSurface, null);
+            }
+        }
+
+        private void AttachSurface(Control surface)
+        {
+            if (_layer is not { } layer || layer.Children.Contains(surface))
+            {
+                return;
+            }
+
+            AdornerLayer.SetAdornedElement(surface, _target);
+            AdornerLayer.SetIsClipEnabled(surface, true);
+            layer.Children.Add(surface);
         }
     }
 
