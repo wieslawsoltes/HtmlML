@@ -187,6 +187,31 @@ public class CanvasRenderingContext2DTests
         }
     }
 
+    [AvaloniaFact]
+    public void WebGlSurface_AttachesInsideEmptyDecoratorTarget()
+    {
+        var canvasTarget = new Border
+        {
+            Width = 80,
+            Height = 40,
+            Background = Brushes.White
+        };
+        var window = new Window
+        {
+            Width = 100,
+            Height = 80,
+            Content = new VisualLayerManager { Child = canvasTarget }
+        };
+
+        window.Show();
+
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(CanvasContextBridge.GetContext(canvasTarget, "webgl"));
+        var surface = Assert.IsType<CanvasOpenGlDrawingSurface>(canvasTarget.Child);
+
+        Assert.Same(context, surface.Context);
+        Assert.Same(canvasTarget, surface.GetVisualParent());
+    }
+
     private static Color ReadPixel(Bitmap bitmap, int x, int y)
     {
         var buffer = new byte[4];

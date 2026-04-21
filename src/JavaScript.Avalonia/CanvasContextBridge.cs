@@ -18,6 +18,7 @@ internal static class CanvasContextBridge
         private readonly CanvasRenderingContext2D _context;
         private CanvasOpenGlDrawingSurface? _openGlSurface;
         private Decorator? _openGlAdorner;
+        private Decorator? _openGlDecoratorHost;
         private CanvasWebGlRenderingContext? _webGlContext;
         private AdornerLayer? _layer;
 
@@ -49,20 +50,10 @@ internal static class CanvasContextBridge
                 }
 
                 _openGlSurface = new CanvasOpenGlDrawingSurface();
-                _openGlAdorner = new Decorator
-                {
-                    Child = _openGlSurface,
-                    ClipToBounds = true,
-                    IsHitTestVisible = false,
-                    Focusable = false
-                };
                 _webGlContext = new CanvasWebGlRenderingContext(_surface, _openGlSurface);
                 _openGlSurface.Context = _webGlContext;
 
-                if (_layer is not null)
-                {
-                    AttachSurface(_openGlAdorner);
-                }
+                AttachOpenGlSurface();
 
                 return _webGlContext;
             }
@@ -138,7 +129,7 @@ internal static class CanvasContextBridge
 
             if (_openGlSurface is not null)
             {
-                AttachSurface(_openGlAdorner);
+                AttachOpenGlSurface();
             }
         }
 
@@ -160,6 +151,52 @@ internal static class CanvasContextBridge
             {
                 AdornerLayer.SetAdornedElement(_openGlAdorner, null);
             }
+
+            DetachOpenGlSurfaceFromTarget();
+        }
+
+        private void AttachOpenGlSurface()
+        {
+            if (_openGlSurface is null)
+            {
+                return;
+            }
+
+            if (_openGlSurface.GetVisualParent() is not null)
+            {
+                if (_openGlAdorner?.GetVisualParent() is null)
+                {
+                    AttachSurface(_openGlAdorner);
+                }
+
+                return;
+            }
+
+            if (_target is Decorator { Child: null } decorator)
+            {
+                decorator.Child = _openGlSurface;
+                _openGlDecoratorHost = decorator;
+                return;
+            }
+
+            _openGlAdorner = new Decorator
+            {
+                Child = _openGlSurface,
+                ClipToBounds = true,
+                IsHitTestVisible = false,
+                Focusable = false
+            };
+            AttachSurface(_openGlAdorner);
+        }
+
+        private void DetachOpenGlSurfaceFromTarget()
+        {
+            if (_openGlDecoratorHost is { } host && ReferenceEquals(host.Child, _openGlSurface))
+            {
+                host.Child = null;
+            }
+
+            _openGlDecoratorHost = null;
         }
 
         private void AttachSurface(Control? surface)
