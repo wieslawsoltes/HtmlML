@@ -232,6 +232,7 @@ public class CanvasRenderingContext2DTests
 
         Assert.Same(context, canvasTarget.Context);
         Assert.NotNull(canvasTarget.GetVisualParent());
+        Assert.Empty(window.GetVisualDescendants().OfType<CanvasDrawingSurface>());
     }
 
     private static Color ReadPixel(Bitmap bitmap, int x, int y)
