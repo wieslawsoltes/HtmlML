@@ -1675,6 +1675,153 @@ renderChart(currentType);
 """
             ),
             new Preset(
+                "Canvas WebGL + Three.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#0f172a" BorderBrush="#1e293b" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas WebGL with Three.js" FontWeight="SemiBold" Foreground="#e5e7eb" />
+    <TextBlock Text="Runs Three.js against JavaScript.Avalonia's browser-style WebGL context and renders the scene into the canvas surface." TextWrapping="Wrap" Foreground="#94a3b8" />
+    <Border Name="threeSurface" Width="720" Height="420" Background="#0b1220" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="threeToggle" Content="Pause rotation" />
+      <Button Name="threeShuffle" Content="Shuffle colors" />
+      <Button Name="threeReset" Content="Reset camera" />
+    </StackPanel>
+    <TextBlock Name="threeStatus" Foreground="#cbd5e1" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('threeSurface');
+const toggleBtn = document.getElementById('threeToggle');
+const shuffleBtn = document.getElementById('threeShuffle');
+const resetBtn = document.getElementById('threeReset');
+const status = document.getElementById('threeStatus');
+
+if (!surface) {
+  throw new Error('threeSurface element not found');
+}
+
+const gl = surface.getContext('webgl') || surface.getContext('experimental-webgl');
+if (!gl) {
+  throw new Error('Canvas WebGL context unavailable');
+}
+
+let threeModule;
+try {
+  threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+} catch (error) {
+  const message = `Failed to load Three.js: ${error}`;
+  if (status) {
+    status.textContent = message;
+  }
+  console.error(message);
+  throw error;
+}
+
+const THREE = threeModule?.REVISION ? threeModule : (typeof window !== 'undefined' ? window.THREE : undefined);
+if (!THREE) {
+  throw new Error('Three.js did not expose a renderer API');
+}
+
+const renderer = new THREE.WebGLRenderer({
+  canvas: surface,
+  context: gl,
+  antialias: false,
+  alpha: false
+});
+renderer.setPixelRatio(1);
+renderer.setSize(surface.offsetWidth, surface.offsetHeight, false);
+renderer.setClearColor(0x0b1220, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, surface.offsetWidth / surface.offsetHeight, 0.1, 50);
+camera.position.set(0, 1.2, 5.8);
+camera.lookAt(0, 0, 0);
+
+const group = new THREE.Group();
+scene.add(group);
+
+const cube = new THREE.Mesh(
+  new THREE.BoxGeometry(1.45, 1.45, 1.45),
+  new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+);
+cube.position.x = -1.25;
+group.add(cube);
+
+const prism = new THREE.Mesh(
+  new THREE.ConeGeometry(0.9, 1.8, 5),
+  new THREE.MeshBasicMaterial({ color: 0xf97316 })
+);
+prism.position.x = 1.25;
+prism.rotation.z = 0.35;
+group.add(prism);
+
+const base = new THREE.Mesh(
+  new THREE.PlaneGeometry(5.6, 2.2),
+  new THREE.MeshBasicMaterial({ color: 0x1e293b })
+);
+base.position.y = -1.35;
+base.rotation.x = -Math.PI / 2;
+scene.add(base);
+
+const palette = [0x38bdf8, 0xf97316, 0xa855f7, 0x22c55e, 0xf43f5e, 0xeab308];
+let spinning = true;
+let frameHandle = 0;
+
+const report = message => {
+  if (status) {
+    status.textContent = `${message} Draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.`;
+  }
+};
+
+const drawScene = () => {
+  renderer.render(scene, camera);
+  report(`Three.js ${THREE.REVISION} rendered via Canvas WebGL.`);
+};
+
+const tick = () => {
+  frameHandle = 0;
+  if (spinning) {
+    group.rotation.x += 0.012;
+    group.rotation.y += 0.018;
+    drawScene();
+    frameHandle = window.requestAnimationFrame(tick);
+  }
+};
+
+toggleBtn.addEventListener('click', () => {
+  spinning = !spinning;
+  toggleBtn.textContent = spinning ? 'Pause rotation' : 'Resume rotation';
+  if (spinning) {
+    if (!frameHandle) {
+      frameHandle = window.requestAnimationFrame(tick);
+    }
+  } else if (frameHandle) {
+    window.cancelAnimationFrame(frameHandle);
+    frameHandle = 0;
+    drawScene();
+  }
+});
+
+shuffleBtn.addEventListener('click', () => {
+  cube.material.color.setHex(palette[Math.floor(Math.random() * palette.length)]);
+  prism.material.color.setHex(palette[Math.floor(Math.random() * palette.length)]);
+  drawScene();
+});
+
+resetBtn.addEventListener('click', () => {
+  group.rotation.set(0, 0, 0);
+  camera.position.set(0, 1.2, 5.8);
+  camera.lookAt(0, 0, 0);
+  drawScene();
+});
+
+drawScene();
+frameHandle = window.requestAnimationFrame(tick);
+"""
+            ),
+            new Preset(
                 "Canvas 2D + Fabric.js",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#ffffff" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
