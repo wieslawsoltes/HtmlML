@@ -105,10 +105,7 @@ internal sealed class CanvasDrawingSurface : Control
         // also clip its own Render output so oversized draws cannot cover siblings.
         using (context.PushClip(bounds))
         {
-            if (!CanRenderWebGlFrameThroughSkia())
-            {
-                RenderCommands(context);
-            }
+            RenderCommands(context);
 
             if (_webGlFrame is not null)
             {
@@ -116,9 +113,6 @@ internal sealed class CanvasDrawingSurface : Control
             }
         }
     }
-
-    private bool CanRenderWebGlFrameThroughSkia()
-        => _webGlFrame is not null && LastWebGlRenderBackend.StartsWith("Skia", StringComparison.Ordinal);
 
     internal void RenderCommands(DrawingContext context)
     {

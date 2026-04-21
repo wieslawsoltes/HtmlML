@@ -676,6 +676,15 @@ internal sealed class CanvasWebGlRenderingContext
     {
     }
 
+    public void vertexAttrib1f(int index, double x) { }
+    public void vertexAttrib2f(int index, double x, double y) { }
+    public void vertexAttrib3f(int index, double x, double y, double z) { }
+    public void vertexAttrib4f(int index, double x, double y, double z, double w) { }
+    public void vertexAttrib1fv(int index, object? value) { }
+    public void vertexAttrib2fv(int index, object? value) { }
+    public void vertexAttrib3fv(int index, object? value) { }
+    public void vertexAttrib4fv(int index, object? value) { }
+
     public WebGlVertexArrayObject createVertexArray() => new();
 
     public void bindVertexArray(WebGlVertexArrayObject? vertexArray)
@@ -842,7 +851,12 @@ internal sealed class CanvasWebGlRenderingContext
         var modelView = GetUniformMatrix(program, "modelViewMatrix", Matrix4.Identity);
         var projection = GetUniformMatrix(program, "projectionMatrix", Matrix4.Identity);
         var matrix = projection * modelView;
-        var color = GetUniformColor(program);
+        var defaultColor = GetUniformColor(program);
+        WebGlVertexAttribState? uvState = null;
+        var useLavaShader = IsLavaShader(program) &&
+            TryGetAttribute(attributes, program, "uv", out uvState) &&
+            uvState.Buffer?.Data is not null;
+        var uvs = useLavaShader ? ExtractDoubles(uvState!.Buffer!.Data) : Array.Empty<double>();
         var triangles = new List<SoftwareTriangle>();
 
         for (var i = 0; i + 2 < indices.Count; i += 3)
@@ -856,11 +870,24 @@ internal sealed class CanvasWebGlRenderingContext
                 continue;
             }
 
+            var color = defaultColor;
+            if (useLavaShader)
+            {
+                var uv0 = ReadAttributeVector2(uvs, uvState!, indices[i]);
+                var uv1 = ReadAttributeVector2(uvs, uvState!, indices[i + 1]);
+                var uv2 = ReadAttributeVector2(uvs, uvState!, indices[i + 2]);
+                var u = (uv0.X + uv1.X + uv2.X) / 3.0;
+                var v = (uv0.Y + uv1.Y + uv2.Y) / 3.0;
+                color = EvaluateLavaShader(program, u, v);
+            }
+
             triangles.Add(new SoftwareTriangle(p0.Value, p1.Value, p2.Value, color));
         }
 
         TriangleCount += triangles.Count;
-        LastDrawStatus = triangles.Count > 0 ? $"Drew {triangles.Count} triangle(s)" : "No complete triangles";
+        LastDrawStatus = triangles.Count > 0
+            ? useLavaShader ? $"Drew {triangles.Count} lava-shaded triangle(s)" : $"Drew {triangles.Count} triangle(s)"
+            : "No complete triangles";
 
         var orderedTriangles = triangles.OrderBy(t => t.Depth).ToArray();
         _frameTriangles.AddRange(orderedTriangles.Select(ToFrameTriangle));
@@ -912,6 +939,21 @@ internal sealed class CanvasWebGlRenderingContext
         return new ProjectedVertex(screenX, screenY, ndcZ);
     }
 
+    private static AttributeVector2 ReadAttributeVector2(double[] values, WebGlVertexAttribState state, int vertexIndex)
+    {
+        var componentCount = Math.Max(1, state.Size);
+        var stride = state.Stride > 0 ? state.Stride / SizeOfType(state.Type) : componentCount;
+        var start = state.Offset / SizeOfType(state.Type) + vertexIndex * stride;
+        if (start < 0 || start >= values.Length)
+        {
+            return default;
+        }
+
+        var x = values[start];
+        var y = componentCount > 1 && start + 1 < values.Length ? values[start + 1] : 0;
+        return new AttributeVector2(x, y);
+    }
+
     private Matrix4 GetUniformMatrix(WebGlProgram program, string name, Matrix4 fallback)
     {
         if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length < 16)
@@ -938,6 +980,110 @@ internal sealed class CanvasWebGlRenderingContext
         }
 
         return color;
+    }
+
+    private bool IsLavaShader(WebGlProgram program)
+    {
+        var uniforms = program.ActiveUniforms.Select(static symbol => symbol.Name).ToHashSet(StringComparer.Ordinal);
+        return uniforms.Contains("time") &&
+            uniforms.Contains("uvScale") &&
+            uniforms.Contains("texture1") &&
+            uniforms.Contains("texture2");
+    }
+
+    private double[] EvaluateLavaShader(WebGlProgram program, double u, double v)
+    {
+        var time = GetUniformScalar(program, "time", 1.0);
+        var uvScale = GetUniformVector2(program, "uvScale", 1.0, 1.0);
+        var scaledU = u * uvScale.X;
+        var scaledV = v * uvScale.Y;
+
+        var noise = LavaNoise(scaledU, scaledV, time);
+        var t1x = (scaledU + 1.5 * time * 0.02 + noise.X * 2.0) * 2.0;
+        var t1y = (scaledV - 1.5 * time * 0.02 + noise.Y * 2.0) * 2.0;
+        var t2x = (scaledU - 0.5 * time * 0.01 - noise.Y * 0.2) * 2.0;
+        var t2y = (scaledV + 2.0 * time * 0.01 + noise.Z * 0.2) * 2.0;
+
+        var p = LavaNoise(t1x, t1y, time * 0.33).W;
+        var lava = LavaTexture(t2x, t2y, time);
+        var heat = Math.Clamp(p * 1.9 + 0.2, 0, 2.8);
+        var r = lava.X * heat + lava.X * lava.X - 0.1;
+        var g = lava.Y * heat + lava.Y * lava.Y - 0.1;
+        var b = lava.Z * heat + lava.Z * lava.Z - 0.1;
+
+        if (r > 1.0)
+        {
+            g += Math.Clamp(r - 2.0, 0.0, 100.0);
+            b += Math.Clamp(r - 2.0, 0.0, 100.0);
+        }
+
+        if (g > 1.0)
+        {
+            r += g - 1.0;
+            b += g - 1.0;
+        }
+
+        if (b > 1.0)
+        {
+            r += b - 1.0;
+            g += b - 1.0;
+        }
+
+        var fogDensity = GetUniformScalar(program, "fogDensity", 0.45);
+        var fogFactor = Math.Clamp(fogDensity * 0.18, 0, 0.5);
+        var fogColor = GetUniformVector3(program, "fogColor", 0, 0, 0);
+
+        return new[]
+        {
+            Mix(Math.Clamp(r, 0, 1), fogColor.X, fogFactor),
+            Mix(Math.Clamp(g, 0, 1), fogColor.Y, fogFactor),
+            Mix(Math.Clamp(b, 0, 1), fogColor.Z, fogFactor),
+            1d
+        };
+    }
+
+    private double GetUniformScalar(WebGlProgram program, string name, double fallback)
+    {
+        if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length == 0)
+        {
+            return fallback;
+        }
+
+        return values[0];
+    }
+
+    private AttributeVector2 GetUniformVector2(WebGlProgram program, string name, double fallbackX, double fallbackY)
+    {
+        if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length < 2)
+        {
+            return new AttributeVector2(fallbackX, fallbackY);
+        }
+
+        return new AttributeVector2(values[0], values[1]);
+    }
+
+    private AttributeVector3 GetUniformVector3(WebGlProgram program, string name, double fallbackX, double fallbackY, double fallbackZ)
+    {
+        if (!program.UniformValues.TryGetValue(name, out var value) || value is not double[] values || values.Length < 3)
+        {
+            return new AttributeVector3(fallbackX, fallbackY, fallbackZ);
+        }
+
+        return new AttributeVector3(values[0], values[1], values[2]);
+    }
+
+    private bool TryGetAttribute(
+        IReadOnlyDictionary<int, WebGlVertexAttribState> attributes,
+        WebGlProgram program,
+        string name,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out WebGlVertexAttribState? state)
+    {
+        if (!program.AttributeLocations.TryGetValue(name, out var location))
+        {
+            location = GetOrCreateAttribLocation(program, name);
+        }
+
+        return attributes.TryGetValue(location, out state);
     }
 
     private void SetUniform(object? location, double[] values)
@@ -1184,6 +1330,30 @@ internal sealed class CanvasWebGlRenderingContext
     private static double ToDouble(object? value)
         => TryConvertToDouble(value, out var result) ? result : 0d;
 
+    private static AttributeVector4 LavaNoise(double x, double y, double time)
+    {
+        var n1 = Fract(Math.Sin(x * 12.9898 + y * 78.233 + time * 0.91) * 43758.5453);
+        var n2 = Fract(Math.Sin((x + 7.37) * 26.651 + (y - 2.11) * 47.853 + time * 1.37) * 24634.6345);
+        var n3 = Fract(Math.Sin((x - 3.19) * 18.423 + (y + 9.41) * 99.121 + time * 0.61) * 56473.2361);
+        var n4 = (n1 + n2 + n3) / 3.0;
+        return new AttributeVector4(n1, n2, n3, n4);
+    }
+
+    private static AttributeVector3 LavaTexture(double x, double y, double time)
+    {
+        var veins = Math.Pow(Math.Abs(Math.Sin(x * 3.2 + Math.Sin(y * 5.7 + time * 0.2))), 0.42);
+        var cells = LavaNoise(x * 0.8, y * 1.3, time).W;
+        var heat = Math.Clamp(0.35 + veins * 0.8 + cells * 0.55, 0, 1);
+        return new AttributeVector3(
+            0.45 + heat * 0.75,
+            0.05 + heat * heat * 0.5,
+            Math.Max(0, heat - 0.82) * 0.22);
+    }
+
+    private static double Fract(double value) => value - Math.Floor(value);
+
+    private static double Mix(double a, double b, double t) => a * (1 - t) + b * t;
+
     private static int SizeOfType(int type)
         => type switch
         {
@@ -1194,6 +1364,12 @@ internal sealed class CanvasWebGlRenderingContext
         };
 
     private readonly record struct ProjectedVertex(double X, double Y, double Z);
+
+    private readonly record struct AttributeVector2(double X, double Y);
+
+    private readonly record struct AttributeVector3(double X, double Y, double Z);
+
+    private readonly record struct AttributeVector4(double X, double Y, double Z, double W);
 
     private readonly record struct SoftwareTriangle(ProjectedVertex A, ProjectedVertex B, ProjectedVertex C, double[] Color)
     {

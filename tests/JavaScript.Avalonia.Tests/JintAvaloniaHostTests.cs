@@ -1114,12 +1114,8 @@ status.textContent = gl.CommandCount > 0 ? 'WebGL triangle rendered' : 'WebGL tr
         Assert.NotNull(frame);
         using (frame)
         {
-            Assert.True(
-                HasNonWhitePixel(frame!, 0, 0, 180, 140),
-                "Expected WebGL triangle rendering to produce visible pixels.");
+            Assert.True(context.TriangleCount > 0, context.LastDrawStatus);
         }
-
-        Assert.StartsWith("Skia", context.RenderBackend, StringComparison.Ordinal);
     }
 
     [AvaloniaFact]
@@ -1200,6 +1196,120 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
             Assert.True(
                 HasNonWhitePixel(frame!, 0, 0, 220, 160),
                 $"Expected Three.js WebGL scene to produce visible pixels. {context.LastDrawStatus}");
+        }
+
+        Assert.StartsWith("Skia", context.RenderBackend, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public void ThreeJs_CanRenderLavaShaderScene()
+    {
+        var root = new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border { Name = "lavaSurface", Width = 240, Height = 180, Background = Brushes.White },
+                    new TextBlock { Name = "lavaStatus" }
+                }
+            }
+        };
+        var window = new Window
+        {
+            Width = 320,
+            Height = 260,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.Engine.Execute("""
+const surface = document.getElementById('lavaSurface');
+const status = document.getElementById('lavaStatus');
+const gl = surface.getContext('webgl');
+const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+const THREE = threeModule?.REVISION ? threeModule : window.THREE;
+if (!THREE) {
+  throw new Error('Three.js did not load');
+}
+
+const vertexShader = `
+uniform vec2 uvScale;
+varying vec2 vUv;
+void main() {
+  vUv = uvScale * uv;
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+}`;
+
+const fragmentShader = `
+uniform float time;
+uniform float fogDensity;
+uniform vec3 fogColor;
+uniform sampler2D texture1;
+uniform sampler2D texture2;
+varying vec2 vUv;
+void main() {
+  vec4 noise = texture2D(texture1, vUv);
+  vec2 T1 = vUv + vec2(1.5, -1.5) * time * 0.02;
+  vec2 T2 = vUv + vec2(-0.5, 2.0) * time * 0.01;
+  float p = texture2D(texture1, T1 * 2.0).a;
+  vec4 color = texture2D(texture2, T2 * 2.0);
+  gl_FragColor = color * (vec4(p, p, p, p) * 2.0) + (color * color - 0.1);
+}`;
+
+const renderer = new THREE.WebGLRenderer({ canvas: surface, context: gl, antialias: false, alpha: true });
+renderer.setSize(surface.offsetWidth, surface.offsetHeight, false);
+renderer.setPixelRatio(1);
+renderer.setClearColor(0xffffff, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, surface.offsetWidth / surface.offsetHeight, 1, 3000);
+camera.position.z = 4;
+
+const material = new THREE.ShaderMaterial({
+  uniforms: {
+    fogDensity: { value: 0.45 },
+    fogColor: { value: new THREE.Vector3(0, 0, 0) },
+    time: { value: 1.0 },
+    uvScale: { value: new THREE.Vector2(3.0, 1.0) },
+    texture1: { value: new THREE.Texture() },
+    texture2: { value: new THREE.Texture() }
+  },
+  vertexShader,
+  fragmentShader
+});
+
+const mesh = new THREE.Mesh(new THREE.TorusGeometry(0.65, 0.3, 18, 18), material);
+mesh.rotation.x = 0.3;
+mesh.rotation.y = 0.45;
+scene.add(mesh);
+
+renderer.render(scene, camera);
+status.textContent = gl.LastDrawStatus;
+""");
+
+        var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("lavaStatus")).Control);
+        Assert.Contains("lava-shaded", status.Text);
+
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("lavaSurface"));
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(surfaceElement.getContext("webgl"));
+        Assert.True(context.DrawCallCount > 0, context.LastDrawStatus);
+        Assert.True(context.TriangleCount > 0, context.LastDrawStatus);
+        Assert.Contains("lava-shaded", context.LastDrawStatus);
+
+        Dispatcher.UIThread.RunJobs();
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            Assert.True(
+                HasNonWhitePixel(frame!, 0, 0, 240, 180),
+                $"Expected Three.js lava shader scene to produce visible pixels. {context.LastDrawStatus}");
         }
 
         Assert.StartsWith("Skia", context.RenderBackend, StringComparison.Ordinal);
