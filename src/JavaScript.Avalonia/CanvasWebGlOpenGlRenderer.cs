@@ -102,6 +102,25 @@ internal sealed partial class CanvasWebGlRenderingContext
         return result;
     }
 
+    private IReadOnlyDictionary<string, object?> SnapshotUniforms(WebGlProgram? program)
+    {
+        if (program is null || program.UniformValues.Count == 0)
+        {
+            return new Dictionary<string, object?>(StringComparer.Ordinal);
+        }
+
+        var result = new Dictionary<string, object?>(program.UniformValues.Count, StringComparer.Ordinal);
+        foreach (var uniform in program.UniformValues)
+        {
+            result[uniform.Key] = CloneUniformValue(uniform.Value);
+        }
+
+        return result;
+    }
+
+    private static object? CloneUniformValue(object? value)
+        => value is Array array ? array.Clone() : value;
+
     private WebGlPipelineState SnapshotPipelineState()
         => new(
             (double[])_clearColor.Clone(),
@@ -306,6 +325,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         IReadOnlySet<int> EnabledAttributes,
         WebGlBuffer? ElementArrayBuffer,
         IReadOnlyDictionary<int, WebGlTexture?> Textures,
+        IReadOnlyDictionary<string, object?> Uniforms,
         WebGlPipelineState State) : WebGlCommand;
 
     private sealed record WebGlPipelineState(
@@ -879,12 +899,71 @@ internal sealed partial class CanvasWebGlRenderingContext
             if (fragmentShader)
             {
                 source = Regex.Replace(source, @"\bvarying\b", "in");
-                source = Regex.Replace(source, @"\bgl_FragColor\b", "out_FragColor");
-                return "#version 150\nout vec4 out_FragColor;\n" + source;
+                return "#version 150\nout vec4 out_FragColor;\n" + RewriteFragmentColorOutput(source);
             }
 
             source = Regex.Replace(source, @"\bvarying\b", "out");
             return "#version 150\n" + source;
+        }
+
+        private static string RewriteFragmentColorOutput(string source)
+        {
+            if (!Regex.IsMatch(source, @"\bgl_FragColor\b"))
+            {
+                return source;
+            }
+
+            source = Regex.Replace(source, @"\bgl_FragColor\b", "__jsavalonia_FragColor");
+            return TryInsertFragmentColorWriteback(source, out var rewritten)
+                ? rewritten
+                : Regex.Replace(source, @"\b__jsavalonia_FragColor\b", "out_FragColor");
+        }
+
+        private static bool TryInsertFragmentColorWriteback(string source, out string rewritten)
+        {
+            rewritten = source;
+            var match = Regex.Match(source, @"\bvoid\s+main\s*\(\s*(?:void)?\s*\)\s*\{");
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            var openBrace = match.Index + match.Length - 1;
+            var closeBrace = FindMatchingBrace(source, openBrace);
+            if (closeBrace < 0)
+            {
+                return false;
+            }
+
+            rewritten =
+                source[..(openBrace + 1)] +
+                "\n  vec4 __jsavalonia_FragColor = vec4(0.0);\n" +
+                source[(openBrace + 1)..closeBrace] +
+                "\n  out_FragColor = __jsavalonia_FragColor;\n" +
+                source[closeBrace..];
+            return true;
+        }
+
+        private static int FindMatchingBrace(string source, int openBrace)
+        {
+            var depth = 0;
+            for (var i = openBrace; i < source.Length; i++)
+            {
+                if (source[i] == '{')
+                {
+                    depth++;
+                }
+                else if (source[i] == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return i;
+                    }
+                }
+            }
+
+            return -1;
         }
 
         private void EnsureBuffer(GlInterface gl, WebGlBuffer buffer, int target)
@@ -1027,7 +1106,7 @@ internal sealed partial class CanvasWebGlRenderingContext
 
         private void ApplyUniforms(GlInterface gl, WebGlProgram program, WebGlDrawCommand command)
         {
-            foreach (var uniform in program.UniformValues)
+            foreach (var uniform in command.Uniforms)
             {
                 var name = NormalizeUniformName(uniform.Key);
                 var location = gl.GetUniformLocationString(program.NativeId, name);
@@ -1417,7 +1496,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         {
             if (_genFramebuffers is null)
             {
-                return 0;
+                return Gl.GenFramebuffer();
             }
 
             _genFramebuffers(1, out var id);
@@ -1432,7 +1511,14 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             var id = framebuffer;
-            _deleteFramebuffers?.Invoke(1, ref id);
+            if (_deleteFramebuffers is not null)
+            {
+                _deleteFramebuffers(1, ref id);
+            }
+            else
+            {
+                Gl.DeleteFramebuffer(id);
+            }
         }
 
         public void BindFramebuffer(int target, int framebuffer)
@@ -1448,16 +1534,25 @@ internal sealed partial class CanvasWebGlRenderingContext
         }
 
         public int CheckFramebufferStatus(int target)
-            => _checkFramebufferStatus?.Invoke(target) ?? 0;
+            => _checkFramebufferStatus?.Invoke(target) ?? Gl.CheckFramebufferStatus(target);
 
         public void FramebufferTexture2D(int target, int attachment, int textarget, int texture, int level)
-            => _framebufferTexture2D?.Invoke(target, attachment, textarget, texture, level);
+        {
+            if (_framebufferTexture2D is not null)
+            {
+                _framebufferTexture2D(target, attachment, textarget, texture, level);
+            }
+            else
+            {
+                Gl.FramebufferTexture2D(target, attachment, textarget, texture, level);
+            }
+        }
 
         public int GenRenderbuffer()
         {
             if (_genRenderbuffers is null)
             {
-                return 0;
+                return Gl.GenRenderbuffer();
             }
 
             _genRenderbuffers(1, out var id);
@@ -1472,17 +1567,51 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             var id = renderbuffer;
-            _deleteRenderbuffers?.Invoke(1, ref id);
+            if (_deleteRenderbuffers is not null)
+            {
+                _deleteRenderbuffers(1, ref id);
+            }
+            else
+            {
+                Gl.DeleteRenderbuffer(id);
+            }
         }
 
         public void BindRenderbuffer(int target, int renderbuffer)
-            => _bindRenderbuffer?.Invoke(target, renderbuffer);
+        {
+            if (_bindRenderbuffer is not null)
+            {
+                _bindRenderbuffer(target, renderbuffer);
+            }
+            else
+            {
+                Gl.BindRenderbuffer(target, renderbuffer);
+            }
+        }
 
         public void RenderbufferStorage(int target, int internalFormat, int width, int height)
-            => _renderbufferStorage?.Invoke(target, internalFormat, width, height);
+        {
+            if (_renderbufferStorage is not null)
+            {
+                _renderbufferStorage(target, internalFormat, width, height);
+            }
+            else
+            {
+                Gl.RenderbufferStorage(target, internalFormat, width, height);
+            }
+        }
 
         public void FramebufferRenderbuffer(int target, int attachment, int renderbufferTarget, int renderbuffer)
-            => _framebufferRenderbuffer?.Invoke(target, attachment, renderbufferTarget, renderbuffer);
+        {
+            if (_framebufferRenderbuffer is not null)
+            {
+                _framebufferRenderbuffer(target, attachment, renderbufferTarget, renderbuffer);
+            }
+            else
+            {
+                Gl.FramebufferRenderbuffer(target, attachment, renderbufferTarget, renderbuffer);
+            }
+        }
 
         private static T? Load<T>(GlInterface gl, string name)
             where T : Delegate
