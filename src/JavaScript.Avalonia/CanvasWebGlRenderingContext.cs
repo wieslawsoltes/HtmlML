@@ -53,6 +53,8 @@ internal sealed partial class CanvasWebGlRenderingContext
     private OpenGlRenderer? _openGlRenderer;
     private WebGlBuffer? _arrayBuffer;
     private WebGlBuffer? _elementArrayBuffer;
+    private WebGlFramebuffer? _framebuffer;
+    private WebGlRenderbuffer? _renderbuffer;
     private WebGlProgram? _currentProgram;
     private WebGlVertexArrayObject? _currentVertexArray;
 
@@ -445,6 +447,16 @@ internal sealed partial class CanvasWebGlRenderingContext
         if (pname == ELEMENT_ARRAY_BUFFER_BINDING)
         {
             return _currentVertexArray?.ElementArrayBuffer ?? _elementArrayBuffer;
+        }
+
+        if (pname == FRAMEBUFFER_BINDING)
+        {
+            return _framebuffer;
+        }
+
+        if (pname == RENDERBUFFER_BINDING)
+        {
+            return _renderbuffer;
         }
 
         if (pname == CURRENT_PROGRAM)
@@ -988,15 +1000,140 @@ internal sealed partial class CanvasWebGlRenderingContext
     }
 
     public WebGlFramebuffer createFramebuffer() => new();
-    public void bindFramebuffer(int target, WebGlFramebuffer? framebuffer) { }
-    public void deleteFramebuffer(WebGlFramebuffer? framebuffer) { }
-    public int checkFramebufferStatus(int target) => FRAMEBUFFER_COMPLETE;
-    public void framebufferTexture2D(params object?[] args) { }
+
+    public void bindFramebuffer(int target, WebGlFramebuffer? framebuffer)
+    {
+        if (target == FRAMEBUFFER)
+        {
+            _framebuffer = framebuffer is { Deleted: false } ? framebuffer : null;
+        }
+    }
+
+    public void deleteFramebuffer(WebGlFramebuffer? framebuffer)
+    {
+        if (framebuffer is null)
+        {
+            return;
+        }
+
+        framebuffer.Deleted = true;
+        if (ReferenceEquals(_framebuffer, framebuffer))
+        {
+            _framebuffer = null;
+        }
+    }
+
+    public int checkFramebufferStatus(int target)
+    {
+        if (target != FRAMEBUFFER)
+        {
+            return FRAMEBUFFER_UNSUPPORTED;
+        }
+
+        if (_framebuffer is null)
+        {
+            return FRAMEBUFFER_COMPLETE;
+        }
+
+        if (_framebuffer.Deleted)
+        {
+            return FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+        }
+
+        if (_framebuffer.Width <= 0 || _framebuffer.Height <= 0)
+        {
+            return FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+        }
+
+        return _framebuffer.HasAttachment ? FRAMEBUFFER_COMPLETE : FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+    }
+
+    public void framebufferTexture2D(params object?[] args)
+    {
+        if (args.Length < 5 || ToInt(args[0]) != FRAMEBUFFER || _framebuffer is null)
+        {
+            return;
+        }
+
+        var attachment = ToInt(args[1]);
+        var textureTarget = ToInt(args[2]);
+        var texture = args[3] as WebGlTexture ?? (args[3] as JsValue)?.ToObject() as WebGlTexture;
+        var level = ToInt(args[4]);
+
+        if (attachment != COLOR_ATTACHMENT0)
+        {
+            return;
+        }
+
+        _framebuffer.ColorTexture = texture is { Deleted: false } ? texture : null;
+        _framebuffer.ColorTextureTarget = textureTarget;
+        _framebuffer.ColorTextureLevel = level;
+        _framebuffer.NativeDirty = true;
+    }
+
     public WebGlRenderbuffer createRenderbuffer() => new();
-    public void bindRenderbuffer(int target, WebGlRenderbuffer? renderbuffer) { }
-    public void renderbufferStorage(params object?[] args) { }
-    public void framebufferRenderbuffer(params object?[] args) { }
-    public void deleteRenderbuffer(WebGlRenderbuffer? renderbuffer) { }
+
+    public void bindRenderbuffer(int target, WebGlRenderbuffer? renderbuffer)
+    {
+        if (target == RENDERBUFFER)
+        {
+            _renderbuffer = renderbuffer is { Deleted: false } ? renderbuffer : null;
+        }
+    }
+
+    public void renderbufferStorage(params object?[] args)
+    {
+        if (args.Length < 4 || ToInt(args[0]) != RENDERBUFFER || _renderbuffer is null)
+        {
+            return;
+        }
+
+        _renderbuffer.InternalFormat = ToInt(args[1]);
+        _renderbuffer.Width = Math.Max(1, ToInt(args[2]));
+        _renderbuffer.Height = Math.Max(1, ToInt(args[3]));
+        _renderbuffer.NativeDirty = true;
+    }
+
+    public void framebufferRenderbuffer(params object?[] args)
+    {
+        if (args.Length < 4 || ToInt(args[0]) != FRAMEBUFFER || _framebuffer is null)
+        {
+            return;
+        }
+
+        var attachment = ToInt(args[1]);
+        var renderbuffer = args[3] as WebGlRenderbuffer ?? (args[3] as JsValue)?.ToObject() as WebGlRenderbuffer;
+        renderbuffer = renderbuffer is { Deleted: false } ? renderbuffer : null;
+
+        if (attachment == DEPTH_ATTACHMENT)
+        {
+            _framebuffer.DepthRenderbuffer = renderbuffer;
+        }
+        else if (attachment == STENCIL_ATTACHMENT)
+        {
+            _framebuffer.StencilRenderbuffer = renderbuffer;
+        }
+        else if (attachment == DEPTH_STENCIL_ATTACHMENT)
+        {
+            _framebuffer.DepthStencilRenderbuffer = renderbuffer;
+        }
+
+        _framebuffer.NativeDirty = true;
+    }
+
+    public void deleteRenderbuffer(WebGlRenderbuffer? renderbuffer)
+    {
+        if (renderbuffer is null)
+        {
+            return;
+        }
+
+        renderbuffer.Deleted = true;
+        if (ReferenceEquals(_renderbuffer, renderbuffer))
+        {
+            _renderbuffer = null;
+        }
+    }
 
     public void viewport(double x, double y, double width, double height)
     {
@@ -1031,7 +1168,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         QueueClear(mask);
         RequestNativeRender();
 
-        if ((mask & COLOR_BUFFER_BIT) == 0)
+        if ((mask & COLOR_BUFFER_BIT) == 0 || _framebuffer is not null)
         {
             return;
         }
@@ -1217,9 +1354,9 @@ internal sealed partial class CanvasWebGlRenderingContext
     public bool isBuffer(WebGlBuffer? value) => value is not null;
     public bool isProgram(WebGlProgram? value) => value is not null;
     public bool isShader(WebGlShader? value) => value is not null;
-    public bool isTexture(WebGlTexture? value) => value is not null;
-    public bool isFramebuffer(WebGlFramebuffer? value) => value is not null;
-    public bool isRenderbuffer(WebGlRenderbuffer? value) => value is not null;
+    public bool isTexture(WebGlTexture? value) => value is { Deleted: false };
+    public bool isFramebuffer(WebGlFramebuffer? value) => value is { Deleted: false };
+    public bool isRenderbuffer(WebGlRenderbuffer? value) => value is { Deleted: false };
     public bool isVertexArray(WebGlVertexArrayObject? value) => value is not null;
 
     private void DrawTriangles(IReadOnlyList<int> indices)
@@ -1815,9 +1952,48 @@ internal sealed class WebGlTexture
     public bool Deleted { get; set; }
 }
 
-internal sealed class WebGlFramebuffer;
+internal sealed class WebGlFramebuffer
+{
+    public WebGlTexture? ColorTexture { get; set; }
+    public int ColorTextureTarget { get; set; } = 0x0DE1;
+    public int ColorTextureLevel { get; set; }
+    public WebGlRenderbuffer? DepthRenderbuffer { get; set; }
+    public WebGlRenderbuffer? StencilRenderbuffer { get; set; }
+    public WebGlRenderbuffer? DepthStencilRenderbuffer { get; set; }
+    public int NativeId { get; set; }
+    public bool NativeDirty { get; set; } = true;
+    public bool Deleted { get; set; }
 
-internal sealed class WebGlRenderbuffer;
+    public bool HasAttachment
+        => ColorTexture is not null ||
+           DepthRenderbuffer is not null ||
+           StencilRenderbuffer is not null ||
+           DepthStencilRenderbuffer is not null;
+
+    public int Width
+        => ColorTexture?.Width ??
+           DepthRenderbuffer?.Width ??
+           StencilRenderbuffer?.Width ??
+           DepthStencilRenderbuffer?.Width ??
+           0;
+
+    public int Height
+        => ColorTexture?.Height ??
+           DepthRenderbuffer?.Height ??
+           StencilRenderbuffer?.Height ??
+           DepthStencilRenderbuffer?.Height ??
+           0;
+}
+
+internal sealed class WebGlRenderbuffer
+{
+    public int Width { get; set; } = 1;
+    public int Height { get; set; } = 1;
+    public int InternalFormat { get; set; } = 0x81A5;
+    public int NativeId { get; set; }
+    public bool NativeDirty { get; set; } = true;
+    public bool Deleted { get; set; }
+}
 
 internal sealed record WebGlVertexAttribState(WebGlBuffer? Buffer, int Size, int Type, bool Normalized, int Stride, int Offset);
 
