@@ -112,12 +112,15 @@ public partial class MainWindow : Window
     {
         _host = new JintAvaloniaHost(this, host => new PlaygroundDomDocument(host, this));
         _host.Engine.SetValue("hostShell", _shellBridge);
+        _host.Engine.SetValue("playgroundFiles", new PlaygroundFileBridge(_host, this));
         _host.Engine.Execute("""
 if (typeof window !== 'undefined') {
   window.hostShell = hostShell;
+  window.playgroundFiles = playgroundFiles;
 }
 if (typeof globalThis !== 'undefined') {
   globalThis.hostShell = hostShell;
+  globalThis.playgroundFiles = playgroundFiles;
 }
 """);
     }
@@ -2240,6 +2243,39 @@ toggleBtn.addEventListener('click', () => {
 report('Paper.js generative scene ready — mutate the palette or pause the motion.');
 paper.view.update();
 paper.view.play();
+"""
+            ),
+            new Preset(
+                "Canvas 2D + PDF.js",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Canvas 2D with PDF.js" FontWeight="SemiBold" Foreground="#1f2937" />
+    <TextBlock Text="Loads PDF.js, previews the built-in PDF, and can open external PDF documents through the host file picker." TextWrapping="Wrap" Foreground="#475569" />
+    <Border Name="pdfSurface" Width="640" Height="460" Background="#e2e8f0" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="6" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="pdfOpen" Content="Open PDF..." />
+      <Button Name="pdfBuiltIn" Content="Load built-in" />
+      <Button Name="pdfPrev" Content="Previous page" />
+      <Button Name="pdfNext" Content="Next page" />
+      <Button Name="pdfZoomIn" Content="Zoom in" />
+      <Button Name="pdfZoomOut" Content="Zoom out" />
+    </StackPanel>
+    <TextBlock Name="pdfInfo" Foreground="#334155" TextWrapping="Wrap" />
+    <TextBlock Name="pdfStatus" Foreground="#475569" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+try {
+  require('./Scripts/pdf-demo.js');
+} catch (error) {
+  const status = document.getElementById('pdfStatus');
+  if (status) {
+    status.textContent = `Failed to load PDF.js demo: ${error}`;
+  }
+  throw error;
+}
 """
             ),
             new Preset(

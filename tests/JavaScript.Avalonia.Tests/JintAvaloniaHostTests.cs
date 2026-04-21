@@ -1051,6 +1051,56 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
     }
 
     [AvaloniaFact]
+    public void PdfJs_CanLoadBuiltInSample()
+    {
+        var root = new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border { Name = "pdfSurface", Width = 640, Height = 460, Background = Brushes.White },
+                    new Button { Name = "pdfOpen" },
+                    new Button { Name = "pdfBuiltIn" },
+                    new Button { Name = "pdfPrev" },
+                    new Button { Name = "pdfNext" },
+                    new Button { Name = "pdfZoomIn" },
+                    new Button { Name = "pdfZoomOut" },
+                    new TextBlock { Name = "pdfInfo" },
+                    new TextBlock { Name = "pdfStatus" }
+                }
+            }
+        };
+        var window = new Window
+        {
+            Width = 760,
+            Height = 620,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.ScriptBaseDirectory = Path.Combine(GetRepositoryRoot(), "samples", "JavaScriptPlayground");
+
+        host.Require("./Scripts/pdf-demo.js");
+
+        var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("pdfStatus")).Control);
+        var info = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("pdfInfo")).Control);
+
+        Assert.True(
+            WaitFor(host, () => info.Text?.Contains("Built-in sample.pdf", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(20)),
+            $"PDF.js sample did not finish loading. Stage: {host.Engine.GetValue("pdfDemoStage")}. Status: {status.Text}");
+
+        Assert.Contains("PDF.js", status.Text);
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("pdfSurface"));
+        var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
+        Assert.True(context.CommandCount > 0);
+    }
+
+    [AvaloniaFact]
     public void ImportScripts_ExecutesScript()
     {
         var (host, _) = HostTestUtilities.CreateHost();
@@ -1138,6 +1188,29 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
         }
 
         throw new DirectoryNotFoundException("Unable to locate repository root.");
+    }
+
+    private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
+        => WaitFor(null, condition, timeout);
+
+    private static bool WaitFor(JintAvaloniaHost? host, Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            Dispatcher.UIThread.RunJobs();
+            host?.ProcessPendingTasks();
+            if (condition())
+            {
+                return true;
+            }
+
+            Task.Delay(50).GetAwaiter().GetResult();
+        }
+
+        Dispatcher.UIThread.RunJobs();
+        host?.ProcessPendingTasks();
+        return condition();
     }
 
     private sealed class MockHostShellBridge
