@@ -1769,44 +1769,73 @@ internal sealed class ArcSegment : ICanvasPathSegment
             return;
         }
 
+        const double twoPi = Math.PI * 2;
         var sweep = _endAngle - _startAngle;
-        if (!_counterClockwise && sweep < 0)
+        if (!_counterClockwise && sweep >= twoPi)
         {
-            sweep += Math.PI * 2;
+            sweep = twoPi;
+        }
+        else if (_counterClockwise && sweep <= -twoPi)
+        {
+            sweep = -twoPi;
+        }
+        else if (!_counterClockwise && sweep < 0)
+        {
+            sweep += twoPi;
         }
         else if (_counterClockwise && sweep > 0)
         {
-            sweep -= Math.PI * 2;
+            sweep -= twoPi;
+        }
+
+        if (Math.Abs(sweep) <= double.Epsilon)
+        {
+            return;
         }
 
         var segments = Math.Max(1, (int)Math.Ceiling(Math.Abs(sweep) / (Math.PI / 2)));
         var step = sweep / segments;
+        var angle = _startAngle;
+        var startPoint = GetPoint(angle);
 
-        for (int i = 0; i <= segments; i++)
+        if (!figureOpen)
         {
-            var angle = _startAngle + step * i;
-            var point = new Point(
-                _center.X + _radius * Math.Cos(angle),
-                _center.Y + _radius * Math.Sin(angle));
+            context.BeginFigure(startPoint, true);
+            figureStart = startPoint;
+            figureOpen = true;
+        }
+        else if (!AreClose(currentPoint, startPoint))
+        {
+            context.LineTo(startPoint);
+        }
 
-            if (!figureOpen)
-            {
-                context.BeginFigure(point, true);
-                figureStart = point;
-                figureOpen = true;
-            }
-            else if (i == 0)
-            {
-                context.LineTo(point);
-            }
-            else
-            {
-                context.LineTo(point);
-            }
+        currentPoint = startPoint;
 
-            currentPoint = point;
+        for (int i = 0; i < segments; i++)
+        {
+            var nextAngle = angle + step;
+            var endPoint = GetPoint(nextAngle);
+            var k = 4.0 / 3.0 * Math.Tan(step / 4.0);
+            var control1 = new Point(
+                currentPoint.X - _radius * k * Math.Sin(angle),
+                currentPoint.Y + _radius * k * Math.Cos(angle));
+            var control2 = new Point(
+                endPoint.X + _radius * k * Math.Sin(nextAngle),
+                endPoint.Y - _radius * k * Math.Cos(nextAngle));
+
+            context.CubicBezierTo(control1, control2, endPoint);
+            currentPoint = endPoint;
+            angle = nextAngle;
         }
     }
+
+    private Point GetPoint(double angle)
+        => new(
+            _center.X + _radius * Math.Cos(angle),
+            _center.Y + _radius * Math.Sin(angle));
+
+    private static bool AreClose(Point a, Point b)
+        => Math.Abs(a.X - b.X) < 0.001 && Math.Abs(a.Y - b.Y) < 0.001;
 }
 
 internal sealed class RectSegment : ICanvasPathSegment
