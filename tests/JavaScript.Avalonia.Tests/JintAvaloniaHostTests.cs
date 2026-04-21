@@ -1118,6 +1118,8 @@ status.textContent = gl.CommandCount > 0 ? 'WebGL triangle rendered' : 'WebGL tr
                 HasNonWhitePixel(frame!, 0, 0, 180, 140),
                 "Expected WebGL triangle rendering to produce visible pixels.");
         }
+
+        Assert.StartsWith("Skia", context.RenderBackend, StringComparison.Ordinal);
     }
 
     [AvaloniaFact]
@@ -1199,6 +1201,8 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
                 HasNonWhitePixel(frame!, 0, 0, 220, 160),
                 $"Expected Three.js WebGL scene to produce visible pixels. {context.LastDrawStatus}");
         }
+
+        Assert.StartsWith("Skia", context.RenderBackend, StringComparison.Ordinal);
     }
 
     [AvaloniaFact]

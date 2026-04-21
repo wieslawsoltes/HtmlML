@@ -1771,7 +1771,7 @@ let frameHandle = 0;
 
 const report = message => {
   if (status) {
-    status.textContent = `${message} Draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.`;
+    status.textContent = `${message} Backend: ${gl.RenderBackend}; draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.`;
   }
 };
 

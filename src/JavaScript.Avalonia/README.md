@@ -232,6 +232,8 @@ Use `ctx.clearRect(0, 0, surface.offsetWidth, surface.offsetHeight);` to wipe th
 
 `getContext('webgl')` and `getContext('experimental-webgl')` expose an initial WebGL 1-compatible context for JavaScript libraries that expect a browser canvas. The current backend supports shader/program reflection, buffers, vertex attributes, uniforms, indexed triangle drawing, and enough texture/framebuffer state for libraries such as Three.js to render simple 3D scenes into the Avalonia canvas surface.
 
+When Avalonia is running on the Skia renderer, WebGL frames are replayed through an `ICustomDrawOperation` using `ISkiaSharpApiLeaseFeature`. On GPU-backed Skia surfaces the leased `SKCanvas` is backed by `GRContext`; otherwise the context falls back to CPU Skia or the existing Avalonia drawing command path. `gl.RenderBackend` reports the active render path after the surface has rendered.
+
 ```js
 const surface = document.getElementById('threeSurface');
 const gl = surface.getContext('webgl');
