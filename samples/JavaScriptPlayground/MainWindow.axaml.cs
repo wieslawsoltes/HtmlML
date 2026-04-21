@@ -1709,7 +1709,7 @@ if (!gl) {
 
 let threeModule;
 try {
-  threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+  threeModule = require('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js');
 } catch (error) {
   const message = `Failed to load Three.js: ${error}`;
   if (status) {
@@ -1854,7 +1854,7 @@ if (!gl) {
 
 let threeModule;
 try {
-  threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+  threeModule = require('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js');
 } catch (error) {
   const message = `Failed to load Three.js: ${error}`;
   if (status) {
