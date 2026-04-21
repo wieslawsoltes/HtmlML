@@ -37,6 +37,8 @@ public class AvaloniaDomDocument
     private readonly DomDocumentElement _documentElement;
     private readonly List<DomMutationObserver> _mutationObservers = new();
     private bool _mutationDeliveryScheduled;
+    private AvaloniaDomElement? _virtualActiveElement;
+    private bool _topLevelInputHandlersAttached;
 
     protected JintAvaloniaHost Host { get; }
 
@@ -46,6 +48,7 @@ public class AvaloniaDomDocument
         _elementFactory = elementFactory;
         _head = new DomHeadElement(this);
         _documentElement = new DomDocumentElement(this, _head);
+        EnsureTopLevelInputHandlers();
     }
 
     protected virtual Control? GetDocumentRoot()
@@ -81,6 +84,12 @@ public class AvaloniaDomDocument
 
     public virtual object? querySelector(string selector)
     {
+        var special = QuerySpecialSelector(selector);
+        if (special is not null)
+        {
+            return special;
+        }
+
         var all = querySelectorAll(selector);
         return all is { Length: > 0 } ? all[0] : null;
     }
@@ -90,6 +99,12 @@ public class AvaloniaDomDocument
         if (string.IsNullOrWhiteSpace(selector))
         {
             return Array.Empty<object>();
+        }
+
+        var special = QuerySpecialSelector(selector);
+        if (special is not null)
+        {
+            return new[] { special };
         }
 
         var root = GetDocumentRoot();
@@ -118,8 +133,17 @@ public class AvaloniaDomDocument
             return null;
         }
 
-        return WrapControl(control);
+        var wrapper = WrapControl(control);
+        if (!string.IsNullOrWhiteSpace(tag))
+        {
+            wrapper.SetNodeNameOverride(tag.Trim());
+        }
+
+        return wrapper;
     }
+
+    public virtual object? createElementNS(string? namespaceUri, string qualifiedName)
+        => createElement(qualifiedName);
 
     public virtual object? createTextNode(string data)
     {
@@ -150,9 +174,59 @@ public class AvaloniaDomDocument
         }
     }
 
+    public virtual int nodeType => 9;
+
+    public virtual string nodeName => "#document";
+
+    public virtual object[] childNodes => new object[] { documentElement };
+
+    public virtual object[] children => body is null ? Array.Empty<object>() : new object[] { body };
+
+    public virtual object? firstChild => documentElement;
+
+    public virtual object? lastChild => body ?? documentElement;
+
+    public virtual bool hasChildNodes => true;
+
+    public virtual object? activeElement
+    {
+        get
+        {
+            if (_virtualActiveElement is not null)
+            {
+                return _virtualActiveElement;
+            }
+
+            var focused = GetActualActiveElement()?.Control;
+            if (focused is null)
+            {
+                return body;
+            }
+
+            return WrapControl(focused);
+        }
+    }
+
     public DomHeadElement head => _head;
 
     public DomDocumentElement documentElement => _documentElement;
+
+    public object? defaultView
+    {
+        get
+        {
+            try
+            {
+                return Host.Engine.GetValue("window").ToObject();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    public DomDocumentImplementation implementation => new(this);
 
     public virtual string? title
     {
@@ -175,6 +249,12 @@ public class AvaloniaDomDocument
 
         return CssComputedStyle.Empty;
     }
+
+    public virtual bool contains(object? node)
+        => ReferenceEquals(node, this)
+           || ReferenceEquals(node, documentElement)
+           || ReferenceEquals(node, head)
+           || ReferenceEquals(node, body);
 
     internal DomMutationObserver CreateMutationObserver(JsValue callback)
     {
@@ -299,6 +379,12 @@ public class AvaloniaDomDocument
             return Array.Empty<object>();
         }
 
+        var special = QuerySpecialSelector(tagName);
+        if (special is not null)
+        {
+            return new[] { special };
+        }
+
         return QueryAll(ctrl => string.Equals(ctrl.GetType().Name, tagName.Trim(), StringComparison.OrdinalIgnoreCase));
     }
 
@@ -313,6 +399,139 @@ public class AvaloniaDomDocument
 
         _elementWrappers.Add(control, created);
         return created;
+    }
+
+    internal AvaloniaDomElement? GetActualActiveElement()
+    {
+        var focused = Host.TopLevel.FocusManager?.GetFocusedElement() as Control;
+        return focused is null ? null : WrapControl(focused);
+    }
+
+    internal bool ActivateElement(AvaloniaDomElement element, bool dispatchFocusEvent, bool clearActualFocus)
+    {
+        if (clearActualFocus)
+        {
+            Host.TopLevel.FocusManager?.ClearFocus();
+        }
+
+        var previousVirtual = _virtualActiveElement;
+        _virtualActiveElement = element;
+
+        if (previousVirtual is not null && !ReferenceEquals(previousVirtual, element))
+        {
+            DispatchFocusStateEvent(previousVirtual, "blur");
+        }
+
+        if (dispatchFocusEvent && !ReferenceEquals(previousVirtual, element))
+        {
+            DispatchFocusStateEvent(element, "focus");
+        }
+
+        return true;
+    }
+
+    internal void ReleaseElement(AvaloniaDomElement element, bool dispatchBlurEvent, bool clearActualFocus)
+    {
+        if (ReferenceEquals(_virtualActiveElement, element))
+        {
+            _virtualActiveElement = null;
+        }
+
+        if (clearActualFocus)
+        {
+            Host.TopLevel.FocusManager?.ClearFocus();
+        }
+
+        if (dispatchBlurEvent)
+        {
+            DispatchFocusStateEvent(element, "blur");
+        }
+    }
+
+    internal void NotifyActualFocus(AvaloniaDomElement element)
+    {
+        if (_virtualActiveElement is null)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(_virtualActiveElement, element))
+        {
+            _virtualActiveElement = null;
+            return;
+        }
+
+        var previousVirtual = _virtualActiveElement;
+        _virtualActiveElement = null;
+        DispatchFocusStateEvent(previousVirtual, "blur");
+    }
+
+    private void DispatchFocusStateEvent(AvaloniaDomElement target, string type)
+    {
+        var evt = new DomEvent(type, bubbles: false, cancelable: false, args: null, Host.GetTimestamp(), isTrusted: true);
+        DispatchDomEventInternal(target, evt);
+    }
+
+    private void EnsureTopLevelInputHandlers()
+    {
+        if (_topLevelInputHandlersAttached || Host.TopLevel is not InputElement inputElement)
+        {
+            return;
+        }
+
+        _topLevelInputHandlersAttached = true;
+        inputElement.AddHandler(InputElement.KeyDownEvent, OnTopLevelKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
+        inputElement.AddHandler(InputElement.KeyUpEvent, OnTopLevelKeyUp, RoutingStrategies.Bubble, handledEventsToo: true);
+        inputElement.AddHandler(InputElement.TextInputEvent, OnTopLevelTextInput, RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
+    private void OnTopLevelKeyDown(object? sender, KeyEventArgs e)
+    {
+        var target = GetVirtualInputTarget(e.Source);
+        if (target is null)
+        {
+            return;
+        }
+
+        DispatchKeyboardEvent(target, "keydown", e, bubbles: true, cancelable: true);
+    }
+
+    private void OnTopLevelKeyUp(object? sender, KeyEventArgs e)
+    {
+        var target = GetVirtualInputTarget(e.Source);
+        if (target is null)
+        {
+            return;
+        }
+
+        DispatchKeyboardEvent(target, "keyup", e, bubbles: true, cancelable: false);
+    }
+
+    private void OnTopLevelTextInput(object? sender, TextInputEventArgs e)
+    {
+        var target = GetVirtualInputTarget(e.Source);
+        if (target is null)
+        {
+            return;
+        }
+
+        DispatchTextInputEvent(target, "textinput", e, bubbles: true, cancelable: false);
+        DispatchTextInputEvent(target, "input", e, bubbles: true, cancelable: false);
+    }
+
+    private AvaloniaDomElement? GetVirtualInputTarget(object? source)
+    {
+        if (_virtualActiveElement is null)
+        {
+            return null;
+        }
+
+        if (source is Control sourceControl && ReferenceEquals(sourceControl, _virtualActiveElement.Control))
+        {
+            return null;
+        }
+
+        return _virtualActiveElement;
     }
 
     private object[] GetCollection(Func<Control, bool> predicate) => QueryAll(predicate);
@@ -356,6 +575,18 @@ public class AvaloniaDomDocument
                || name.EndsWith("Link", StringComparison.OrdinalIgnoreCase);
     }
 
+    protected virtual object? QuerySpecialSelector(string? selector)
+    {
+        var normalized = selector?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "body" => body,
+            "html" => documentElement,
+            "head" => head,
+            _ => null
+        };
+    }
+
     protected virtual Control? CreateControl(string tag)
     {
         if (_elementFactory is not null)
@@ -372,6 +603,28 @@ public class AvaloniaDomDocument
         if (typeName is null)
         {
             return null;
+        }
+
+        switch (tag.Trim().ToLowerInvariant())
+        {
+            case "canvas":
+            case "div":
+            case "section":
+            case "article":
+            case "main":
+            case "header":
+            case "footer":
+            case "nav":
+                return new Canvas();
+            case "span":
+            case "label":
+            case "p":
+                return new TextBlock();
+            case "img":
+                return new Image();
+            case "input":
+            case "textarea":
+                return new TextBox();
         }
 
         var assembly = typeof(Control).Assembly;
@@ -1108,6 +1361,8 @@ public class AvaloniaDomElement
     private static readonly HashSet<string> s_builtinEventNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "click",
+        "focus",
+        "blur",
         "mousedown",
         "mousemove",
         "mouseup",
@@ -1141,6 +1396,7 @@ public class AvaloniaDomElement
     private bool _keyboardHandlersAttached;
     private bool _textInputHandlersAttached;
     private bool _clickHandlersAttached;
+    private bool _focusHandlersAttached;
     private string? _nodeNameOverride;
 
     private enum LengthAxis
@@ -1190,11 +1446,40 @@ public class AvaloniaDomElement
 
     public AvaloniaDomElement? parentNode => parentElement;
 
+    public virtual bool isConnected => Control.GetVisualRoot() is not null;
+
     public DomTokenList classList => _classList ??= new DomTokenList(this);
 
     public CssStyleDeclaration style => _style ??= new CssStyleDeclaration(this);
 
-    public virtual object? getContext(string type) => CanvasContextBridge.GetContext(Control, type);
+    public virtual string className
+    {
+        get => getAttribute("class") ?? string.Empty;
+        set => setAttribute("class", value);
+    }
+
+    public virtual string htmlFor
+    {
+        get => getAttribute("for") ?? string.Empty;
+        set => setAttribute("for", value);
+    }
+
+    public virtual string unselectable { get; set; } = string.Empty;
+
+    public object currentStyle => style;
+
+    public virtual object? getContext(string type)
+    {
+        var context = CanvasContextBridge.GetContext(Control, type);
+        if (context is CanvasRenderingContext2D canvasContext)
+        {
+            canvasContext.canvas = this;
+        }
+
+        return context;
+    }
+
+    public virtual object? getContext(string type, object? options) => getContext(type);
 
     public DomStringMap dataset => _dataset ??= new DomStringMap(this);
 
@@ -1236,6 +1521,10 @@ public class AvaloniaDomElement
 
     public virtual double clientHeight => GetClientSize().Height;
 
+    public virtual double clientTop => 0;
+
+    public virtual double clientLeft => 0;
+
     public virtual double offsetWidth => Control.Bounds.Width;
 
     public virtual double offsetHeight => Control.Bounds.Height;
@@ -1268,6 +1557,89 @@ public class AvaloniaDomElement
             var current = GetScrollOffset();
             SetScrollOffset(value, current.Y);
         }
+    }
+
+    public virtual string? value
+    {
+        get => Control switch
+        {
+            TextBox textBox => textBox.Text ?? string.Empty,
+            TextBlock textBlock => textBlock.Text ?? string.Empty,
+            ContentControl { Content: string text } => text,
+            _ => null
+        };
+        set
+        {
+            switch (Control)
+            {
+                case TextBox textBox:
+                    textBox.Text = value ?? string.Empty;
+                    break;
+                case TextBlock textBlock:
+                    textBlock.Text = value ?? string.Empty;
+                    break;
+                case ContentControl contentControl when contentControl.Content is null || contentControl.Content is string:
+                    contentControl.Content = value ?? string.Empty;
+                    break;
+            }
+        }
+    }
+
+    public virtual int tabIndex
+    {
+        get => KeyboardNavigation.GetTabIndex(Control);
+        set
+        {
+            KeyboardNavigation.SetTabIndex(Control, value);
+            if (!Control.Focusable)
+            {
+                Control.Focusable = true;
+            }
+        }
+    }
+
+    public virtual bool isFocused => Control.IsFocused;
+
+    public virtual bool focus()
+    {
+        if (!Control.Focusable)
+        {
+            Control.Focusable = true;
+        }
+
+        if (Control is InputElement inputElement && !inputElement.IsTabStop)
+        {
+            inputElement.IsTabStop = true;
+        }
+
+        var actualFocus = TryFocusControl(NavigationMethod.Unspecified, KeyModifiers.None);
+        return Host.Document.ActivateElement(this, dispatchFocusEvent: !actualFocus, clearActualFocus: !actualFocus);
+    }
+
+    public virtual void blur()
+    {
+        var hasActualFocus = ReferenceEquals(Host.TopLevel.FocusManager?.GetFocusedElement(), Control);
+        Host.Document.ReleaseElement(this, dispatchBlurEvent: !hasActualFocus, clearActualFocus: hasActualFocus);
+    }
+
+    private bool TryFocusControl(NavigationMethod navigationMethod, KeyModifiers keyModifiers)
+    {
+        if (Control.Focus(navigationMethod, keyModifiers))
+        {
+            return true;
+        }
+
+        var focusManager = Host.TopLevel.FocusManager;
+        var focusMethod = focusManager?.GetType().GetMethod(
+            "Focus",
+            new[] { typeof(IInputElement), typeof(NavigationMethod), typeof(KeyModifiers) });
+
+        if (focusMethod?.Invoke(focusManager, new object?[] { Control, navigationMethod, keyModifiers }) is bool result)
+        {
+            return result;
+        }
+
+        return Control.IsFocused;
     }
 
     private Size GetClientSize()
@@ -1636,6 +2008,11 @@ public class AvaloniaDomElement
         {
             AttachClickHandlers();
         }
+
+        if (!_focusHandlersAttached)
+        {
+            AttachFocusHandlers();
+        }
     }
 
     private void EnsureClrEventBridge(string normalizedEventName, string originalEventName)
@@ -1815,6 +2192,13 @@ public class AvaloniaDomElement
         }
     }
 
+    private void AttachFocusHandlers()
+    {
+        _focusHandlersAttached = true;
+        Control.GotFocus += OnGotFocus;
+        Control.LostFocus += OnLostFocus;
+    }
+
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (!ReferenceEquals(e.Source, Control))
@@ -1899,6 +2283,27 @@ public class AvaloniaDomElement
     private void OnButtonClick(object? sender, RoutedEventArgs e)
     {
         Host.Document.DispatchRoutedEvent(this, "click", e, bubbles: true, cancelable: true);
+    }
+
+    private void OnGotFocus(object? sender, GotFocusEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.NotifyActualFocus(this);
+        Host.Document.DispatchRoutedEvent(this, "focus", e, bubbles: false, cancelable: false);
+    }
+
+    private void OnLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchRoutedEvent(this, "blur", e, bubbles: false, cancelable: false);
     }
 
     public bool dispatchEvent(JsValue eventValue)
@@ -2096,6 +2501,9 @@ public class AvaloniaDomElement
         var prop = Control.GetType().GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public);
         return prop?.GetValue(Control)?.ToString();
     }
+
+    public virtual bool hasAttribute(string name)
+        => !string.IsNullOrWhiteSpace(name) && getAttribute(name) is not null;
 
     public virtual void setAttribute(string name, string? value)
     {
@@ -3897,6 +4305,11 @@ public class AvaloniaDomElement
         return string.Join("; ", _styleValues.Select(kv => $"{kv.Key}: {kv.Value}"));
     }
 
+    internal void SetStyleText(string? value)
+    {
+        ApplyStyleAttribute(value);
+    }
+
     protected static bool TryGetControlsCollection(Control parent, out Controls controls)
     {
         var prop = parent.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public)
@@ -3970,6 +4383,8 @@ public sealed class DomHeadElement
     public int nodeType => 1;
 
     public string nodeName => "HEAD";
+
+    public DocumentStyleProbe style { get; } = new();
 
     public AvaloniaDomDocument ownerDocument => _document;
 
@@ -4054,6 +4469,8 @@ public sealed class DomDocumentElement
 
     public string nodeName => "HTML";
 
+    public DocumentStyleProbe style { get; } = new();
+
     public AvaloniaDomDocument ownerDocument => _document;
 
     public DomDocumentElement? parentElement => null;
@@ -4113,6 +4530,37 @@ public sealed class DomDocumentElement
 
         return node;
     }
+}
+
+public sealed class DomDocumentImplementation
+{
+    private readonly AvaloniaDomDocument _document;
+
+    internal DomDocumentImplementation(AvaloniaDomDocument document)
+    {
+        _document = document;
+    }
+
+    public AvaloniaDomDocument createHTMLDocument(string? title)
+    {
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            _document.title = title;
+        }
+
+        return _document;
+    }
+}
+
+public sealed class DocumentStyleProbe
+{
+    public string userSelect { get; set; } = string.Empty;
+
+    public string MozUserSelect { get; set; } = string.Empty;
+
+    public string WebkitUserSelect { get; set; } = string.Empty;
+
+    public string KhtmlUserSelect { get; set; } = string.Empty;
 }
 
 public sealed class DomTokenList
@@ -4342,7 +4790,11 @@ public sealed class CssStyleDeclaration : DynamicObject
         _element = element;
     }
 
-    public string cssText => string.Join("; ", _element.StyleValues.Select(kv => $"{kv.Key}: {kv.Value}"));
+    public string cssText
+    {
+        get => string.Join("; ", _element.StyleValues.Select(kv => $"{kv.Key}: {kv.Value}"));
+        set => _element.SetStyleText(value);
+    }
 
     public override bool TrySetMember(SetMemberBinder binder, object? value)
     {

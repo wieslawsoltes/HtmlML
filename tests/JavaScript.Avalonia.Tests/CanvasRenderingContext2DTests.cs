@@ -58,6 +58,37 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void MeasureText_ReturnsWidth()
+    {
+        var surface = new CanvasDrawingSurface();
+        var ctx = surface.Context;
+
+        ctx.font = "18px Segoe UI";
+
+        var metrics = Assert.IsType<CanvasTextMetrics>(ctx.measureText("xterm"));
+
+        Assert.True(metrics.width > 0);
+    }
+
+    [AvaloniaFact]
+    public void Stroke_PreservesLineDashState()
+    {
+        var surface = new CanvasDrawingSurface();
+        var ctx = surface.Context;
+
+        ctx.setLineDash(new[] { 4d, 2d });
+        ctx.lineDashOffset = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(12, 0);
+        ctx.stroke();
+
+        var command = Assert.IsType<StrokePathCommand>(surface.Commands.Single());
+        Assert.Equal(new[] { 4d, 2d }, command.Snapshot.LineDash);
+        Assert.Equal(1.5, command.Snapshot.LineDashOffset);
+    }
+
+    [AvaloniaFact]
     public void CanvasAdorner_DoesNotDrawOverSiblingControls()
     {
         var canvasTarget = new Border

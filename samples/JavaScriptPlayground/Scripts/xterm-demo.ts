@@ -41,6 +41,26 @@ interface XtermTerminal {
   onScroll: (callback: (position: number) => void) => Disposable;
 }
 
+interface HostShellResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly output: string;
+  readonly timedOut: boolean;
+  readonly timeoutMs: number;
+  readonly shell: string;
+  readonly cwd: string;
+  readonly success: boolean;
+}
+
+interface HostShellBridge {
+  readonly shell: string;
+  readonly cwd: string;
+  readonly supportsTty: boolean;
+  execute(command: string): HostShellResult;
+  execute(command: string, timeoutMs: number): HostShellResult;
+}
+
 const moduleExports = require('https://cdn.jsdelivr.net/npm/@xterm/headless@5.5.0/lib-headless/xterm-headless.js');
 const TerminalCtor: TerminalConstructor | undefined = moduleExports?.Terminal;
 if (typeof TerminalCtor !== 'function') {
@@ -83,6 +103,11 @@ const horizontalPadding = 14;
 let cellWidth = 9;
 let cellHeight = 18;
 const baselineOffset = 2;
+let draftInput = '';
+const promptLabel = '$ ';
+const hostShell: HostShellBridge | null = (typeof window !== 'undefined' && window?.hostShell)
+  || (typeof globalThis !== 'undefined' ? globalThis?.hostShell ?? null : null);
+const canRunHostShell = !!hostShell && typeof hostShell.execute === 'function';
 
 terminal.onResize(() => scheduleRender());
 terminal.onScroll(() => scheduleRender());
@@ -194,6 +219,46 @@ function runWriter(data: string) {
   scheduleRender();
 }
 
+function writeCommandOutput(value: unknown): boolean {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  if (!text) {
+    return false;
+  }
+
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const body = normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+  terminal.write(body.replace(/\n/g, '\r\n'), () => scheduleRender());
+  scheduleRender();
+  return true;
+}
+
+function syncInputBox() {
+  if (inputBox) {
+    (inputBox as any).value = draftInput;
+  }
+}
+
+function renderPrompt() {
+  terminal.write(`\r\x1b[2K${promptLabel}${draftInput}`);
+  scheduleRender();
+}
+
+function clearDraftInput(render = true) {
+  draftInput = '';
+  syncInputBox();
+  if (render) {
+    renderPrompt();
+  }
+}
+
+function setDraftInput(value: string, render = true) {
+  draftInput = value;
+  syncInputBox();
+  if (render) {
+    renderPrompt();
+  }
+}
+
 type CommandHandler = (args: string[]) => void;
 
 const commands: Record<string, CommandHandler> = Object.create(null);
@@ -202,8 +267,6 @@ commands.clear = () => {
   stopDemoStream();
   terminal.reset();
   printBanner();
-  updateStatus('Terminal cleared and banner restored.');
-  scheduleRender();
 };
 
 commands.help = () => {
@@ -213,6 +276,11 @@ commands.help = () => {
   runWriter('  uptime     Display a fake uptime report');
   runWriter('  clear      Reset and show the banner again');
   runWriter('  theme      Cycle sample colors via ANSI escapes');
+  if (canRunHostShell && hostShell) {
+    runWriter(`  <other>    Run via host shell (${hostShell.shell || 'shell'})`);
+    runWriter(`  cwd        ${hostShell.cwd || ''}`);
+    runWriter('  note       No PTY: full-screen TUIs like mc or vim are not supported.');
+  }
 };
 
 commands.uptime = () => {
@@ -259,6 +327,8 @@ commands.demo = () => {
         demoTimer = null;
       }
       terminal.writeln('\x1b[32mAll tasks finished.\x1b[0m');
+      renderPrompt();
+      updateStatus('Demo workload finished.');
     }
     scheduleRender();
   }, 200);
@@ -278,25 +348,63 @@ function stopDemoStream() {
   }
 }
 
-function handleCommand(raw: string) {
+function executeCommand(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return;
+    clearDraftInput();
+    return 'Enter a command.';
   }
+
+  stopDemoStream();
+  clearDraftInput(false);
+
   if (trimmed === 'clear') {
     commands.clear([]);
-    return;
+    renderPrompt();
+    return 'Terminal cleared and banner restored.';
   }
   const [command, ...args] = trimmed.split(/\s+/g);
-  terminal.writeln('');
-  terminal.writeln(`$ ${trimmed}`);
+  terminal.write('\r\x1b[2K');
+  terminal.writeln(`${promptLabel}${trimmed}`);
   const handler = commands[command];
   if (handler) {
     handler(args);
-  } else {
-    runWriter(`Command not found: ${command}`);
+    renderPrompt();
+    return `Ran ${command}.`;
   }
-  scheduleRender();
+
+  if (canRunHostShell && hostShell) {
+    try {
+      const result = hostShell.execute(trimmed);
+      const exitCode = Number(result?.exitCode);
+      const timedOut = !!result?.timedOut;
+      const wroteOutput = writeCommandOutput(result?.output ?? '');
+
+      if (!wroteOutput && timedOut) {
+        runWriter(`Command timed out after ${result?.timeoutMs ?? 0} ms.`);
+      } else if (!wroteOutput && Number.isFinite(exitCode) && exitCode !== 0) {
+        runWriter(`Command exited with code ${exitCode}.`);
+      }
+
+      renderPrompt();
+
+      if (timedOut) {
+        return `Shell command timed out after ${result?.timeoutMs ?? 0} ms.`;
+      }
+
+      return Number.isFinite(exitCode)
+        ? `Shell command exited with code ${exitCode}.`
+        : 'Shell command completed.';
+    } catch (error) {
+      runWriter(`Shell bridge error: ${error}`);
+      renderPrompt();
+      return `Shell bridge error: ${error}`;
+    }
+  }
+
+  runWriter(`Command not found: ${command}`);
+  renderPrompt();
+  return `Unknown command: ${command}`;
 }
 
 function printBanner() {
@@ -305,16 +413,18 @@ function printBanner() {
 }
 
 function bindInput() {
-  const submit = () => {
-    const value = (inputBox as any)?.value ?? '';
-    handleCommand(String(value));
-    if (inputBox) {
-      (inputBox as any).value = '';
-    }
-    updateStatus('Command executed.');
+  const submit = (rawValue?: string) => {
+    const value = typeof rawValue === 'string'
+      ? rawValue
+      : String((inputBox as any)?.value ?? draftInput);
+    updateStatus(executeCommand(value));
   };
 
   sendButton?.addEventListener('click', submit);
+  (inputBox as any)?.addEventListener?.('input', () => {
+    const value = String((inputBox as any)?.value ?? '');
+    setDraftInput(value);
+  });
   (inputBox as any)?.addEventListener?.('keydown', (event: any) => {
     if (event?.key === 'Enter') {
       event.preventDefault?.();
@@ -324,13 +434,69 @@ function bindInput() {
 
   clearButton?.addEventListener('click', () => {
     stopDemoStream();
+    clearDraftInput(false);
     commands.clear([]);
+    renderPrompt();
+    updateStatus('Terminal cleared and banner restored.');
   });
 
   demoButton?.addEventListener('click', () => {
     stopDemoStream();
+    clearDraftInput(false);
     commands.demo([]);
     updateStatus('Streaming demo workload...');
+    renderPrompt();
+  });
+
+  (surface as any)?.addEventListener?.('pointerdown', () => {
+    (surface as any)?.focus?.();
+  });
+  (surface as any)?.addEventListener?.('click', () => {
+    (surface as any)?.focus?.();
+  });
+  (surface as any)?.addEventListener?.('textinput', (event: any) => {
+    const data = typeof event?.data === 'string' ? event.data : '';
+    if (!data) {
+      return;
+    }
+
+    draftInput += data;
+    syncInputBox();
+    renderPrompt();
+    event.preventDefault?.();
+  });
+  (surface as any)?.addEventListener?.('keydown', (event: any) => {
+    const key = event?.key;
+    if (event?.ctrlKey && (key === 'l' || key === 'L')) {
+      clearDraftInput(false);
+      commands.clear([]);
+      renderPrompt();
+      updateStatus('Terminal cleared and banner restored.');
+      event.preventDefault?.();
+      return;
+    }
+
+    if (key === 'Enter') {
+      event.preventDefault?.();
+      submit(draftInput);
+      return;
+    }
+
+    if (key === 'Backspace' || key === 'Back') {
+      if (draftInput.length > 0) {
+        draftInput = draftInput.slice(0, -1);
+        syncInputBox();
+        renderPrompt();
+      }
+      event.preventDefault?.();
+      return;
+    }
+
+    if (key === 'Escape') {
+      clearDraftInput();
+      updateStatus('Input cleared.');
+      event.preventDefault?.();
+    }
   });
 }
 
@@ -340,6 +506,7 @@ function bootstrap() {
   }
   bindInput();
   printBanner();
+  renderPrompt();
   updateStatus('xterm.js headless ready — try the demo or type help.');
   scheduleRender();
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
