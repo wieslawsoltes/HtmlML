@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -119,21 +120,23 @@ public sealed class DomPointerEvent : DomEvent
 {
     private readonly PointerEventArgs _args;
     private readonly Control _relativeTo;
+    private readonly Control _viewport;
 
-    internal DomPointerEvent(string type, PointerEventArgs args, Control relativeTo, double timeStamp, bool bubbles = true, bool cancelable = true)
+    internal DomPointerEvent(string type, PointerEventArgs args, Control relativeTo, Control? viewport, double timeStamp, bool bubbles = true, bool cancelable = true)
         : base(type, bubbles, cancelable, args, timeStamp, isTrusted: true)
     {
         _args = args;
         _relativeTo = relativeTo;
+        _viewport = viewport ?? relativeTo;
     }
 
     public int pointerId => _args.Pointer?.Id ?? 0;
 
     public string pointerType => _args.Pointer?.Type.ToString().ToLowerInvariant() ?? "mouse";
 
-    public double clientX => _args.GetPosition(_relativeTo).X;
+    public double clientX => GetClientPosition().X;
 
-    public double clientY => _args.GetPosition(_relativeTo).Y;
+    public double clientY => GetClientPosition().Y;
 
     public double x => clientX;
 
@@ -142,6 +145,18 @@ public sealed class DomPointerEvent : DomEvent
     public double screenX => clientX;
 
     public double screenY => clientY;
+
+    public double pageX => clientX;
+
+    public double pageY => clientY;
+
+    public double offsetX => GetOffsetPosition().X;
+
+    public double offsetY => GetOffsetPosition().Y;
+
+    public double layerX => offsetX;
+
+    public double layerY => offsetY;
 
     public double deltaX => _args is PointerWheelEventArgs wheel ? wheel.Delta.X : 0;
 
@@ -192,6 +207,17 @@ public sealed class DomPointerEvent : DomEvent
     public bool metaKey => (_args.KeyModifiers & KeyModifiers.Meta) != 0;
 
     public bool isPrimary => _args.Pointer?.IsPrimary ?? false;
+
+    private Point GetClientPosition()
+    {
+        var offset = GetOffsetPosition();
+        var origin = _relativeTo.TranslatePoint(new Point(0, 0), _viewport);
+        return origin.HasValue
+            ? new Point(origin.Value.X + offset.X, origin.Value.Y + offset.Y)
+            : offset;
+    }
+
+    private Point GetOffsetPosition() => _args.GetPosition(_relativeTo);
 
     private static int ToButton(PointerUpdateKind kind) => kind switch
     {

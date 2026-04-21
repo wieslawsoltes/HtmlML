@@ -10,6 +10,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Input.Raw;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -929,6 +930,14 @@ const canvas = new fabric.Canvas(surface, {
   preserveObjectStacking: true
 });
 canvas.setDimensions({ width: surface.offsetWidth, height: surface.offsetHeight });
+const circle = new fabric.Circle({
+  left: 320,
+  top: 90,
+  radius: 70,
+  fill: '#ec4899',
+  stroke: '#be123c',
+  strokeWidth: 2
+});
 canvas.add(
   new fabric.Rect({
     left: 80,
@@ -941,14 +950,7 @@ canvas.add(
     stroke: '#1e3a8a',
     strokeWidth: 2
   }),
-  new fabric.Circle({
-    left: 320,
-    top: 90,
-    radius: 70,
-    fill: '#ec4899',
-    stroke: '#be123c',
-    strokeWidth: 2
-  }),
+  circle,
   new fabric.Triangle({
     left: 235,
     top: 230,
@@ -961,6 +963,9 @@ canvas.add(
   })
 );
 canvas.renderAll();
+canvas.discardActiveObject();
+globalThis.fabricTestCanvas = canvas;
+globalThis.fabricUpperCanvas = canvas.upperCanvasEl ?? surface;
 status.textContent = canvas ? 'Fabric.js scene ready' : 'Fabric.js canvas missing';
 """);
 
@@ -970,6 +975,23 @@ status.textContent = canvas ? 'Fabric.js scene ready' : 'Fabric.js canvas missin
         var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("fabricSurface"));
         var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
         Assert.True(context.CommandCount > 0);
+
+        var upperCanvasElement = Assert.IsType<AvaloniaDomElement>(host.Engine.GetValue("fabricUpperCanvas").ToObject());
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var pointerDown = new PointerPressedEventArgs(
+            upperCanvasElement.Control,
+            pointer,
+            upperCanvasElement.Control,
+            new Point(390, 160),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None);
+
+        upperCanvasElement.Control.RaiseEvent(pointerDown);
+
+        Assert.Equal(
+            "circle",
+            Convert.ToString(host.Engine.Evaluate("globalThis.fabricTestCanvas.getActiveObject()?.type ?? ''").ToObject()));
 
         Dispatcher.UIThread.RunJobs();
         var frame = window.CaptureRenderedFrame();

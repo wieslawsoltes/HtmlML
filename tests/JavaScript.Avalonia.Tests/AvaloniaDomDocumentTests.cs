@@ -698,6 +698,36 @@ public class AvaloniaDomDocumentTests
     }
 
     [AvaloniaFact]
+    public void BoundingClientRect_UsesViewportCoordinatesAndBrowserEdges()
+    {
+        var root = new Canvas { Width = 200, Height = 160 };
+        var parent = new Canvas { Width = 120, Height = 100 };
+        var child = new Border { Width = 40, Height = 30, Name = "target" };
+        Canvas.SetLeft(parent, 10);
+        Canvas.SetTop(parent, 20);
+        Canvas.SetLeft(child, 15);
+        Canvas.SetTop(child, 25);
+        parent.Children.Add(child);
+        root.Children.Add(parent);
+
+        var (host, window) = HostTestUtilities.CreateHost(root);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var element = HostTestUtilities.GetElement(host.Document.getElementById("target"));
+        var rect = Assert.IsType<DomRect>(element.getBoundingClientRect());
+
+        Assert.Equal(25, rect.x);
+        Assert.Equal(45, rect.y);
+        Assert.Equal(25, rect.left);
+        Assert.Equal(45, rect.top);
+        Assert.Equal(65, rect.right);
+        Assert.Equal(75, rect.bottom);
+        Assert.Equal(15, element.offsetLeft);
+        Assert.Equal(25, element.offsetTop);
+    }
+
+    [AvaloniaFact]
     public void ParentChildNavigation_ProvidesHierarchy()
     {
         var panel = new StackPanel();
@@ -894,6 +924,60 @@ public class AvaloniaDomDocumentTests
         window.RaiseEvent(args);
 
         Assert.True(called);
+    }
+
+    [AvaloniaFact]
+    public void PointerEvents_ExposeViewportClientAndLocalOffsetCoordinates()
+    {
+        var root = new Canvas { Width = 200, Height = 160 };
+        var border = new Border { Width = 60, Height = 40, Name = "target", Background = Brushes.Transparent };
+        Canvas.SetLeft(border, 25);
+        Canvas.SetTop(border, 35);
+        root.Children.Add(border);
+
+        var (host, window) = HostTestUtilities.CreateHost(root);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var element = HostTestUtilities.GetElement(host.Document.getElementById("target"));
+        var called = false;
+        double clientX = 0;
+        double clientY = 0;
+        double pageX = 0;
+        double pageY = 0;
+        double offsetX = 0;
+        double offsetY = 0;
+        element.addEventListener("pointerdown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            clientX = evt.clientX;
+            clientY = evt.clientY;
+            pageX = evt.pageX;
+            pageY = evt.pageY;
+            offsetX = evt.offsetX;
+            offsetY = evt.offsetY;
+            called = true;
+        })));
+
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var args = new PointerPressedEventArgs(
+            border,
+            pointer,
+            root,
+            new Point(35, 45),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None);
+
+        border.RaiseEvent(args);
+
+        Assert.True(called);
+        Assert.Equal(35, clientX);
+        Assert.Equal(45, clientY);
+        Assert.Equal(35, pageX);
+        Assert.Equal(45, pageY);
+        Assert.Equal(10, offsetX);
+        Assert.Equal(10, offsetY);
     }
 
     [AvaloniaFact]
