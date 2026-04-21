@@ -949,6 +949,44 @@ const executeCommand = (raw) => {
 };
 
 const bindInput = () => {
+  if (surface && typeof surface.__xtermCleanup === 'function') {
+    try {
+      surface.__xtermCleanup();
+    } catch (error) {
+      // Ignore stale cleanup failures from a previous script execution.
+    }
+  }
+
+  const cleanupHandlers = [];
+  const addListener = (target, type, handler) => {
+    if (!target || typeof target.addEventListener !== 'function') {
+      return;
+    }
+
+    target.addEventListener(type, handler);
+    cleanupHandlers.push(() => {
+      if (typeof target.removeEventListener === 'function') {
+        target.removeEventListener(type, handler);
+      }
+    });
+  };
+
+  surface.__xtermCleanup = () => {
+    stopDemoStream();
+    stopActiveShellSession();
+    while (cleanupHandlers.length > 0) {
+      const cleanup = cleanupHandlers.pop();
+      try {
+        cleanup && cleanup();
+      } catch (error) {
+        // Continue removing the rest of the previous script handlers.
+      }
+    }
+    if (surface.__xtermCleanup) {
+      surface.__xtermCleanup = null;
+    }
+  };
+
   const submit = (rawValue) => {
     const value = typeof rawValue === 'string'
       ? rawValue
@@ -961,19 +999,19 @@ const bindInput = () => {
     }
   };
 
-  sendButton && sendButton.addEventListener && sendButton.addEventListener('click', submit);
-  input && input.addEventListener && input.addEventListener('input', () => {
+  addListener(sendButton, 'click', submit);
+  addListener(input, 'input', () => {
     const value = typeof input.value === 'string' ? input.value : '';
     setDraftInput(value);
   });
-  input && input.addEventListener && input.addEventListener('keydown', (event) => {
+  addListener(input, 'keydown', (event) => {
     if (event && event.key === 'Enter') {
       event.preventDefault && event.preventDefault();
       submit();
     }
   });
 
-  clearButton && clearButton.addEventListener && clearButton.addEventListener('click', () => {
+  addListener(clearButton, 'click', () => {
     stopActiveShellSession();
     clearDraftInput(false);
     commands.clear();
@@ -981,7 +1019,7 @@ const bindInput = () => {
     updateStatus('Terminal cleared and banner restored.');
   });
 
-  demoButton && demoButton.addEventListener && demoButton.addEventListener('click', () => {
+  addListener(demoButton, 'click', () => {
     stopActiveShellSession();
     clearDraftInput(false);
     commands.demo();
@@ -989,31 +1027,31 @@ const bindInput = () => {
     renderPrompt();
   });
 
-  surface && surface.addEventListener && surface.addEventListener('pointerdown', (event) => {
+  addListener(surface, 'pointerdown', (event) => {
     surface.focus && surface.focus();
     if (sendTerminalMouseEvent(event, 'down')) {
       event.preventDefault && event.preventDefault();
     }
   });
-  surface && surface.addEventListener && surface.addEventListener('click', () => {
+  addListener(surface, 'click', () => {
     surface.focus && surface.focus();
   });
-  surface && surface.addEventListener && surface.addEventListener('pointermove', (event) => {
+  addListener(surface, 'pointermove', (event) => {
     if (sendTerminalMouseEvent(event, 'move')) {
       event.preventDefault && event.preventDefault();
     }
   });
-  surface && surface.addEventListener && surface.addEventListener('pointerup', (event) => {
+  addListener(surface, 'pointerup', (event) => {
     if (sendTerminalMouseEvent(event, 'up')) {
       event.preventDefault && event.preventDefault();
     }
   });
-  surface && surface.addEventListener && surface.addEventListener('wheel', (event) => {
+  addListener(surface, 'wheel', (event) => {
     if (sendTerminalMouseEvent(event, 'wheel')) {
       event.preventDefault && event.preventDefault();
     }
   });
-  surface && surface.addEventListener && surface.addEventListener('textinput', (event) => {
+  addListener(surface, 'textinput', (event) => {
     const data = typeof event?.data === 'string' ? event.data : '';
     if (!data) {
       return;
@@ -1030,7 +1068,7 @@ const bindInput = () => {
     renderPrompt();
     event.preventDefault && event.preventDefault();
   });
-  surface && surface.addEventListener && surface.addEventListener('keydown', (event) => {
+  addListener(surface, 'keydown', (event) => {
     if (activeShellSession) {
       const sequence = keyToTerminalSequence(event);
       if (sequence) {
