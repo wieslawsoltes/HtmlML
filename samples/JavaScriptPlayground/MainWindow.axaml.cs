@@ -1315,9 +1315,9 @@ if (status) {
   <StackPanel Spacing="12">
     <TextBlock Text="xterm.js headless (TypeScript)" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
     <TextBlock Text="Renders the @xterm/headless buffer onto a CanvasRenderingContext2D and routes non-built-in commands through the host OS shell." TextWrapping="Wrap" Foreground="#475569" />
-    <Border Name="xtermSurface" Width="720" Height="360" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
+    <Border Name="xtermSurface" Width="1120" Height="640" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-      <TextBox Name="xtermInput" Width="260" Watermark="Enter command (help, ls, git status, clear)" />
+      <TextBox Name="xtermInput" Width="360" Watermark="Enter command (help, ls, mc, btop, clear)" />
       <Button Name="xtermSend" Content="Send" />
       <Button Name="xtermDemo" Content="Run demo" />
       <Button Name="xtermClear" Content="Clear" />
@@ -1345,9 +1345,9 @@ try {
   <StackPanel Spacing="12">
     <TextBlock Text="xterm.js headless (JavaScript)" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
     <TextBlock Text="Loads the plain JavaScript helper that integrates the headless xterm.js bundle into the canvas renderer and host OS shell bridge." TextWrapping="Wrap" Foreground="#475569" />
-    <Border Name="xtermJsSurface" Width="720" Height="360" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
+    <Border Name="xtermJsSurface" Width="1120" Height="640" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-      <TextBox Name="xtermJsInput" Width="260" Watermark="Enter command (help, ls, git status, clear)" />
+      <TextBox Name="xtermJsInput" Width="360" Watermark="Enter command (help, ls, mc, btop, clear)" />
       <Button Name="xtermJsSend" Content="Send" />
       <Button Name="xtermJsDemo" Content="Run demo" />
       <Button Name="xtermJsClear" Content="Clear" />

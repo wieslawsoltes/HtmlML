@@ -532,9 +532,65 @@ send.dispatchEvent('click');
 """);
 
         Assert.Equal(new[] { "ls" }, shell.commands);
+        Assert.Single(shell.terminalSizes);
+        Assert.True(shell.terminalSizes[0].Columns >= 40);
+        Assert.True(shell.terminalSizes[0].Rows >= 12);
 
         var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("xtermJsStatus")).Control);
         Assert.Equal("Shell command exited with code 0.", status.Text);
+    }
+
+    [AvaloniaFact]
+    public void Require_XtermBrowserSample_StartsTuiCommandInTerminalContext()
+    {
+        var root = new Border
+        {
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border { Name = "xtermJsSurface", Width = 1120, Height = 640 },
+                    new TextBox { Name = "xtermJsInput" },
+                    new Button { Name = "xtermJsSend" },
+                    new Button { Name = "xtermJsDemo" },
+                    new Button { Name = "xtermJsClear" },
+                    new TextBlock { Name = "xtermJsStatus" }
+                }
+            }
+        };
+
+        root.Measure(new Size(1200, 760));
+        root.Arrange(new Rect(0, 0, 1200, 760));
+
+        var (host, _) = HostTestUtilities.CreateHost(root);
+        host.ScriptBaseDirectory = Path.Combine(GetRepositoryRoot(), "samples", "JavaScriptPlayground");
+
+        var shell = new MockHostShellBridge { supportsTty = true };
+        host.Engine.SetValue("hostShell", shell);
+        host.Engine.Execute("""
+if (typeof window !== 'undefined') {
+  window.hostShell = hostShell;
+}
+if (typeof globalThis !== 'undefined') {
+  globalThis.hostShell = hostShell;
+}
+""");
+
+        host.Require("./Scripts/xterm-browser.js");
+        host.ExecuteScriptText("""
+const input = document.getElementById('xtermJsInput');
+const send = document.getElementById('xtermJsSend');
+input.value = 'btop';
+send.dispatchEvent('click');
+""");
+
+        var started = Assert.Single(shell.sessions);
+        Assert.Equal("btop", started.Command);
+        Assert.True(started.Columns >= 60);
+        Assert.True(started.Rows >= 24);
+
+        var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("xtermJsStatus")).Control);
+        Assert.Contains("Started btop", status.Text);
     }
 
     [AvaloniaFact]
@@ -982,24 +1038,73 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
     {
         public List<string> commands { get; } = new();
 
+        public List<(int Columns, int Rows)> terminalSizes { get; } = new();
+
+        public List<MockHostShellSession> sessions { get; } = new();
+
         public string shell => "mocksh";
 
         public string cwd => "/mock";
 
-        public bool supportsTty => false;
+        public bool supportsTty { get; set; }
 
         public MockHostShellResult execute(string command)
+            => execute(command, 15000, 0, 0);
+
+        public MockHostShellResult execute(string command, int timeoutMs)
+            => execute(command, timeoutMs, 0, 0);
+
+        public MockHostShellResult execute(string command, int timeoutMs, int columns, int rows)
         {
             commands.Add(command);
+            terminalSizes.Add((columns, rows));
             return new MockHostShellResult
             {
                 exitCode = 0,
                 stdout = "file-a\nfile-b\n",
                 output = "file-a\nfile-b\n",
+                timeoutMs = timeoutMs,
                 shell = shell,
                 cwd = cwd,
                 success = true
             };
+        }
+
+        public MockHostShellSession start(string command, int columns, int rows)
+        {
+            var session = new MockHostShellSession(command, columns, rows);
+            sessions.Add(session);
+            return session;
+        }
+    }
+
+    private sealed class MockHostShellSession
+    {
+        public MockHostShellSession(string command, int columns, int rows)
+        {
+            Command = command;
+            Columns = columns;
+            Rows = rows;
+        }
+
+        public string Command { get; }
+
+        public int Columns { get; }
+
+        public int Rows { get; }
+
+        public bool isRunning => true;
+
+        public int exitCode => 0;
+
+        public string read() => string.Empty;
+
+        public bool write(string data) => true;
+
+        public bool resize(int columns, int rows) => true;
+
+        public void kill()
+        {
         }
     }
 

@@ -28,13 +28,13 @@ const theme = {
 };
 
 const terminal = new TerminalCtor({
-  cols: 90,
-  rows: 28,
+  cols: 120,
+  rows: 36,
   scrollback: 4000,
   allowProposedApi: true
 });
 
-let fontSize = 16;
+let fontSize = 14;
 const fontFamily = 'JetBrains Mono, SFMono-Regular, Consolas, monospace';
 const verticalPadding = 12;
 const horizontalPadding = 14;
@@ -48,7 +48,13 @@ const promptLabel = '$ ';
 const hostShell = (typeof window !== 'undefined' && window && window.hostShell)
   || (typeof globalThis !== 'undefined' && globalThis && globalThis.hostShell)
   || null;
-const canRunHostShell = hostShell && typeof hostShell.execute === 'function';
+const canRunHostShell = hostShell && hostShell.execute != null;
+const canStartHostTerminal = hostShell && hostShell.supportsTty === true;
+let activeShellSession = null;
+let activeShellCommand = '';
+let activeShellPollTimer = null;
+let lastSessionCols = terminal.cols;
+let lastSessionRows = terminal.rows;
 
 const scheduleRender = () => {
   if (renderPending) {
@@ -91,16 +97,32 @@ const measureCells = () => {
   cellHeight = Math.max(fontSize + 4, Math.ceil(fontSize * 1.4));
 };
 
+const tryResizeTerminal = (cols, rows) => {
+  if (cols === terminal.cols && rows === terminal.rows) {
+    return;
+  }
+
+  try {
+    terminal.resize(cols, rows);
+  } catch (error) {
+    // The bundled headless xterm build can expose readonly rows/cols under Jint.
+    // Keep the constructor size in that case; it is already large enough for TUIs.
+  }
+};
+
 const ensureTerminalSize = () => {
   measureCells();
-  const width = surface.offsetWidth || surface.clientWidth || surface.desiredWidth || 720;
-  const height = surface.offsetHeight || surface.clientHeight || surface.desiredHeight || 360;
+  const width = surface.offsetWidth || surface.clientWidth || surface.desiredWidth || 1120;
+  const height = surface.offsetHeight || surface.clientHeight || surface.desiredHeight || 640;
   const contentWidth = Math.max(0, width - horizontalPadding * 2);
   const contentHeight = Math.max(0, height - verticalPadding * 2);
   const cols = Math.max(40, Math.floor(contentWidth / cellWidth));
   const rows = Math.max(12, Math.floor(contentHeight / cellHeight));
-  if (cols !== terminal.cols || rows !== terminal.rows) {
-    terminal.resize(cols, rows);
+  tryResizeTerminal(cols, rows);
+  if (activeShellSession && (terminal.cols !== lastSessionCols || terminal.rows !== lastSessionRows)) {
+    lastSessionCols = terminal.cols;
+    lastSessionRows = terminal.rows;
+    activeShellSession.resize && activeShellSession.resize(terminal.cols, terminal.rows);
   }
   return { width, height };
 };
@@ -146,6 +168,168 @@ const stopInterval = (id) => {
     window.clearInterval(id);
   } else {
     clearInterval(id);
+  }
+};
+
+const terminalCommands = [
+  'btop',
+  'htop',
+  'top',
+  'mc',
+  'vim',
+  'nvim',
+  'nano',
+  'less',
+  'man',
+  'tig',
+  'ssh'
+];
+
+const getExecutableName = (command) => {
+  const first = String(command || '').trim().split(/\s+/g)[0] || '';
+  const slash = Math.max(first.lastIndexOf('/'), first.lastIndexOf('\\'));
+  return slash >= 0 ? first.slice(slash + 1) : first;
+};
+
+const shouldStartTerminalSession = (command) => canStartHostTerminal && terminalCommands.indexOf(getExecutableName(command)) >= 0;
+
+const stopActiveShellSession = () => {
+  if (activeShellPollTimer != null) {
+    stopInterval(activeShellPollTimer);
+    activeShellPollTimer = null;
+  }
+
+  if (activeShellSession) {
+    activeShellSession.kill && activeShellSession.kill();
+    activeShellSession = null;
+    activeShellCommand = '';
+  }
+};
+
+const flushActiveShellOutput = () => {
+  if (!activeShellSession || typeof activeShellSession.read !== 'function') {
+    return false;
+  }
+
+  const output = activeShellSession.read();
+  if (!output) {
+    return false;
+  }
+
+  terminal.write(output, () => scheduleRender());
+  scheduleRender();
+  return true;
+};
+
+const pollActiveShellSession = () => {
+  if (!activeShellSession) {
+    return;
+  }
+
+  flushActiveShellOutput();
+  if (activeShellSession.isRunning) {
+    return;
+  }
+
+  flushActiveShellOutput();
+  const exitCode = Number(activeShellSession.exitCode);
+  const command = activeShellCommand || 'command';
+  if (activeShellPollTimer != null) {
+    stopInterval(activeShellPollTimer);
+    activeShellPollTimer = null;
+  }
+
+  activeShellSession = null;
+  activeShellCommand = '';
+  terminal.write(`\r\n[${command} exited with code ${Number.isFinite(exitCode) ? exitCode : 0}]\r\n`);
+  renderPrompt();
+  updateStatus(`${command} exited.`);
+};
+
+const startActiveShellSession = (command) => {
+  if (!canStartHostTerminal || !hostShell) {
+    return false;
+  }
+
+  ensureTerminalSize();
+  stopActiveShellSession();
+  terminal.write('\x1b[2J\x1b[H');
+  terminal.write(`${promptLabel}${command}\r\n`);
+
+  let session = null;
+  try {
+    session = hostShell.start(command, terminal.cols, terminal.rows);
+  } catch (error) {
+    updateStatus(`Unable to start terminal context: ${error}`);
+    renderPrompt();
+    return false;
+  }
+  if (!session) {
+    renderPrompt();
+    return false;
+  }
+
+  activeShellSession = session;
+  activeShellCommand = getExecutableName(command) || command;
+  lastSessionCols = terminal.cols;
+  lastSessionRows = terminal.rows;
+  activeShellPollTimer = startInterval(pollActiveShellSession, 50);
+  pollActiveShellSession();
+  updateStatus(`Started ${activeShellCommand} in ${terminal.cols}x${terminal.rows} terminal context. Focus the canvas to send keys; use Ctrl+C or Clear to stop.`);
+  return true;
+};
+
+const sendToActiveShellSession = (data) => {
+  if (!activeShellSession || !data) {
+    return false;
+  }
+
+  activeShellSession.write && activeShellSession.write(data);
+  return true;
+};
+
+const keyToTerminalSequence = (event) => {
+  const key = event?.key;
+  if (event?.ctrlKey && (key === 'c' || key === 'C')) {
+    return '\x03';
+  }
+  if (event?.ctrlKey && (key === 'd' || key === 'D')) {
+    return '\x04';
+  }
+  if (event?.ctrlKey && (key === 'l' || key === 'L')) {
+    return '\x0c';
+  }
+
+  switch (key) {
+    case 'Enter':
+      return '\r';
+    case 'Backspace':
+    case 'Back':
+      return '\x7f';
+    case 'Tab':
+      return '\t';
+    case 'Escape':
+      return '\x1b';
+    case 'ArrowUp':
+      return '\x1b[A';
+    case 'ArrowDown':
+      return '\x1b[B';
+    case 'ArrowRight':
+      return '\x1b[C';
+    case 'ArrowLeft':
+      return '\x1b[D';
+    case 'Home':
+      return '\x1b[H';
+    case 'End':
+      return '\x1b[F';
+    case 'PageUp':
+      return '\x1b[5~';
+    case 'PageDown':
+      return '\x1b[6~';
+    case 'Delete':
+      return '\x1b[3~';
+    default:
+      return '';
   }
 };
 
@@ -205,7 +389,8 @@ const commands = Object.create(null);
 
 commands.clear = () => {
   stopDemoStream();
-  terminal.reset();
+  stopActiveShellSession();
+  terminal.write('\x1b[2J\x1b[H');
   printBanner();
 };
 
@@ -219,7 +404,11 @@ commands.help = () => {
   if (canRunHostShell) {
     runWriter(`  <other>    Run via host shell (${hostShell.shell || 'shell'})`);
     runWriter(`  cwd        ${hostShell.cwd || ''}`);
-    runWriter('  note       No PTY: full-screen TUIs like mc or vim are not supported.');
+    if (canStartHostTerminal) {
+      runWriter('  mc/btop    Start in a terminal context; focus canvas to send keys.');
+    } else {
+      runWriter('  note       No PTY bridge: full-screen TUIs like mc or btop are not supported.');
+    }
   }
 };
 
@@ -270,6 +459,12 @@ const executeCommand = (raw) => {
     return 'Enter a command.';
   }
 
+  if (activeShellSession) {
+    sendToActiveShellSession(`${raw || ''}\r`);
+    clearDraftInput();
+    return `Sent input to ${activeShellCommand || 'terminal session'}.`;
+  }
+
   stopDemoStream();
   clearDraftInput(false);
 
@@ -289,9 +484,16 @@ const executeCommand = (raw) => {
     return `Ran ${command}.`;
   }
 
+  if (shouldStartTerminalSession(trimmed)) {
+    return startActiveShellSession(trimmed)
+      ? `Started ${getExecutableName(trimmed)} in terminal context.`
+      : `Unable to start terminal context for ${getExecutableName(trimmed)}.`;
+  }
+
   if (canRunHostShell) {
     try {
-      const result = hostShell.execute(trimmed);
+      ensureTerminalSize();
+      const result = hostShell.execute(trimmed, 15000, terminal.cols, terminal.rows);
       const exitCode = Number(result && result.exitCode);
       const timedOut = Boolean(result && result.timedOut);
       const wroteOutput = writeCommandOutput(result && typeof result.output === 'string' ? result.output : '');
@@ -328,7 +530,12 @@ const bindInput = () => {
     const value = typeof rawValue === 'string'
       ? rawValue
       : (input && typeof input.value === 'string' ? input.value : draftInput);
-    updateStatus(executeCommand(value));
+    try {
+      updateStatus(executeCommand(value));
+    } catch (error) {
+      updateStatus(`Command failed: ${error}`);
+      throw error;
+    }
   };
 
   sendButton && sendButton.addEventListener && sendButton.addEventListener('click', submit);
@@ -344,6 +551,7 @@ const bindInput = () => {
   });
 
   clearButton && clearButton.addEventListener && clearButton.addEventListener('click', () => {
+    stopActiveShellSession();
     clearDraftInput(false);
     commands.clear();
     renderPrompt();
@@ -351,6 +559,7 @@ const bindInput = () => {
   });
 
   demoButton && demoButton.addEventListener && demoButton.addEventListener('click', () => {
+    stopActiveShellSession();
     clearDraftInput(false);
     commands.demo();
     updateStatus('Streaming demo workload...');
@@ -369,12 +578,27 @@ const bindInput = () => {
       return;
     }
 
+    if (activeShellSession) {
+      sendToActiveShellSession(data);
+      event.preventDefault && event.preventDefault();
+      return;
+    }
+
     draftInput += data;
     syncInputBox();
     renderPrompt();
     event.preventDefault && event.preventDefault();
   });
   surface && surface.addEventListener && surface.addEventListener('keydown', (event) => {
+    if (activeShellSession) {
+      const sequence = keyToTerminalSequence(event);
+      if (sequence) {
+        sendToActiveShellSession(sequence);
+        event.preventDefault && event.preventDefault();
+      }
+      return;
+    }
+
     const key = event?.key;
     if (event?.ctrlKey && (key === 'l' || key === 'L')) {
       clearDraftInput(false);
