@@ -1341,17 +1341,9 @@ internal sealed partial class CanvasWebGlRenderingContext
             return existing;
         }
 
-        var location = name switch
-        {
-            "position" => 0,
-            "normal" => 1,
-            "uv" => 2,
-            "uv2" => 3,
-            "color" => 4,
-            "skinIndex" => 5,
-            "skinWeight" => 6,
-            _ => program.AttributeLocations.Count == 0 ? 0 : Math.Max(0, program.AttributeLocations.Values.DefaultIfEmpty(-1).Max() + 1)
-        };
+        var location = program.AttributeLocations.Count == 0
+            ? 0
+            : Math.Max(0, program.AttributeLocations.Values.DefaultIfEmpty(-1).Max() + 1);
         program.AttributeLocations[name] = location;
         return location;
     }
