@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Dynamic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
@@ -14,7 +17,9 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Layout;
+using Avalonia.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -23,6 +28,7 @@ using Jint.Native;
 using Jint.Native.Boolean;
 using Jint.Native.Object;
 using Jint.Runtime;
+using SkiaSharp;
 
 namespace JavaScript.Avalonia;
 
@@ -397,7 +403,9 @@ public class AvaloniaDomDocument
             return existing;
         }
 
-        var created = new AvaloniaDomElement(Host, control);
+        var created = control is Image image
+            ? new AvaloniaDomImageElement(Host, image)
+            : new AvaloniaDomElement(Host, control);
 
         _elementWrappers.Add(control, created);
         return created;
@@ -4489,6 +4497,342 @@ public class AvaloniaDomElement
         return false;
     }
 
+}
+
+public sealed class AvaloniaDomImageElement : AvaloniaDomElement
+{
+    private static readonly HttpClient s_httpClient = new();
+    private string _src = string.Empty;
+    private byte[]? _rgbaPixels;
+    private int _naturalWidth;
+    private int _naturalHeight;
+
+    public AvaloniaDomImageElement(JintAvaloniaHost host, Image image)
+        : base(host, image)
+    {
+    }
+
+    private Image ImageControl => (Image)Control;
+
+    private readonly record struct DecodedImage(int Width, int Height, byte[] RgbaPixels, WriteableBitmap Image);
+
+    public string src
+    {
+        get => _src;
+        set => SetSource(value);
+    }
+
+    public string crossOrigin { get; set; } = string.Empty;
+
+    public string referrerPolicy { get; set; } = string.Empty;
+
+    public string decoding { get; set; } = "auto";
+
+    public JsValue onload { get; set; } = JsValue.Undefined;
+
+    public JsValue onerror { get; set; } = JsValue.Undefined;
+
+    public bool complete { get; private set; }
+
+    public double naturalWidth => _naturalWidth;
+
+    public double naturalHeight => _naturalHeight;
+
+    public override double width
+    {
+        get
+        {
+            var explicitWidth = base.width;
+            return explicitWidth > 0 ? explicitWidth : naturalWidth;
+        }
+        set => base.width = value;
+    }
+
+    public override double height
+    {
+        get
+        {
+            var explicitHeight = base.height;
+            return explicitHeight > 0 ? explicitHeight : naturalHeight;
+        }
+        set => base.height = value;
+    }
+
+    internal bool TryGetRgbaPixels(out int width, out int height, out byte[] pixels)
+    {
+        width = 0;
+        height = 0;
+        pixels = Array.Empty<byte>();
+
+        if (_rgbaPixels is null || _naturalWidth <= 0 || _naturalHeight <= 0)
+        {
+            return false;
+        }
+
+        width = _naturalWidth;
+        height = _naturalHeight;
+        pixels = _rgbaPixels;
+        return pixels.Length == width * height * 4;
+    }
+
+    internal static bool TryGetRgbaPixels(object? source, out int width, out int height, out byte[] pixels)
+    {
+        width = 0;
+        height = 0;
+        pixels = Array.Empty<byte>();
+
+        if (source is AvaloniaDomImageElement domImage)
+        {
+            return domImage.TryGetRgbaPixels(out width, out height, out pixels);
+        }
+
+        if (source is AvaloniaDomElement { Control: Image domControl } && domControl.Source is Bitmap domBitmap)
+        {
+            width = domBitmap.PixelSize.Width;
+            height = domBitmap.PixelSize.Height;
+            if (width <= 0 || height <= 0)
+            {
+                return false;
+            }
+
+            pixels = ExtractRgbaPixels(domBitmap);
+            return pixels.Length == width * height * 4;
+        }
+
+        if (source is Image image && image.Source is Bitmap bitmap)
+        {
+            width = bitmap.PixelSize.Width;
+            height = bitmap.PixelSize.Height;
+            if (width <= 0 || height <= 0)
+            {
+                return false;
+            }
+
+            pixels = ExtractRgbaPixels(bitmap);
+            return pixels.Length == width * height * 4;
+        }
+
+        return false;
+    }
+
+    protected override bool TrySetAttribute(string name, string? value)
+    {
+        if (string.Equals(name, "src", StringComparison.OrdinalIgnoreCase))
+        {
+            src = value ?? string.Empty;
+            return true;
+        }
+
+        return base.TrySetAttribute(name, value);
+    }
+
+    private void SetSource(string? value)
+    {
+        _src = value ?? string.Empty;
+        complete = false;
+        _rgbaPixels = null;
+        _naturalWidth = 0;
+        _naturalHeight = 0;
+
+        if (string.IsNullOrWhiteSpace(_src))
+        {
+            ImageControl.Source = null;
+            return;
+        }
+
+        try
+        {
+            using var stream = OpenImageStream(_src);
+            var decoded = DecodeImage(stream);
+            ImageControl.Source = decoded.Image;
+            _naturalWidth = decoded.Width;
+            _naturalHeight = decoded.Height;
+            _rgbaPixels = decoded.RgbaPixels;
+            complete = true;
+            DispatchImageEvent("load", onload);
+        }
+        catch
+        {
+            ImageControl.Source = null;
+            DispatchImageEvent("error", onerror);
+        }
+    }
+
+    private Stream OpenImageStream(string source)
+    {
+        if (source.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return OpenDataUri(source);
+        }
+
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri))
+        {
+            if (uri.Scheme.Equals("avares", StringComparison.OrdinalIgnoreCase))
+            {
+                return AssetLoader.Open(uri);
+            }
+
+            if (uri.IsFile)
+            {
+                return File.OpenRead(uri.LocalPath);
+            }
+
+            if (uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
+                uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase))
+            {
+                var bytes = s_httpClient.GetByteArrayAsync(uri).GetAwaiter().GetResult();
+                return new MemoryStream(bytes);
+            }
+        }
+
+        var path = source;
+        if (!Path.IsPathRooted(path) && !string.IsNullOrEmpty(Host.ScriptBaseDirectory))
+        {
+            path = Path.GetFullPath(Path.Combine(Host.ScriptBaseDirectory, path));
+        }
+
+        return File.OpenRead(path);
+    }
+
+    private static Stream OpenDataUri(string source)
+    {
+        var comma = source.IndexOf(',');
+        if (comma < 0)
+        {
+            throw new FormatException("Invalid data URI.");
+        }
+
+        var metadata = source[..comma];
+        var payload = source[(comma + 1)..];
+        var bytes = metadata.Contains(";base64", StringComparison.OrdinalIgnoreCase)
+            ? Convert.FromBase64String(payload)
+            : Encoding.UTF8.GetBytes(Uri.UnescapeDataString(payload));
+        return new MemoryStream(bytes);
+    }
+
+    private static DecodedImage DecodeImage(Stream stream)
+    {
+        using var codec = SKCodec.Create(stream) ?? throw new InvalidOperationException("Unable to decode image.");
+        var width = codec.Info.Width;
+        var height = codec.Info.Height;
+        if (width <= 0 || height <= 0)
+        {
+            throw new InvalidOperationException("Decoded image has invalid dimensions.");
+        }
+
+        var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        using var bitmap = new SKBitmap(info);
+        var result = codec.GetPixels(info, bitmap.GetPixels());
+        if (result != SKCodecResult.Success && result != SKCodecResult.IncompleteInput)
+        {
+            throw new InvalidOperationException($"Unable to decode image pixels: {result}.");
+        }
+
+        var rgbaPixels = new byte[width * height * 4];
+        Marshal.Copy(bitmap.GetPixels(), rgbaPixels, 0, rgbaPixels.Length);
+
+        return new DecodedImage(width, height, rgbaPixels, CreateWriteableBitmap(width, height, rgbaPixels));
+    }
+
+    private static WriteableBitmap CreateWriteableBitmap(int width, int height, byte[] rgbaPixels)
+    {
+        var image = new WriteableBitmap(
+            new PixelSize(width, height),
+            new Vector(96, 96),
+            PixelFormat.Bgra8888,
+            AlphaFormat.Premul);
+
+        using var framebuffer = image.Lock();
+        var bgraRow = new byte[width * 4];
+        for (var y = 0; y < height; y++)
+        {
+            var sourceOffset = y * width * 4;
+            for (var x = 0; x < width; x++)
+            {
+                var source = sourceOffset + x * 4;
+                var target = x * 4;
+                var a = rgbaPixels[source + 3];
+                var r = Premultiply(rgbaPixels[source], a);
+                var g = Premultiply(rgbaPixels[source + 1], a);
+                var b = Premultiply(rgbaPixels[source + 2], a);
+                bgraRow[target] = b;
+                bgraRow[target + 1] = g;
+                bgraRow[target + 2] = r;
+                bgraRow[target + 3] = a;
+            }
+
+            Marshal.Copy(bgraRow, 0, IntPtr.Add(framebuffer.Address, y * framebuffer.RowBytes), bgraRow.Length);
+        }
+
+        return image;
+    }
+
+    private static byte Premultiply(byte channel, byte alpha)
+    {
+        if (alpha >= byte.MaxValue)
+        {
+            return channel;
+        }
+
+        if (alpha == 0)
+        {
+            return 0;
+        }
+
+        return (byte)((channel * alpha + 127) / 255);
+    }
+
+    private void DispatchImageEvent(string eventName, JsValue handler)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var evt = new DomSyntheticEvent(eventName, bubbles: false, cancelable: false, Host.GetTimestamp(), detail: null, accessor: null);
+            Host.Document.DispatchSyntheticEvent(this, evt);
+
+            if (!handler.IsUndefined() && !handler.IsNull())
+            {
+                try
+                {
+                    Host.Engine.Invoke(handler, evt);
+                    Host.ProcessPendingTasks();
+                }
+                catch
+                {
+                }
+            }
+        }, DispatcherPriority.Send);
+    }
+
+    private static byte[] ExtractRgbaPixels(Bitmap bitmap)
+    {
+        var width = bitmap.PixelSize.Width;
+        var height = bitmap.PixelSize.Height;
+        if (width <= 0 || height <= 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        var stride = width * 4;
+        var pixels = new byte[stride * height];
+        var handle = System.Runtime.InteropServices.GCHandle.Alloc(pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try
+        {
+            using var framebuffer = new LockedFramebuffer(
+                handle.AddrOfPinnedObject(),
+                new PixelSize(width, height),
+                stride,
+                new Vector(96, 96),
+                PixelFormats.Rgba8888,
+                null);
+            bitmap.CopyPixels(framebuffer, AlphaFormat.Unpremul);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        return pixels;
+    }
 }
 
 public sealed class AvaloniaDomTextNode : AvaloniaDomElement

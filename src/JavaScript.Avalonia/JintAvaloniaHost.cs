@@ -325,6 +325,8 @@ var navigator = (__avaloniaGlobal && __avaloniaGlobal.navigator) || (window && w
 
     private void RegisterCompatibilityShims()
     {
+        Engine.SetValue("__createImageElementInternal", new Func<object?>(() => Document.createElement("img")));
+
         const string script = @"(function(){
   function wrapGetPrototypeOf(target, name) {
     if (!target || typeof target[name] !== 'function') {
@@ -439,9 +441,31 @@ var navigator = (__avaloniaGlobal && __avaloniaGlobal.navigator) || (window && w
       && value.nodeType === 1
       && (String(value.nodeName || '').toUpperCase() === 'CANVAS' || typeof value.getContext === 'function');
   });
+  defineDomCtor('HTMLImageElement', function(value) {
+    return value != null
+      && value.nodeType === 1
+      && String(value.nodeName || '').toUpperCase() === 'IMG';
+  });
+  if (typeof globalThis !== 'undefined' && typeof globalThis.__createImageElementInternal === 'function') {
+    var createImageElement = globalThis.__createImageElementInternal;
+    function Image(width, height) {
+      var image = createImageElement();
+      if (typeof width === 'number') {
+        image.width = width;
+      }
+      if (typeof height === 'number') {
+        image.height = height;
+      }
+      return image;
+    }
+    defineGlobal('Image', Image);
+  }
   defineDomCtor('Window', function(value) {
     return value != null && typeof value.setTimeout === 'function' && value.navigator != null;
   });
+  try {
+    delete globalThis.__createImageElementInternal;
+  } catch (error) {}
 })();";
 
         try

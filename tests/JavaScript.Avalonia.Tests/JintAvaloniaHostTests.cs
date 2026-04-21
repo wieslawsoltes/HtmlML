@@ -79,6 +79,31 @@ globalThis.domValue = input.value;
     }
 
     [AvaloniaFact]
+    public void ImageElement_LoadsDataUriAndDispatchesLoad()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+
+        host.ExecuteScriptText("""
+const image = new Image();
+globalThis.imageLoaded = false;
+image.addEventListener('load', () => {
+  globalThis.imageLoaded = true;
+});
+image.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAA1JREFUCJlj+M/A8B8ABQAB/6vONokAAAAASUVORK5CYII=';
+globalThis.imageComplete = image.complete;
+globalThis.imageWidth = image.naturalWidth;
+globalThis.imageHeight = image.naturalHeight;
+""");
+
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("imageComplete").ToObject()));
+        Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("imageWidth").ToObject()));
+        Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("imageHeight").ToObject()));
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("imageLoaded").ToObject()));
+    }
+
+    [AvaloniaFact]
     public void NavigatorClipboard_RoundTripsText()
     {
         var (host, _) = HostTestUtilities.CreateHost();
