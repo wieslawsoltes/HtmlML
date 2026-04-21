@@ -1517,7 +1517,7 @@ public class AvaloniaDomElement
 
     public string tagName => nodeName;
 
-    public virtual DomRect getBoundingClientRect() => new(Control.Bounds);
+    public virtual DomRect getBoundingClientRect() => new(GetElementBounds());
 
     public virtual double clientWidth => GetClientSize().Width;
 
@@ -1527,9 +1527,9 @@ public class AvaloniaDomElement
 
     public virtual double clientLeft => 0;
 
-    public virtual double offsetWidth => Control.Bounds.Width;
+    public virtual double offsetWidth => GetExplicitOrArrangedSize(Control.Width, Control.Bounds.Width);
 
-    public virtual double offsetHeight => Control.Bounds.Height;
+    public virtual double offsetHeight => GetExplicitOrArrangedSize(Control.Height, Control.Bounds.Height);
 
     public virtual double offsetTop => GetOffsetRelativeToParent().Y;
 
@@ -1688,7 +1688,7 @@ public class AvaloniaDomElement
             }
         }
 
-        return Control.Bounds.Size;
+        return GetElementBounds().Size;
     }
 
     private Size GetScrollSize()
@@ -1709,7 +1709,15 @@ public class AvaloniaDomElement
             return new Size(double.IsFinite(width) ? width : 0, double.IsFinite(height) ? height : 0);
         }
 
-        return Control.Bounds.Size;
+        return GetElementBounds().Size;
+    }
+
+    private Rect GetElementBounds()
+    {
+        var bounds = Control.Bounds;
+        var width = GetExplicitOrArrangedSize(Control.Width, bounds.Width);
+        var height = GetExplicitOrArrangedSize(Control.Height, bounds.Height);
+        return new Rect(bounds.Position, new Size(width, height));
     }
 
     private Vector GetScrollOffset()

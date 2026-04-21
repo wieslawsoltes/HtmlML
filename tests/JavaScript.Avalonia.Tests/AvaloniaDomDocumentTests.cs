@@ -1135,6 +1135,24 @@ public class AvaloniaDomDocumentTests
     }
 
     [AvaloniaFact]
+    public void ClientMetrics_UseExplicitSizeBeforeLayout()
+    {
+        var border = new Border { Width = 120, Height = 80, Name = "target" };
+        var (host, _) = HostTestUtilities.CreateHost(border);
+        var element = HostTestUtilities.GetElement(host.Document.getElementById("target"));
+        var bounds = element.getBoundingClientRect();
+
+        Assert.Equal(120, element.clientWidth);
+        Assert.Equal(80, element.clientHeight);
+        Assert.Equal(120, element.scrollWidth);
+        Assert.Equal(80, element.scrollHeight);
+        Assert.Equal(120, element.offsetWidth);
+        Assert.Equal(80, element.offsetHeight);
+        Assert.Equal(120, bounds.width);
+        Assert.Equal(80, bounds.height);
+    }
+
+    [AvaloniaFact]
     public void ScrollMetrics_InteractWithScrollViewer()
     {
         var stack = new StackPanel { Orientation = Orientation.Vertical };
