@@ -936,20 +936,27 @@ status.textContent = canvas ? 'Fabric.js scene ready' : 'Fabric.js canvas missin
     {
         var root = new Border
         {
+            Background = Brushes.White,
             Child = new StackPanel
             {
                 Children =
                 {
-                    new Border { Name = "paperSurface", Width = 560, Height = 320 },
+                    new Border { Name = "paperSurface", Width = 560, Height = 320, Background = Brushes.White },
                     new TextBlock { Name = "paperStatus" }
                 }
             }
         };
+        var window = new Window
+        {
+            Width = 640,
+            Height = 420,
+            Content = new VisualLayerManager { Child = root }
+        };
 
-        root.Measure(new Size(900, 700));
-        root.Arrange(new Rect(0, 0, 900, 700));
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
 
-        var (host, _) = HostTestUtilities.CreateHost(root);
+        var host = new JintAvaloniaHost(window);
 
         host.Engine.Execute("""
 const surface = document.getElementById('paperSurface');
@@ -976,6 +983,20 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
 
         var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("paperStatus")).Control);
         Assert.Equal("Paper.js scene ready", status.Text);
+
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("paperSurface"));
+        var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
+        Assert.True(context.CommandCount > 0);
+
+        Dispatcher.UIThread.RunJobs();
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            Assert.True(
+                HasNonWhitePixel(frame!, 0, 0, 560, 320),
+                "Expected Paper.js to render visible canvas pixels, but the scene surface stayed blank.");
+        }
     }
 
     [AvaloniaFact]

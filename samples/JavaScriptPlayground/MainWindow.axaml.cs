@@ -2173,6 +2173,7 @@ const mutateScene = () => {
 
   rebuildWave();
   rebuildConnectors();
+  paper.view.update();
   paper.view.requestUpdate();
   report('Paper.js scene mutated with new palette and geometry.');
 };
@@ -2191,6 +2192,7 @@ toggleBtn.addEventListener('click', () => {
 });
 
 report('Paper.js generative scene ready — mutate the palette or pause the motion.');
+paper.view.update();
 paper.view.play();
 """
             ),
