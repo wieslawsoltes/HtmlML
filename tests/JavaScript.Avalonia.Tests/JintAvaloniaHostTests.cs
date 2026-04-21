@@ -1198,7 +1198,7 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
                 $"Expected Three.js WebGL scene to produce visible pixels. {context.LastDrawStatus}");
         }
 
-        Assert.StartsWith("Skia", context.RenderBackend, StringComparison.Ordinal);
+        Assert.Contains("Avalonia OpenGL", context.RenderBackend, StringComparison.Ordinal);
     }
 
     [AvaloniaFact]
@@ -1294,13 +1294,13 @@ status.textContent = gl.LastDrawStatus;
 """);
 
         var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("lavaStatus")).Control);
-        Assert.Contains("lava-shaded", status.Text);
+        Assert.Contains("triangle", status.Text, StringComparison.OrdinalIgnoreCase);
 
         var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("lavaSurface"));
         var context = Assert.IsType<CanvasWebGlRenderingContext>(surfaceElement.getContext("webgl"));
         Assert.True(context.DrawCallCount > 0, context.LastDrawStatus);
         Assert.True(context.TriangleCount > 0, context.LastDrawStatus);
-        Assert.Contains("lava-shaded", context.LastDrawStatus);
+        Assert.Contains("triangle", context.LastDrawStatus, StringComparison.OrdinalIgnoreCase);
 
         Dispatcher.UIThread.RunJobs();
         var frame = window.CaptureRenderedFrame();
@@ -1312,7 +1312,7 @@ status.textContent = gl.LastDrawStatus;
                 $"Expected Three.js lava shader scene to produce visible pixels. {context.LastDrawStatus}");
         }
 
-        Assert.StartsWith("Skia", context.RenderBackend, StringComparison.Ordinal);
+        Assert.Contains("Avalonia OpenGL", context.RenderBackend, StringComparison.Ordinal);
     }
 
     [AvaloniaFact]

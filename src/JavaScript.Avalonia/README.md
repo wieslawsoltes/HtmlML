@@ -230,9 +230,9 @@ Use `ctx.clearRect(0, 0, surface.offsetWidth, surface.offsetHeight);` to wipe th
 - Gradients via `createLinearGradient` / `createRadialGradient` with standard `addColorStop` semantics.
 - `drawImage` accepts Avalonia `IImage` instances (including `Bitmap` and `Image.Source`) for blitting surfaces into the canvas.
 
-`getContext('webgl')` and `getContext('experimental-webgl')` expose an initial WebGL 1-compatible context for JavaScript libraries that expect a browser canvas. The current backend supports shader/program reflection, buffers, vertex attributes, uniforms, indexed triangle drawing, and enough texture/framebuffer state for libraries such as Three.js to render simple 3D scenes into the Avalonia canvas surface.
+`getContext('webgl')` and `getContext('experimental-webgl')` expose an initial WebGL 1-compatible context for JavaScript libraries that expect a browser canvas. The current backend supports shader/program reflection, buffers, vertex attributes, uniforms, indexed triangle drawing, textures, and enough render state for libraries such as Three.js to render simple 3D scenes into the Avalonia canvas surface.
 
-When Avalonia is running on the Skia renderer, WebGL frames are replayed through an `ICustomDrawOperation` using `ISkiaSharpApiLeaseFeature`. On GPU-backed Skia surfaces the leased `SKCanvas` is backed by `GRContext`; otherwise the context falls back to CPU Skia or the existing Avalonia drawing command path. `gl.RenderBackend` reports the active render path after the surface has rendered.
+On desktop renderers that expose Avalonia OpenGL compositor interop, WebGL frames are replayed by an `OpenGlControlBase` adorner surface into Avalonia's shared composition texture. JavaScript calls stay synchronous and only queue WebGL state; native GL objects are created and used inside Avalonia's OpenGL render callback where the context is current. Headless runs keep the software canvas fallback for tests. `gl.RenderBackend` reports the active render path after the surface has rendered.
 
 ```js
 const surface = document.getElementById('threeSurface');
