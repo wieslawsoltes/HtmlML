@@ -89,6 +89,16 @@ globalThis.imageLoaded = false;
 image.addEventListener('load', () => {
   globalThis.imageLoaded = true;
 });
+image.addEventListener('load', function (event) {
+  globalThis.imageLoadThisNodeName = this.nodeName;
+  globalThis.imageLoadThisWidth = this.width;
+  globalThis.imageLoadTargetNodeName = event.target.nodeName;
+});
+image.onload = function (event) {
+  globalThis.imageOnLoadThisNodeName = this.nodeName;
+  globalThis.imageOnLoadThisWidth = this.width;
+  globalThis.imageOnLoadTargetNodeName = event.target.nodeName;
+};
 image.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAA1JREFUCJlj+M/A8B8ABQAB/6vONokAAAAASUVORK5CYII=';
 globalThis.imageComplete = image.complete;
 globalThis.imageWidth = image.naturalWidth;
@@ -101,6 +111,12 @@ globalThis.imageHeight = image.naturalHeight;
         Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("imageWidth").ToObject()));
         Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("imageHeight").ToObject()));
         Assert.True(Convert.ToBoolean(host.Engine.GetValue("imageLoaded").ToObject()));
+        Assert.Equal("IMG", Assert.IsType<string>(host.Engine.GetValue("imageLoadThisNodeName").ToObject()));
+        Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("imageLoadThisWidth").ToObject()));
+        Assert.Equal("IMG", Assert.IsType<string>(host.Engine.GetValue("imageLoadTargetNodeName").ToObject()));
+        Assert.Equal("IMG", Assert.IsType<string>(host.Engine.GetValue("imageOnLoadThisNodeName").ToObject()));
+        Assert.Equal(1d, Convert.ToDouble(host.Engine.GetValue("imageOnLoadThisWidth").ToObject()));
+        Assert.Equal("IMG", Assert.IsType<string>(host.Engine.GetValue("imageOnLoadTargetNodeName").ToObject()));
     }
 
     [AvaloniaFact]

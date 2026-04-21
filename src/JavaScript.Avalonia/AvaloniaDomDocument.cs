@@ -1319,7 +1319,10 @@ public class AvaloniaDomDocument
             domEvent.SetCurrentTarget(currentTarget, phase, listener.Options.Passive);
             try
             {
-                Host.Engine.Invoke(listener.Callback, domEvent);
+                Host.Engine.Invoke(
+                    listener.Callback,
+                    JsValue.FromObject(Host.Engine, currentTarget),
+                    new[] { JsValue.FromObject(Host.Engine, domEvent) });
             }
             catch
             {
@@ -4793,7 +4796,10 @@ public sealed class AvaloniaDomImageElement : AvaloniaDomElement
             {
                 try
                 {
-                    Host.Engine.Invoke(handler, evt);
+                    Host.Engine.Invoke(
+                        handler,
+                        JsValue.FromObject(Host.Engine, this),
+                        new[] { JsValue.FromObject(Host.Engine, evt) });
                     Host.ProcessPendingTasks();
                 }
                 catch
