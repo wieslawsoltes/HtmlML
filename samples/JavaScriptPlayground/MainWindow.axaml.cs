@@ -1827,7 +1827,7 @@ frameHandle = window.requestAnimationFrame(tick);
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#050505" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="Three.js lava shader" FontWeight="SemiBold" Foreground="#f8fafc" />
-    <TextBlock Text="Port of three.js webgl_shader_lava: custom ShaderMaterial, official lava textures, animated torus UVs, and lava/fog uniforms." TextWrapping="Wrap" Foreground="#fca5a5" />
+    <TextBlock Text="Port of the current three.js webgl_shader_lava: custom ShaderMaterial, official lava textures, BloomPass blur, and OutputPass sRGB transfer." TextWrapping="Wrap" Foreground="#fca5a5" />
     <Border Name="lavaSurface" Width="720" Height="420" Background="#000000" BorderBrush="#7f1d1d" BorderThickness="1" CornerRadius="6" />
     <StackPanel Orientation="Horizontal" Spacing="8">
       <Button Name="lavaToggle" Content="Pause animation" />
@@ -1926,19 +1926,44 @@ void main()
 
 }`;
 
-const textureLoader = new THREE.TextureLoader();
-const cloudTexture = textureLoader.load('https://threejs.org/examples/textures/lava/cloud.png', () => {
-  renderer.clear();
-  renderer.render(scene, camera);
-  report();
-});
-const lavaTexture = textureLoader.load('https://threejs.org/examples/textures/lava/lavatile.jpg', () => {
-  renderer.clear();
-  renderer.render(scene, camera);
-  report();
-});
+const buildKernel = sigma => {
+  const maxKernelSize = 25;
+  let kernelSize = 2 * Math.ceil(sigma * 3.0) + 1;
+  if (kernelSize > maxKernelSize) {
+    kernelSize = maxKernelSize;
+  }
 
-lavaTexture.colorSpace = THREE.SRGBColorSpace;
+  const halfWidth = (kernelSize - 1) * 0.5;
+  const values = new Array(kernelSize);
+  let sum = 0.0;
+  for (let i = 0; i < kernelSize; i++) {
+    const x = i - halfWidth;
+    values[i] = Math.exp(-(x * x) / (2.0 * sigma * sigma));
+    sum += values[i];
+  }
+
+  for (let i = 0; i < kernelSize; i++) {
+    values[i] /= sum;
+  }
+
+  return values;
+};
+
+let renderScene = () => {};
+const textureLoader = new THREE.TextureLoader();
+const refreshWhenTextureLoads = () => {
+  renderScene();
+  report();
+};
+const cloudTexture = textureLoader.load('https://threejs.org/examples/textures/lava/cloud.png', refreshWhenTextureLoads);
+const lavaTexture = textureLoader.load('https://threejs.org/examples/textures/lava/lavatile.jpg', refreshWhenTextureLoads);
+
+if (THREE.SRGBColorSpace) {
+  lavaTexture.colorSpace = THREE.SRGBColorSpace;
+} else if (THREE.sRGBEncoding) {
+  lavaTexture.encoding = THREE.sRGBEncoding;
+}
+
 cloudTexture.wrapS = cloudTexture.wrapT = THREE.RepeatWrapping;
 lavaTexture.wrapS = lavaTexture.wrapT = THREE.RepeatWrapping;
 
@@ -1954,7 +1979,7 @@ const uniforms = {
 const renderer = new THREE.WebGLRenderer({
   canvas: surface,
   context: gl,
-  antialias: false,
+  antialias: true,
   alpha: false
 });
 renderer.setPixelRatio(1);
@@ -1981,9 +2006,145 @@ let running = true;
 let frameHandle = 0;
 let lastTimestamp = 0;
 
+const targetOptions = {
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  format: THREE.RGBAFormat,
+  stencilBuffer: false
+};
+const sceneTarget = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHeight, targetOptions);
+const bloomTargetX = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHeight, targetOptions);
+const bloomTargetY = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHeight, targetOptions);
+
+const quadScene = new THREE.Scene();
+const quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+quadScene.add(quad);
+
+const outputMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    tDiffuse: { value: null },
+    toneMappingExposure: { value: 1 }
+  },
+  vertexShader: `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`,
+  fragmentShader: `
+uniform sampler2D tDiffuse;
+uniform float toneMappingExposure;
+varying vec2 vUv;
+
+vec3 linearToneMapping(vec3 color) {
+  return toneMappingExposure * color;
+}
+
+vec3 sRGBTransferOETF(vec3 value) {
+  vec3 low = value * 12.92;
+  vec3 high = pow(max(value, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055;
+  return mix(low, high, step(vec3(0.0031308), value));
+}
+
+void main() {
+  vec4 texel = texture2D(tDiffuse, vUv);
+  texel.rgb = linearToneMapping(texel.rgb);
+  texel.rgb = sRGBTransferOETF(texel.rgb);
+  gl_FragColor = texel;
+}`
+});
+
+const combineMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    tDiffuse: { value: null },
+    strength: { value: 1.25 }
+  },
+  vertexShader: `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`,
+  fragmentShader: `
+uniform float strength;
+uniform sampler2D tDiffuse;
+varying vec2 vUv;
+void main() {
+  vec4 texel = texture2D(tDiffuse, vUv);
+  gl_FragColor = strength * texel;
+}`,
+  blending: THREE.AdditiveBlending,
+  transparent: true
+});
+
+const convolutionMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    tDiffuse: { value: null },
+    uImageIncrement: { value: new THREE.Vector2(0.001953125, 0.0) },
+    cKernel: { value: buildKernel(4) }
+  },
+  defines: {
+    KERNEL_SIZE_FLOAT: '25.0',
+    KERNEL_SIZE_INT: '25'
+  },
+  vertexShader: `
+uniform vec2 uImageIncrement;
+varying vec2 vUv;
+void main() {
+  vUv = uv - ((KERNEL_SIZE_FLOAT - 1.0) / 2.0) * uImageIncrement;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`,
+  fragmentShader: `
+uniform float cKernel[KERNEL_SIZE_INT];
+uniform sampler2D tDiffuse;
+uniform vec2 uImageIncrement;
+varying vec2 vUv;
+void main() {
+  vec2 imageCoord = vUv;
+  vec4 sum = vec4(0.0);
+  for (int i = 0; i < KERNEL_SIZE_INT; i++) {
+    sum += texture2D(tDiffuse, imageCoord) * cKernel[i];
+    imageCoord += uImageIncrement;
+  }
+  gl_FragColor = sum;
+}`
+});
+
+const renderQuad = (material, target, clearTarget) => {
+  quad.material = material;
+  renderer.setRenderTarget(target);
+  if (clearTarget) {
+    renderer.clear();
+  }
+  renderer.render(quadScene, quadCamera);
+};
+
+renderScene = (delta = 0.01) => {
+  renderer.clear();
+
+  renderer.setRenderTarget(sceneTarget);
+  renderer.clear();
+  renderer.render(scene, camera);
+
+  convolutionMaterial.uniforms.tDiffuse.value = sceneTarget.texture;
+  convolutionMaterial.uniforms.uImageIncrement.value.set(0.001953125, 0.0);
+  renderQuad(convolutionMaterial, bloomTargetX, true);
+
+  convolutionMaterial.uniforms.tDiffuse.value = bloomTargetX.texture;
+  convolutionMaterial.uniforms.uImageIncrement.value.set(0.0, 0.001953125);
+  renderQuad(convolutionMaterial, bloomTargetY, true);
+
+  combineMaterial.uniforms.tDiffuse.value = bloomTargetY.texture;
+  renderQuad(combineMaterial, sceneTarget, false);
+
+  outputMaterial.uniforms.tDiffuse.value = sceneTarget.texture;
+  renderQuad(outputMaterial, null, false);
+};
+
 const report = () => {
   if (status) {
-    status.textContent = `three.js ${THREE.REVISION} lava shader. Backend: ${gl.RenderBackend}; draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.`;
+    status.textContent = `three.js ${THREE.REVISION} lava shader with BloomPass + OutputPass. Backend: ${gl.RenderBackend}; draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.`;
   }
 };
 
@@ -2000,8 +2161,7 @@ const render = timestamp => {
     mesh.rotation.x += 0.05 * scaledDelta;
   }
 
-  renderer.clear();
-  renderer.render(scene, camera);
+  renderScene(0.01);
   report();
 
   if (running) {
@@ -2023,13 +2183,11 @@ toggleBtn.addEventListener('click', () => {
 resetBtn.addEventListener('click', () => {
   uniforms.time.value = 1.0;
   mesh.rotation.set(0.3, 0, 0);
-  renderer.clear();
-  renderer.render(scene, camera);
+  renderScene();
   report();
 });
 
-renderer.clear();
-renderer.render(scene, camera);
+renderScene();
 report();
 frameHandle = window.requestAnimationFrame(render);
 """
