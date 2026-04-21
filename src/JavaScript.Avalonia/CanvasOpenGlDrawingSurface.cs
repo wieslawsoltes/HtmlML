@@ -15,7 +15,17 @@ public sealed class CanvasOpenGlDrawingSurface : OpenGlControlBase
         ClipToBounds = true;
     }
 
-    internal CanvasWebGlRenderingContext? Context { get; set; }
+    private CanvasWebGlRenderingContext? _context;
+
+    internal CanvasWebGlRenderingContext? Context
+    {
+        get => _context;
+        set
+        {
+            _context = value;
+            RequestRender();
+        }
+    }
 
     internal bool IsOpenGlAvailable { get; private set; }
 
@@ -56,19 +66,19 @@ public sealed class CanvasOpenGlDrawingSurface : OpenGlControlBase
     {
         IsOpenGlAvailable = true;
         RenderBackend = BuildBackendName(gl);
-        Context?.OnOpenGlInit(gl);
+        _context?.OnOpenGlInit(gl);
     }
 
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
-        Context?.OnOpenGlDeinit(gl);
+        _context?.OnOpenGlDeinit(gl);
         IsOpenGlAvailable = false;
         RenderBackend = "Avalonia OpenGL deinitialized";
     }
 
     protected override void OnOpenGlLost()
     {
-        Context?.OnOpenGlLost();
+        _context?.OnOpenGlLost();
         IsOpenGlAvailable = false;
         RenderBackend = "Avalonia OpenGL context lost";
     }
@@ -76,7 +86,7 @@ public sealed class CanvasOpenGlDrawingSurface : OpenGlControlBase
     protected override void OnOpenGlRender(GlInterface gl, int fb)
     {
         RenderBackend = BuildBackendName(gl);
-        Context?.RenderOpenGl(gl, fb, GetCurrentPixelSize());
+        _context?.RenderOpenGl(gl, fb, GetCurrentPixelSize());
     }
 
     private PixelSize GetCurrentPixelSize()

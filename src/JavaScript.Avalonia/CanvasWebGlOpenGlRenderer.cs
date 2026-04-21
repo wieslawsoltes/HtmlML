@@ -48,7 +48,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         _openGlRenderer.Render(gl, framebuffer, pixelSize, commands);
     }
 
-    private bool ShouldUseSoftwareFallback => _openGlSurface is null || !_openGlSurface.IsOpenGlAvailable;
+    private bool ShouldUseSoftwareFallback => _openGlSurface is null;
 
     private void RequestNativeRender()
     {
