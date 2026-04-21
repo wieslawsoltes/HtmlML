@@ -17,8 +17,10 @@ internal sealed class CanvasDrawingSurface : Control
     
     private readonly List<CanvasDrawCommand> _commands = new();
     private CanvasRenderingContext2D? _context;
+    private CanvasWebGlFrame? _webGlFrame;
 
     internal IReadOnlyList<CanvasDrawCommand> Commands => _commands;
+    internal string LastWebGlRenderBackend { get; private set; } = "not rendered";
 
     public CanvasDrawingSurface()
     {
@@ -78,6 +80,17 @@ internal sealed class CanvasDrawingSurface : Control
         }
     }
 
+    internal void SetWebGlFrame(CanvasWebGlFrame? frame)
+    {
+        _webGlFrame = frame;
+        InvalidateVisual();
+    }
+
+    internal void SetWebGlRenderBackend(string backend)
+    {
+        LastWebGlRenderBackend = backend;
+    }
+
     public override void Render(DrawingContext context)
     {
         base.Render(context);
@@ -92,9 +105,20 @@ internal sealed class CanvasDrawingSurface : Control
         // also clip its own Render output so oversized draws cannot cover siblings.
         using (context.PushClip(bounds))
         {
-            RenderCommands(context);
+            if (!CanRenderWebGlFrameThroughSkia())
+            {
+                RenderCommands(context);
+            }
+
+            if (_webGlFrame is not null)
+            {
+                context.Custom(new CanvasWebGlDrawOperation(this, bounds, _webGlFrame));
+            }
         }
     }
+
+    private bool CanRenderWebGlFrameThroughSkia()
+        => _webGlFrame is not null && LastWebGlRenderBackend.StartsWith("Skia", StringComparison.Ordinal);
 
     internal void RenderCommands(DrawingContext context)
     {

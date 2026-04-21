@@ -17,8 +17,10 @@ internal sealed class CanvasWebGlRenderingContext
     private readonly Dictionary<int, WebGlVertexAttribState> _attributes = new();
     private readonly HashSet<int> _enabledAttributes = new();
     private readonly Dictionary<string, object?> _parameters = new(StringComparer.Ordinal);
+    private readonly List<CanvasWebGlTriangle> _frameTriangles = new();
     private readonly double[] _clearColor = { 0, 0, 0, 0 };
     private readonly double[] _viewport = { 0, 0, 300, 150 };
+    private bool _frameHasClear;
     private WebGlBuffer? _arrayBuffer;
     private WebGlBuffer? _elementArrayBuffer;
     private WebGlProgram? _currentProgram;
@@ -37,6 +39,8 @@ internal sealed class CanvasWebGlRenderingContext
     public int DrawCallCount { get; private set; }
     public int TriangleCount { get; private set; }
     public string LastDrawStatus { get; private set; } = "No draw call";
+    public string RenderBackend => _surface.LastWebGlRenderBackend;
+    public bool IsSkiaGpuBacked => string.Equals(RenderBackend, "Skia GRContext", StringComparison.Ordinal);
 
     public int DEPTH_BUFFER_BIT => 0x00000100;
     public int STENCIL_BUFFER_BIT => 0x00000400;
@@ -349,12 +353,12 @@ internal sealed class CanvasWebGlRenderingContext
     {
         if (pname == VERSION)
         {
-            return "WebGL 1.0 (Avalonia software bridge)";
+            return "WebGL 1.0 (Avalonia Skia bridge)";
         }
 
         if (pname == SHADING_LANGUAGE_VERSION)
         {
-            return "WebGL GLSL ES 1.0 (Avalonia software bridge)";
+            return "WebGL GLSL ES 1.0 (Avalonia Skia bridge)";
         }
 
         if (pname == VENDOR)
@@ -364,7 +368,7 @@ internal sealed class CanvasWebGlRenderingContext
 
         if (pname == RENDERER)
         {
-            return "JavaScript.Avalonia Canvas WebGL";
+            return $"JavaScript.Avalonia Canvas WebGL ({RenderBackend})";
         }
 
         if (pname == VIEWPORT)
@@ -742,6 +746,9 @@ internal sealed class CanvasWebGlRenderingContext
         }
 
         _surface.ClearAll();
+        _frameHasClear = true;
+        _frameTriangles.Clear();
+        SyncWebGlFrame();
         var width = GetSurfaceWidth();
         var height = GetSurfaceHeight();
         _canvas2d.fillStyle = ToCssColor(_clearColor);
@@ -855,7 +862,11 @@ internal sealed class CanvasWebGlRenderingContext
         TriangleCount += triangles.Count;
         LastDrawStatus = triangles.Count > 0 ? $"Drew {triangles.Count} triangle(s)" : "No complete triangles";
 
-        foreach (var triangle in triangles.OrderBy(t => t.Depth))
+        var orderedTriangles = triangles.OrderBy(t => t.Depth).ToArray();
+        _frameTriangles.AddRange(orderedTriangles.Select(ToFrameTriangle));
+        SyncWebGlFrame();
+
+        foreach (var triangle in orderedTriangles)
         {
             DrawTriangle(triangle);
         }
@@ -996,6 +1007,30 @@ internal sealed class CanvasWebGlRenderingContext
         var bracket = name.IndexOf('[', StringComparison.Ordinal);
         return bracket > 0 ? name[..bracket] : name;
     }
+
+    private void SyncWebGlFrame()
+    {
+        _surface.SetWebGlFrame(new CanvasWebGlFrame(
+            GetSurfaceWidth(),
+            GetSurfaceHeight(),
+            ToFrameColor(_clearColor),
+            _frameHasClear,
+            _frameTriangles.ToArray()));
+    }
+
+    private static CanvasWebGlTriangle ToFrameTriangle(SoftwareTriangle triangle)
+        => new(
+            new CanvasWebGlPoint(triangle.A.X, triangle.A.Y, triangle.A.Z),
+            new CanvasWebGlPoint(triangle.B.X, triangle.B.Y, triangle.B.Z),
+            new CanvasWebGlPoint(triangle.C.X, triangle.C.Y, triangle.C.Z),
+            ToFrameColor(triangle.Color));
+
+    private static CanvasWebGlColor ToFrameColor(IReadOnlyList<double> color)
+        => new(
+            color.Count > 0 ? color[0] : 0,
+            color.Count > 1 ? color[1] : 0,
+            color.Count > 2 ? color[2] : 0,
+            color.Count > 3 ? color[3] : 1);
 
     private IEnumerable<WebGlShaderSymbol> ParseUniforms(string source)
     {
