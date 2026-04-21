@@ -43,6 +43,12 @@ let cellHeight = 18;
 const baselineOffset = 2;
 let renderPending = false;
 let demoTimer = null;
+let draftInput = '';
+const promptLabel = '$ ';
+const hostShell = (typeof window !== 'undefined' && window && window.hostShell)
+  || (typeof globalThis !== 'undefined' && globalThis && globalThis.hostShell)
+  || null;
+const canRunHostShell = hostShell && typeof hostShell.execute === 'function';
 
 const scheduleRender = () => {
   if (renderPending) {
@@ -155,14 +161,52 @@ const runWriter = (data) => {
   scheduleRender();
 };
 
+const writeCommandOutput = (value) => {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  if (!text) {
+    return false;
+  }
+
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const body = normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+  terminal.write(body.replace(/\n/g, '\r\n'), () => scheduleRender());
+  scheduleRender();
+  return true;
+};
+
+const syncInputBox = () => {
+  if (input) {
+    input.value = draftInput;
+  }
+};
+
+const renderPrompt = () => {
+  terminal.write(`\r\x1b[2K${promptLabel}${draftInput}`);
+  scheduleRender();
+};
+
+const clearDraftInput = (render = true) => {
+  draftInput = '';
+  syncInputBox();
+  if (render) {
+    renderPrompt();
+  }
+};
+
+const setDraftInput = (value, render = true) => {
+  draftInput = typeof value === 'string' ? value : String(value ?? '');
+  syncInputBox();
+  if (render) {
+    renderPrompt();
+  }
+};
+
 const commands = Object.create(null);
 
 commands.clear = () => {
   stopDemoStream();
   terminal.reset();
   printBanner();
-  updateStatus('Terminal cleared and banner restored.');
-  scheduleRender();
 };
 
 commands.help = () => {
@@ -172,6 +216,11 @@ commands.help = () => {
   runWriter('  uptime     Display a fake uptime report');
   runWriter('  clear      Reset and show the banner again');
   runWriter('  theme      Display ANSI swatches');
+  if (canRunHostShell) {
+    runWriter(`  <other>    Run via host shell (${hostShell.shell || 'shell'})`);
+    runWriter(`  cwd        ${hostShell.cwd || ''}`);
+    runWriter('  note       No PTY: full-screen TUIs like mc or vim are not supported.');
+  }
 };
 
 commands.uptime = () => {
@@ -207,44 +256,86 @@ commands.demo = () => {
         demoTimer = null;
       }
       terminal.writeln('\x1b[32mAll tasks finished.\x1b[0m');
+      renderPrompt();
+      updateStatus('Demo workload finished.');
     }
     scheduleRender();
   }, 200);
 };
 
-const handleCommand = (raw) => {
+const executeCommand = (raw) => {
   const trimmed = (raw || '').trim();
   if (!trimmed) {
-    return;
+    clearDraftInput();
+    return 'Enter a command.';
   }
+
+  stopDemoStream();
+  clearDraftInput(false);
+
   if (trimmed === 'clear') {
     commands.clear();
-    return;
+    renderPrompt();
+    return 'Terminal cleared and banner restored.';
   }
 
   const [command, ...args] = trimmed.split(/\s+/g);
-  terminal.writeln('');
-  terminal.writeln(`$ ${trimmed}`);
+  terminal.write('\r\x1b[2K');
+  terminal.writeln(`${promptLabel}${trimmed}`);
   const handler = command && commands[command];
   if (handler) {
     handler(args);
-  } else {
-    runWriter(`Command not found: ${command}`);
+    renderPrompt();
+    return `Ran ${command}.`;
   }
-  scheduleRender();
+
+  if (canRunHostShell) {
+    try {
+      const result = hostShell.execute(trimmed);
+      const exitCode = Number(result && result.exitCode);
+      const timedOut = Boolean(result && result.timedOut);
+      const wroteOutput = writeCommandOutput(result && typeof result.output === 'string' ? result.output : '');
+
+      if (!wroteOutput && timedOut) {
+        runWriter(`Command timed out after ${result.timeoutMs || 0} ms.`);
+      } else if (!wroteOutput && Number.isFinite(exitCode) && exitCode !== 0) {
+        runWriter(`Command exited with code ${exitCode}.`);
+      }
+
+      renderPrompt();
+
+      if (timedOut) {
+        return `Shell command timed out after ${result.timeoutMs || 0} ms.`;
+      }
+
+      return Number.isFinite(exitCode)
+        ? `Shell command exited with code ${exitCode}.`
+        : 'Shell command completed.';
+    } catch (error) {
+      runWriter(`Shell bridge error: ${error}`);
+      renderPrompt();
+      return `Shell bridge error: ${error}`;
+    }
+  }
+
+  runWriter(`Command not found: ${command}`);
+  renderPrompt();
+  return `Unknown command: ${command}`;
 };
 
 const bindInput = () => {
-  const submit = () => {
-    const value = input && typeof input.value === 'string' ? input.value : '';
-    handleCommand(value);
-    if (input) {
-      input.value = '';
-    }
-    updateStatus('Command executed.');
+  const submit = (rawValue) => {
+    const value = typeof rawValue === 'string'
+      ? rawValue
+      : (input && typeof input.value === 'string' ? input.value : draftInput);
+    updateStatus(executeCommand(value));
   };
 
   sendButton && sendButton.addEventListener && sendButton.addEventListener('click', submit);
+  input && input.addEventListener && input.addEventListener('input', () => {
+    const value = typeof input.value === 'string' ? input.value : '';
+    setDraftInput(value);
+  });
   input && input.addEventListener && input.addEventListener('keydown', (event) => {
     if (event && event.key === 'Enter') {
       event.preventDefault && event.preventDefault();
@@ -253,12 +344,68 @@ const bindInput = () => {
   });
 
   clearButton && clearButton.addEventListener && clearButton.addEventListener('click', () => {
+    clearDraftInput(false);
     commands.clear();
+    renderPrompt();
+    updateStatus('Terminal cleared and banner restored.');
   });
 
   demoButton && demoButton.addEventListener && demoButton.addEventListener('click', () => {
+    clearDraftInput(false);
     commands.demo();
     updateStatus('Streaming demo workload...');
+    renderPrompt();
+  });
+
+  surface && surface.addEventListener && surface.addEventListener('pointerdown', () => {
+    surface.focus && surface.focus();
+  });
+  surface && surface.addEventListener && surface.addEventListener('click', () => {
+    surface.focus && surface.focus();
+  });
+  surface && surface.addEventListener && surface.addEventListener('textinput', (event) => {
+    const data = typeof event?.data === 'string' ? event.data : '';
+    if (!data) {
+      return;
+    }
+
+    draftInput += data;
+    syncInputBox();
+    renderPrompt();
+    event.preventDefault && event.preventDefault();
+  });
+  surface && surface.addEventListener && surface.addEventListener('keydown', (event) => {
+    const key = event?.key;
+    if (event?.ctrlKey && (key === 'l' || key === 'L')) {
+      clearDraftInput(false);
+      commands.clear();
+      renderPrompt();
+      updateStatus('Terminal cleared and banner restored.');
+      event.preventDefault && event.preventDefault();
+      return;
+    }
+
+    if (key === 'Enter') {
+      event.preventDefault && event.preventDefault();
+      submit(draftInput);
+      return;
+    }
+
+    if (key === 'Backspace' || key === 'Back') {
+      if (draftInput.length > 0) {
+        draftInput = draftInput.slice(0, -1);
+        syncInputBox();
+        renderPrompt();
+      }
+      event.preventDefault && event.preventDefault();
+      return;
+    }
+
+    if (key === 'Escape') {
+      clearDraftInput();
+      updateStatus('Input cleared.');
+      event.preventDefault && event.preventDefault();
+    }
   });
 };
 
@@ -273,6 +420,7 @@ const bootstrap = () => {
   }
   bindInput();
   printBanner();
+  renderPrompt();
   updateStatus('xterm.js headless JavaScript demo ready.');
   scheduleRender();
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {

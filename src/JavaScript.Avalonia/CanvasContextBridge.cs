@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 
 namespace JavaScript.Avalonia;
@@ -22,6 +24,7 @@ internal static class CanvasContextBridge
             _surface = new CanvasDrawingSurface();
             _context = _surface.Context;
 
+            EnsureInteractiveTarget();
             _target.AttachedToVisualTree += OnAttached;
             _target.DetachedFromVisualTree += OnDetached;
 
@@ -35,6 +38,21 @@ internal static class CanvasContextBridge
 
         private static bool IsAttached(Visual visual) => visual.GetVisualRoot() is not null;
 
+        private void EnsureInteractiveTarget()
+        {
+            if (!_target.Focusable)
+            {
+                _target.Focusable = true;
+            }
+
+            if (_target is InputElement inputElement && !inputElement.IsTabStop)
+            {
+                inputElement.IsTabStop = true;
+            }
+
+            _target.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+        }
+
         private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)
         {
             AttachToLayer();
@@ -43,6 +61,16 @@ internal static class CanvasContextBridge
         private void OnDetached(object? sender, VisualTreeAttachmentEventArgs e)
         {
             DetachFromLayer();
+        }
+
+        private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (!ReferenceEquals(e.Source, _target) || !_target.Focusable)
+            {
+                return;
+            }
+
+            TryFocus(_target, NavigationMethod.Pointer, e.KeyModifiers);
         }
 
         private void AttachToLayer()
@@ -93,5 +121,25 @@ internal static class CanvasContextBridge
 
         var attachment = s_attachments.GetValue(control, static c => new CanvasAttachment(c));
         return attachment.Context;
+    }
+
+    private static bool TryFocus(Control control, NavigationMethod navigationMethod, KeyModifiers keyModifiers)
+    {
+        if (control.Focus(navigationMethod, keyModifiers))
+        {
+            return true;
+        }
+
+        var focusManager = (control.GetVisualRoot() as TopLevel)?.FocusManager;
+        var focusMethod = focusManager?.GetType().GetMethod(
+            "Focus",
+            new[] { typeof(IInputElement), typeof(NavigationMethod), typeof(KeyModifiers) });
+
+        if (focusMethod?.Invoke(focusManager, new object?[] { control, navigationMethod, keyModifiers }) is bool result)
+        {
+            return result;
+        }
+
+        return control.IsFocused;
     }
 }

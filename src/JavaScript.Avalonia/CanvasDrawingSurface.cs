@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -124,6 +125,7 @@ internal abstract class CanvasDrawCommand
     public void Render(DrawingContext context)
     {
         IDisposable? transform = null;
+        IDisposable? clip = null;
         IDisposable? opacity = null;
 
         try
@@ -131,6 +133,11 @@ internal abstract class CanvasDrawCommand
             if (!State.Transform.IsIdentity)
             {
                 transform = context.PushTransform(State.Transform);
+            }
+
+            if (State.ClipGeometry is not null)
+            {
+                clip = context.PushGeometryClip(State.ClipGeometry);
             }
 
             if (State.GlobalAlpha < 1.0)
@@ -143,6 +150,7 @@ internal abstract class CanvasDrawCommand
         finally
         {
             opacity?.Dispose();
+            clip?.Dispose();
             transform?.Dispose();
         }
     }
@@ -378,6 +386,16 @@ internal sealed class DrawImageCommand : CanvasDrawCommand
     public override Rect? GetBounds() => _destinationRect;
 }
 
+internal sealed class CanvasTextMetrics
+{
+    public CanvasTextMetrics(double width)
+    {
+        this.width = width;
+    }
+
+    public double width { get; }
+}
+
 internal sealed class CanvasRenderingContext2D
 {
     private readonly CanvasDrawingSurface _owner;
@@ -389,6 +407,10 @@ internal sealed class CanvasRenderingContext2D
     {
         _owner = owner ?? throw new ArgumentNullException(nameof(owner));
     }
+
+    public object? canvas { get; set; }
+
+    internal int CommandCount => _owner.Commands.Count;
 
     public object? fillStyle
     {
@@ -430,6 +452,12 @@ internal sealed class CanvasRenderingContext2D
     {
         get => _state.GlobalAlpha;
         set => _state.GlobalAlpha = Math.Clamp(value, 0.0, 1.0);
+    }
+
+    public double lineDashOffset
+    {
+        get => _state.LineDashOffset;
+        set => _state.LineDashOffset = value;
     }
 
     public string font
@@ -537,6 +565,41 @@ internal sealed class CanvasRenderingContext2D
         _path.Rect(x, y, width, height);
     }
 
+    public void clip()
+    {
+        if (_path.IsEmpty)
+        {
+            return;
+        }
+
+        _state.ClipGeometry = _path.BuildGeometry();
+    }
+
+    public void clip(string fillRule)
+    {
+        clip();
+    }
+
+    public void clip(object? pathOrFillRule)
+    {
+        clip();
+    }
+
+    public void clip(object? path, object? fillRule)
+    {
+        clip();
+    }
+
+    public void setLineDash(object? segments)
+    {
+        _state.LineDash = CanvasStrokeParser.ParseLineDash(segments);
+    }
+
+    public double[] getLineDash()
+    {
+        return _state.LineDash.Length == 0 ? Array.Empty<double>() : (double[])_state.LineDash.Clone();
+    }
+
     public CanvasGradient createLinearGradient(double x0, double y0, double x1, double y1)
     {
         return new CanvasLinearGradient(x0, y0, x1, y1);
@@ -569,6 +632,21 @@ internal sealed class CanvasRenderingContext2D
         _owner.AddCommand(new FillPathCommand(geometry, _state.CreateSnapshot()));
     }
 
+    public void fill(string fillRule)
+    {
+        fill();
+    }
+
+    public void fill(object? pathOrFillRule)
+    {
+        fill();
+    }
+
+    public void fill(object? path, object? fillRule)
+    {
+        fill();
+    }
+
     public void fillRect(double x, double y, double width, double height)
     {
         var rect = new Rect(x, y, width, height);
@@ -596,6 +674,22 @@ internal sealed class CanvasRenderingContext2D
 
         var origin = new Point(x, y);
         _owner.AddCommand(new FillTextCommand(text, origin, _state.CreateSnapshot()));
+    }
+
+    public void fillText(string text, double x, double y, double maxWidth)
+    {
+        fillText(text, x, y);
+    }
+
+    public void fillText(string text, double x, double y, object? maxWidth)
+    {
+        fillText(text, x, y);
+    }
+
+    public object measureText(string text)
+    {
+        var formatted = _owner.CreateFormattedText(text ?? string.Empty, _state.CreateSnapshot());
+        return new CanvasTextMetrics(formatted.Width);
     }
 
     public void drawImage(object image, double dx, double dy)
@@ -685,7 +779,10 @@ internal sealed class CanvasState
     public PenLineJoin LineJoin { get; set; } = PenLineJoin.Miter;
     public double MiterLimit { get; set; } = 10.0;
     public double GlobalAlpha { get; set; } = 1.0;
+    public double[] LineDash { get; set; } = Array.Empty<double>();
+    public double LineDashOffset { get; set; }
     public Matrix Transform { get; set; } = Matrix.Identity;
+    public Geometry? ClipGeometry { get; set; }
     public Typeface Typeface { get; set; } = new Typeface("Segoe UI");
     public double FontSize { get; set; } = 16.0;
     public CanvasTextAlign TextAlign { get; set; } = CanvasTextAlign.Start;
@@ -705,7 +802,10 @@ internal sealed class CanvasState
         LineJoin = LineJoin,
         MiterLimit = MiterLimit,
         GlobalAlpha = GlobalAlpha,
+        LineDash = LineDash.Length == 0 ? Array.Empty<double>() : (double[])LineDash.Clone(),
+        LineDashOffset = LineDashOffset,
         Transform = Transform,
+        ClipGeometry = ClipGeometry,
         Typeface = Typeface,
         FontSize = FontSize,
         TextAlign = TextAlign,
@@ -756,7 +856,10 @@ internal sealed class CanvasStateSnapshot
         LineJoin = state.LineJoin;
         MiterLimit = state.MiterLimit;
         GlobalAlpha = state.GlobalAlpha;
+        LineDash = state.LineDash.Length == 0 ? Array.Empty<double>() : (double[])state.LineDash.Clone();
+        LineDashOffset = state.LineDashOffset;
         Transform = state.Transform;
+        ClipGeometry = state.ClipGeometry;
         Typeface = state.Typeface;
         FontSize = state.FontSize;
         TextAlign = state.TextAlign;
@@ -770,7 +873,10 @@ internal sealed class CanvasStateSnapshot
     public PenLineJoin LineJoin { get; }
     public double MiterLimit { get; }
     public double GlobalAlpha { get; }
+    public double[] LineDash { get; }
+    public double LineDashOffset { get; }
     public Matrix Transform { get; }
+    public Geometry? ClipGeometry { get; }
     public Typeface Typeface { get; }
     public double FontSize { get; }
     public CanvasTextAlign TextAlign { get; }
@@ -789,6 +895,12 @@ internal sealed class CanvasStateSnapshot
             LineJoin = LineJoin,
             MiterLimit = MiterLimit
         };
+
+        if (LineDash.Length > 0 || LineDashOffset != 0)
+        {
+            pen.DashStyle = new ImmutableDashStyle(LineDash, LineDashOffset);
+        }
+
         return pen;
     }
 }
@@ -834,6 +946,68 @@ internal static class CanvasStrokeParser
             "miter" => PenLineJoin.Miter,
             _ => current
         };
+    }
+
+    public static double[] ParseLineDash(object? value)
+    {
+        if (value is null || value is string || value is not IEnumerable enumerable)
+        {
+            return Array.Empty<double>();
+        }
+
+        var result = new List<double>();
+        foreach (var item in enumerable)
+        {
+            if (!TryConvertToDouble(item, out var segment))
+            {
+                continue;
+            }
+
+            if (!double.IsFinite(segment) || segment < 0)
+            {
+                continue;
+            }
+
+            result.Add(segment);
+        }
+
+        return result.Count == 0 ? Array.Empty<double>() : result.ToArray();
+    }
+
+    private static bool TryConvertToDouble(object? value, out double result)
+    {
+        switch (value)
+        {
+            case null:
+                result = 0;
+                return false;
+            case double doubleValue:
+                result = doubleValue;
+                return true;
+            case float floatValue:
+                result = floatValue;
+                return true;
+            case int intValue:
+                result = intValue;
+                return true;
+            case long longValue:
+                result = longValue;
+                return true;
+            case decimal decimalValue:
+                result = (double)decimalValue;
+                return true;
+            default:
+                try
+                {
+                    result = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                    return true;
+                }
+                catch
+                {
+                    result = 0;
+                    return false;
+                }
+        }
     }
 }
 

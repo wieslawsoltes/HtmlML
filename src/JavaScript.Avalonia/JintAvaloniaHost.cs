@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform;
@@ -17,6 +18,15 @@ namespace JavaScript.Avalonia;
 
 public class JintAvaloniaHost
 {
+    private const string CommonJsBrowserPrelude = """
+var __avaloniaGlobal = typeof globalThis !== 'undefined' ? globalThis : this;
+var global = __avaloniaGlobal;
+var window = (__avaloniaGlobal && __avaloniaGlobal.window) || __avaloniaGlobal;
+var self = (__avaloniaGlobal && (__avaloniaGlobal.self || __avaloniaGlobal.window)) || window;
+var document = (__avaloniaGlobal && __avaloniaGlobal.document) || (window && window.document);
+var navigator = (__avaloniaGlobal && __avaloniaGlobal.navigator) || (window && window.navigator);
+""";
+
     private readonly Func<JintAvaloniaHost, AvaloniaDomDocument>? _documentFactory;
 
     public TopLevel TopLevel { get; }
@@ -45,12 +55,29 @@ public class JintAvaloniaHost
 
         Engine.SetValue("console", CreateConsoleObject());
         Engine.SetValue("window", CreateWindowObject());
+        try
+        {
+            var windowValue = Engine.GetValue("window");
+            if (windowValue.IsObject())
+            {
+                var windowObject = windowValue.AsObject();
+                var navigatorValue = windowObject.Get("navigator");
+                if (!navigatorValue.IsUndefined())
+                {
+                    Engine.SetValue("navigator", navigatorValue);
+                }
+            }
+        }
+        catch
+        {
+        }
 
         Document = documentFactory?.Invoke(this) ?? CreateDocument();
         Engine.SetValue("document", Document);
         RegisterModuleSystem();
         RegisterEventConstructors();
         RegisterMutationObserver();
+        RegisterCompatibilityShims();
         try
         {
             Engine.Execute("if (typeof window !== 'undefined') { window.document = document; if (typeof globalThis !== 'undefined') { globalThis.document = document; if (typeof window.setTimeout === 'function') { globalThis.setTimeout = window.setTimeout.bind(window); } if (typeof window.clearTimeout === 'function') { globalThis.clearTimeout = window.clearTimeout.bind(window); } if (typeof window.setInterval === 'function') { globalThis.setInterval = window.setInterval.bind(window); } if (typeof window.clearInterval === 'function') { globalThis.clearInterval = window.clearInterval.bind(window); } if (typeof window.requestAnimationFrame === 'function') { globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window); } if (typeof window.cancelAnimationFrame === 'function') { globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window); } if (typeof window.importScripts === 'function') { globalThis.importScripts = window.importScripts.bind(window); } if (typeof window.require === 'function') { globalThis.require = window.require.bind(window); } } }");
@@ -70,7 +97,7 @@ public class JintAvaloniaHost
     protected virtual void ConfigureEngineOptions(Options options)
     {
         options.Strict();
-        options.ExperimentalFeatures = ExperimentalFeature.Generators;
+        options.CatchClrExceptions();
     }
 
     protected virtual object CreateConsoleObject() => new ConsoleJs();
@@ -158,6 +185,10 @@ public class JintAvaloniaHost
       name = null;
     }
     if (typeof deps === 'function' || deps == null) {
+      factory = deps;
+      deps = [];
+    }
+    if (typeof factory === 'undefined' && deps != null && typeof deps !== 'function' && !Array.isArray(deps)) {
       factory = deps;
       deps = [];
     }
@@ -279,6 +310,136 @@ public class JintAvaloniaHost
         }
     }
 
+    private void RegisterCompatibilityShims()
+    {
+        const string script = @"(function(){
+  function wrapGetPrototypeOf(target, name) {
+    if (!target || typeof target[name] !== 'function') {
+      return;
+    }
+    var original = target[name];
+    if (original.__avaloniaSafeGetPrototypeOf) {
+      return;
+    }
+    var wrapped = function(value) {
+      try {
+        return original.call(target, value);
+      } catch (error) {
+        if (value != null && (typeof value === 'object' || typeof value === 'function')) {
+          return null;
+        }
+        throw error;
+      }
+    };
+    try {
+      Object.defineProperty(wrapped, '__avaloniaSafeGetPrototypeOf', { value: true });
+    } catch (error) {
+      wrapped.__avaloniaSafeGetPrototypeOf = true;
+    }
+    target[name] = wrapped;
+  }
+
+  if (typeof Object === 'function') {
+    wrapGetPrototypeOf(Object, 'getPrototypeOf');
+  }
+
+  if (typeof Reflect !== 'undefined' && Reflect) {
+    wrapGetPrototypeOf(Reflect, 'getPrototypeOf');
+  }
+
+  function defineGlobal(name, value) {
+    try {
+      globalThis[name] = value;
+    } catch (error) {
+    }
+    try {
+      if (typeof window !== 'undefined' && window) {
+        window[name] = value;
+      }
+    } catch (error) {
+    }
+  }
+
+  function defineDomCtor(name, predicate) {
+    var ctor = function() {};
+    try {
+      Object.defineProperty(ctor, 'name', { value: name });
+    } catch (error) {
+    }
+
+    if (typeof Symbol !== 'undefined' && Symbol && Symbol.hasInstance) {
+      try {
+        Object.defineProperty(ctor, Symbol.hasInstance, {
+          value: function(value) {
+            try {
+              return !!predicate(value);
+            } catch (error) {
+              return false;
+            }
+          }
+        });
+      } catch (error) {
+      }
+    }
+
+    defineGlobal(name, ctor);
+    return ctor;
+  }
+
+  if (typeof window !== 'undefined' && window) {
+    try { window.window = window; } catch (error) {}
+    try { window.self = window; } catch (error) {}
+  }
+
+  if (typeof globalThis !== 'undefined' && globalThis) {
+    try {
+      if (typeof globalThis.window === 'undefined' && typeof window !== 'undefined') {
+        globalThis.window = window;
+      }
+    } catch (error) {
+    }
+    try {
+      if (typeof globalThis.self === 'undefined' && typeof window !== 'undefined') {
+        globalThis.self = window;
+      }
+    } catch (error) {
+    }
+  }
+
+  defineDomCtor('Node', function(value) {
+    return value != null && typeof value.nodeType === 'number';
+  });
+  defineDomCtor('Document', function(value) {
+    return value != null && value.nodeType === 9 && typeof value.createElement === 'function';
+  });
+  defineDomCtor('HTMLDocument', function(value) {
+    return value != null && value.nodeType === 9 && typeof value.createElement === 'function';
+  });
+  defineDomCtor('Element', function(value) {
+    return value != null && value.nodeType === 1 && typeof value.nodeName === 'string';
+  });
+  defineDomCtor('HTMLElement', function(value) {
+    return value != null && value.nodeType === 1 && typeof value.nodeName === 'string';
+  });
+  defineDomCtor('HTMLCanvasElement', function(value) {
+    return value != null
+      && value.nodeType === 1
+      && (String(value.nodeName || '').toUpperCase() === 'CANVAS' || typeof value.getContext === 'function');
+  });
+  defineDomCtor('Window', function(value) {
+    return value != null && typeof value.setTimeout === 'function' && value.navigator != null;
+  });
+})();";
+
+        try
+        {
+            Engine.Execute(script);
+        }
+        catch
+        {
+        }
+    }
+
     public JsValue Require(string specifier) => RequireModule(specifier, null);
 
     public void ExecuteScriptText(string code)
@@ -337,6 +498,11 @@ public class JintAvaloniaHost
 
         try
         {
+            if (TryGetBuiltinModule(specifier, out var builtin))
+            {
+                return builtin;
+            }
+
             var source = ResolveModule(specifier, referrer);
             if (_moduleCache.TryGetValue(source.CacheKey, out var cached))
             {
@@ -357,19 +523,25 @@ public class JintAvaloniaHost
 
             PushModuleResultFrame();
 
-            var wrapper = "(function(require, module, exports, __filename, __dirname){\n" + source.Content + "\n})";
+            var wrapper = BuildModuleWrapper(source, specifier);
             var functionValue = Engine.Evaluate(wrapper);
             var moduleValue = JsValue.FromObject(Engine, moduleObject);
             var filenameValue = JsValue.FromObject(Engine, source.FileName);
             var dirnameValue = JsValue.FromObject(Engine, source.DirectoryOrBase ?? string.Empty);
-            Engine.Invoke(functionValue, requireValue, moduleValue, exportsValue, filenameValue, dirnameValue);
+            var thisValue = GetGlobalProperty("window");
+            if (thisValue.IsUndefined() || thisValue.IsNull())
+            {
+                thisValue = Engine.Global;
+            }
+
+            Engine.Invoke(functionValue, thisValue, new[] { requireValue, moduleValue, exportsValue, filenameValue, dirnameValue });
 
             var result = moduleObject.Get("exports");
             var pendingResult = PopModuleResultFrame();
 
-            if (!HasMeaningfulExport(result))
+            if (!HasResolvedModuleResult(result, exportsValue))
             {
-                if (HasMeaningfulExport(pendingResult))
+                if (HasResolvedModuleResult(pendingResult, exportsValue))
                 {
                     result = pendingResult;
                     moduleObject.Set("exports", result, throwOnError: false);
@@ -377,7 +549,7 @@ public class JintAvaloniaHost
                 else
                 {
                     var globalResult = TryGetGlobalExport(source, specifier);
-                    if (HasMeaningfulExport(globalResult))
+                    if (HasResolvedModuleResult(globalResult, exportsValue))
                     {
                         result = globalResult;
                         moduleObject.Set("exports", result, throwOnError: false);
@@ -388,14 +560,76 @@ public class JintAvaloniaHost
             _moduleCache[source.CacheKey] = result;
             return result;
         }
-        catch
+        catch (Exception ex)
         {
             if (_pendingModuleResults.Count > 0)
             {
                 PopModuleResultFrame();
             }
-            return JsValue.Undefined;
+
+            throw new InvalidOperationException($"Failed to require module '{specifier}': {ex.Message}", ex);
         }
+    }
+
+    private bool TryGetBuiltinModule(string specifier, out JsValue result)
+    {
+        result = JsValue.Undefined;
+
+        var normalized = specifier.Replace('\\', '/').Trim();
+        if (!normalized.Equals("./node/self.js", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals("node/self.js", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.EndsWith("/node/self.js", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        result = GetGlobalProperty("self");
+        if (result.IsUndefined() || result.IsNull())
+        {
+            result = GetGlobalProperty("window");
+        }
+
+        return !result.IsUndefined() && !result.IsNull();
+    }
+
+    private static string BuildModuleWrapper(ModuleSource source, string specifier)
+    {
+        var shouldProbeLocalExports = source.Kind == ModuleKind.Http && !IsTypeScriptFile(source.FileName);
+        var candidates = shouldProbeLocalExports
+            ? GetLocalExportCandidates(source, specifier)
+                .Select(EscapeJavaScriptStringLiteral)
+                .ToArray()
+            : Array.Empty<string>();
+
+        var exportProbe = !shouldProbeLocalExports || candidates.Length == 0
+            ? string.Empty
+            : """
+try {
+  if (module) {
+    var __avaloniaExportNames = [__CANDIDATES__];
+    for (var __avaloniaIndex = 0; __avaloniaIndex < __avaloniaExportNames.length; __avaloniaIndex++) {
+      var __avaloniaName = __avaloniaExportNames[__avaloniaIndex];
+      try {
+        var __avaloniaValue = eval(__avaloniaName);
+        if (typeof __avaloniaValue !== 'undefined' && __avaloniaValue !== null) {
+          module.exports = __avaloniaValue;
+          break;
+        }
+      } catch (__avaloniaError) {
+      }
+    }
+  }
+} catch (__avaloniaWrapperError) {
+}
+""".Replace("__CANDIDATES__", string.Join(", ", candidates));
+
+        return "(function(require, module, exports, __filename, __dirname){\n"
+               + CommonJsBrowserPrelude
+               + "\n"
+               + source.Content
+               + "\n"
+               + exportProbe
+               + "\n})";
     }
 
     private void ImportScripts(ModuleSource? referrer, IEnumerable<string> specifiers)
@@ -699,6 +933,29 @@ public class JintAvaloniaHost
         return true;
     }
 
+    private bool HasResolvedModuleResult(JsValue value, JsValue emptyExportsSentinel)
+    {
+        if (value.IsUndefined() || value.IsNull())
+        {
+            return false;
+        }
+
+        var hasMeaningfulExport = HasMeaningfulExport(value);
+        if (IsSameObjectReference(value, emptyExportsSentinel) && !hasMeaningfulExport)
+        {
+            return false;
+        }
+
+        return hasMeaningfulExport || value.IsObject();
+    }
+
+    private static bool IsSameObjectReference(JsValue left, JsValue right)
+    {
+        return left.IsObject() &&
+               right.IsObject() &&
+               ReferenceEquals(left.AsObject(), right.AsObject());
+    }
+
     private JsValue TryGetGlobalExport(ModuleSource source, string specifier)
     {
         foreach (var name in GetGlobalNameCandidates(source, specifier))
@@ -778,6 +1035,54 @@ public class JintAvaloniaHost
         return set;
     }
 
+    private static IEnumerable<string> GetLocalExportCandidates(ModuleSource source, string specifier)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var ordered = new List<string>();
+
+        void AddCandidates(string? raw)
+        {
+            var baseName = ExtractBaseName(raw);
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                return;
+            }
+
+            var tokens = TokenizeName(baseName)
+                .Where(static token => !string.IsNullOrWhiteSpace(token))
+                .ToArray();
+
+            if (tokens.Length > 0)
+            {
+                Add(tokens[0]);
+                Add(char.ToUpperInvariant(tokens[0][0]) + tokens[0].Substring(1));
+            }
+
+            foreach (var token in tokens)
+            {
+                Add(token);
+                Add(char.ToUpperInvariant(token[0]) + token.Substring(1));
+            }
+        }
+
+        void Add(string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate) || !IsValidIdentifier(candidate))
+            {
+                return;
+            }
+
+            if (seen.Add(candidate))
+            {
+                ordered.Add(candidate);
+            }
+        }
+
+        AddCandidates(specifier);
+        AddCandidates(source.FileName);
+        return ordered;
+    }
+
     private static string? ExtractBaseName(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -835,6 +1140,28 @@ public class JintAvaloniaHost
             }
         }
     }
+
+    private static bool IsValidIdentifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !(char.IsLetter(value[0]) || value[0] == '_' || value[0] == '$'))
+        {
+            return false;
+        }
+
+        for (var i = 1; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (!(char.IsLetterOrDigit(c) || c == '_' || c == '$'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string EscapeJavaScriptStringLiteral(string value)
+        => "'" + value.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 
     private static string AddSourceInformation(ModuleSource source)
     {
@@ -902,11 +1229,18 @@ public class JintAvaloniaHost
         private int _timerSeq;
         private readonly Dictionary<int, DispatcherTimer> _timeouts = new();
         private readonly Dictionary<int, DispatcherTimer> _intervals = new();
+        private NavigatorJs? _navigator;
 
         public WindowJs(JintAvaloniaHost host)
         {
             _host = host;
         }
+
+        public NavigatorJs navigator => _navigator ??= new NavigatorJs();
+
+        public double devicePixelRatio => 1.0;
+
+        public int setTimeout(JsValue callback) => setTimeout(callback, 0);
 
         public int setTimeout(JsValue callback, int ms)
         {
@@ -941,6 +1275,8 @@ public class JintAvaloniaHost
             }
         }
 
+        public int setInterval(JsValue callback) => setInterval(callback, 0);
+
         public int setInterval(JsValue callback, int ms)
         {
             if (callback.IsUndefined() || callback.IsNull())
@@ -973,6 +1309,32 @@ public class JintAvaloniaHost
 
         public void cancelAnimationFrame(int id) => _host.CancelAnimationFrame(id);
 
+        public void queueMicrotask(JsValue callback)
+        {
+            if (callback.IsUndefined() || callback.IsNull())
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() => InvokeTimerCallback(callback), DispatcherPriority.Send);
+        }
+
+        public void addEventListener(string type, JsValue handler)
+        {
+        }
+
+        public void addEventListener(string type, JsValue handler, JsValue options)
+        {
+        }
+
+        public void removeEventListener(string type, JsValue handler)
+        {
+        }
+
+        public void removeEventListener(string type, JsValue handler, JsValue options)
+        {
+        }
+
         public void importScripts(params string[] specifiers)
         {
             if (specifiers is null || specifiers.Length == 0)
@@ -983,11 +1345,16 @@ public class JintAvaloniaHost
             _host.ImportScripts(null, specifiers);
         }
 
-        public CssComputedStyle getComputedStyle(object element)
+        public object getComputedStyle(object element)
         {
             return element is AvaloniaDomElement domElement
                 ? _host.Document.getComputedStyle(domElement)
-                : CssComputedStyle.Empty;
+                : TryGetStyleObject(element) ?? CssComputedStyle.Empty;
+        }
+
+        public object getComputedStyle(object element, object? pseudoElement)
+        {
+            return getComputedStyle(element);
         }
 
         private void InvokeTimerCallback(JsValue callback)
@@ -1000,6 +1367,47 @@ public class JintAvaloniaHost
             {
                 // Ignore callback errors
             }
+        }
+
+        private static object? TryGetStyleObject(object element)
+        {
+            if (element is ObjectInstance instance && instance.HasProperty("style"))
+            {
+                var styleValue = instance.Get("style");
+                if (!styleValue.IsUndefined() && !styleValue.IsNull())
+                {
+                    return styleValue.ToObject();
+                }
+            }
+
+            return null;
+        }
+    }
+
+    public sealed class NavigatorJs
+    {
+        public string userAgent { get; } = $"JavaScript.Avalonia/{typeof(JintAvaloniaHost).Assembly.GetName().Version}";
+
+        public string platform { get; } = GetPlatform();
+
+        private static string GetPlatform()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                return "MacIntel";
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return "Win32";
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                return "Linux";
+            }
+
+            return RuntimeInformation.OSDescription;
         }
     }
 }

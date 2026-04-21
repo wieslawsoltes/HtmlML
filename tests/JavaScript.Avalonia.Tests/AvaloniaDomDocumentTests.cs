@@ -463,7 +463,7 @@ public class AvaloniaDomDocumentTests
         var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
         {
             var info = Assert.IsType<DomKeyboardEvent>(arg);
-            Assert.Equal("A", info.key);
+            Assert.Equal("a", info.key);
             info.handled = true;
             handled = true;
         }));

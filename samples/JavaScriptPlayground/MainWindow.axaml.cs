@@ -18,6 +18,7 @@ namespace JavaScriptPlayground;
 public partial class MainWindow : Window
 {
     private readonly List<Preset> _presets;
+    private readonly PlaygroundShellBridge _shellBridge = new();
     private JintAvaloniaHost? _host;
     private readonly TextDocument _xamlDocument = new();
     private readonly TextDocument _scriptDocument = new();
@@ -110,6 +111,15 @@ public partial class MainWindow : Window
     private void ResetHost()
     {
         _host = new JintAvaloniaHost(this, host => new PlaygroundDomDocument(host, this));
+        _host.Engine.SetValue("hostShell", _shellBridge);
+        _host.Engine.Execute("""
+if (typeof window !== 'undefined') {
+  window.hostShell = hostShell;
+}
+if (typeof globalThis !== 'undefined') {
+  globalThis.hostShell = hostShell;
+}
+""");
     }
 
     private void ConfigureEditors()
@@ -1304,10 +1314,10 @@ if (status) {
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="xterm.js headless (TypeScript)" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
-    <TextBlock Text="Renders the @xterm/headless buffer onto a CanvasRenderingContext2D using a TypeScript helper module." TextWrapping="Wrap" Foreground="#475569" />
+    <TextBlock Text="Renders the @xterm/headless buffer onto a CanvasRenderingContext2D and routes non-built-in commands through the host OS shell." TextWrapping="Wrap" Foreground="#475569" />
     <Border Name="xtermSurface" Width="720" Height="360" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-      <TextBox Name="xtermInput" Width="260" Watermark="Enter command (help, demo, uptime, clear)" />
+      <TextBox Name="xtermInput" Width="260" Watermark="Enter command (help, ls, git status, clear)" />
       <Button Name="xtermSend" Content="Send" />
       <Button Name="xtermDemo" Content="Run demo" />
       <Button Name="xtermClear" Content="Clear" />
@@ -1334,10 +1344,10 @@ try {
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#f8fafc" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="xterm.js headless (JavaScript)" FontWeight="SemiBold" FontSize="18" Foreground="#1f2937" />
-    <TextBlock Text="Loads the plain JavaScript helper that integrates the headless xterm.js bundle into the canvas renderer." TextWrapping="Wrap" Foreground="#475569" />
+    <TextBlock Text="Loads the plain JavaScript helper that integrates the headless xterm.js bundle into the canvas renderer and host OS shell bridge." TextWrapping="Wrap" Foreground="#475569" />
     <Border Name="xtermJsSurface" Width="720" Height="360" Background="#ffffff" BorderBrush="#cbd5e1" BorderThickness="1" CornerRadius="4" />
     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-      <TextBox Name="xtermJsInput" Width="260" Watermark="Enter command (help, demo, uptime, clear)" />
+      <TextBox Name="xtermJsInput" Width="260" Watermark="Enter command (help, ls, git status, clear)" />
       <Button Name="xtermJsSend" Content="Send" />
       <Button Name="xtermJsDemo" Content="Run demo" />
       <Button Name="xtermJsClear" Content="Clear" />
@@ -1399,15 +1409,64 @@ const updateLogicalSize = (width, height) => {
   }
 };
 
+const attributes = new Map([
+  ['width', String(logicalWidth)],
+  ['height', String(logicalHeight)]
+]);
+
+const styleState = {
+  display: 'block',
+  width: `${surface.offsetWidth}px`,
+  height: `${surface.offsetHeight}px`,
+  boxSizing: 'border-box',
+  getPropertyValue(property) {
+    const key = String(property ?? '')
+      .replace(/-([a-z])/g, (_, value) => value.toUpperCase());
+    const raw = this[key];
+    return raw == null ? '' : String(raw);
+  }
+};
+
+const syncCanvasState = () => {
+  attributes.set('width', String(logicalWidth));
+  attributes.set('height', String(logicalHeight));
+  styleState.width = `${logicalWidth}px`;
+  styleState.height = `${logicalHeight}px`;
+};
+
 const canvasElement = {
   nodeName: 'CANVAS',
-  style: surface.style ?? {},
+  style: styleState,
   ownerDocument: surface.ownerDocument ?? document,
   defaultView: typeof window !== 'undefined' ? window : undefined,
+  parentNode: surface.parentNode ?? surface.parentElement ?? surface.ownerDocument?.body ?? null,
+  parentElement: surface.parentElement ?? surface.parentNode ?? surface.ownerDocument?.body ?? null,
   getContext: () => context,
   addEventListener: () => {},
   removeEventListener: () => {},
   dispatchEvent: () => false,
+  getAttribute: name => attributes.get(String(name ?? '').toLowerCase()) ?? null,
+  setAttribute: (name, value) => {
+    const key = String(name ?? '').toLowerCase();
+    const text = value == null ? '' : String(value);
+    attributes.set(key, text);
+    if (key === 'width') {
+      updateLogicalSize(Number(text), logicalHeight);
+    } else if (key === 'height') {
+      updateLogicalSize(logicalWidth, Number(text));
+    }
+    syncCanvasState();
+  },
+  removeAttribute: name => {
+    const key = String(name ?? '').toLowerCase();
+    attributes.delete(key);
+    if (key === 'width') {
+      updateLogicalSize(surface.offsetWidth, logicalHeight);
+    } else if (key === 'height') {
+      updateLogicalSize(logicalWidth, surface.offsetHeight);
+    }
+    syncCanvasState();
+  },
   getBoundingClientRect: () => surface.getBoundingClientRect?.() ?? {
     width: surface.offsetWidth,
     height: surface.offsetHeight,
@@ -1453,6 +1512,8 @@ Object.defineProperties(canvasElement, {
   }
 });
 
+syncCanvasState();
+
 if (canvasElement.ownerDocument && typeof canvasElement.ownerDocument.defaultView === 'undefined' && typeof window !== 'undefined') {
   canvasElement.ownerDocument.defaultView = window;
 }
@@ -1484,6 +1545,13 @@ if (typeof Chart.register === 'function' && chartModule?.registerables) {
   Chart.register(...chartModule.registerables);
 }
 
+const BasePlatform = Chart?.BasicPlatform ?? chartModule?.BasicPlatform;
+const AvaloniaChartPlatform = typeof BasePlatform === 'function'
+  ? class extends BasePlatform {
+      updateConfig() {}
+    }
+  : undefined;
+
 const helpers = Chart?.helpers ?? chartModule?.helpers;
 if (helpers?.canvas?.acquireContext && !helpers.canvas.__avaloniaPatched) {
   const originalAcquire = helpers.canvas.acquireContext.bind(helpers.canvas);
@@ -1510,6 +1578,7 @@ const buildGradient = () => {
 };
 
 const createConfig = type => ({
+  platform: AvaloniaChartPlatform,
   type,
   data: {
     labels,

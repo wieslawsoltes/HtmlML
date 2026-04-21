@@ -237,9 +237,9 @@ public sealed class DomKeyboardEvent : DomEvent
         _args = args;
     }
 
-    public string? key => _args.Key.ToString();
+    public string? key => MapKey(_args.Key, _args.KeyModifiers);
 
-    public string? code => _args.Key.ToString();
+    public string? code => MapCode(_args.Key);
 
     public bool repeat => false;
 
@@ -250,6 +250,76 @@ public sealed class DomKeyboardEvent : DomEvent
     public bool shiftKey => (_args.KeyModifiers & KeyModifiers.Shift) != 0;
 
     public bool metaKey => (_args.KeyModifiers & KeyModifiers.Meta) != 0;
+
+    private static string MapKey(Key key, KeyModifiers modifiers)
+    {
+        return key switch
+        {
+            Key.Enter => "Enter",
+            Key.Tab => "Tab",
+            Key.Back => "Backspace",
+            Key.Delete => "Delete",
+            Key.Escape => "Escape",
+            Key.Space => " ",
+            Key.Left => "ArrowLeft",
+            Key.Right => "ArrowRight",
+            Key.Up => "ArrowUp",
+            Key.Down => "ArrowDown",
+            Key.Home => "Home",
+            Key.End => "End",
+            Key.PageUp => "PageUp",
+            Key.PageDown => "PageDown",
+            Key.Insert => "Insert",
+            _ => MapCharacterKey(key, modifiers)
+        };
+    }
+
+    private static string MapCode(Key key)
+    {
+        var name = key.ToString();
+        if (name.Length == 1 && char.IsLetter(name[0]))
+        {
+            return "Key" + char.ToUpperInvariant(name[0]);
+        }
+
+        if (name.Length == 1 && char.IsDigit(name[0]))
+        {
+            return "Digit" + name;
+        }
+
+        return key switch
+        {
+            Key.Enter => "Enter",
+            Key.Tab => "Tab",
+            Key.Back => "Backspace",
+            Key.Delete => "Delete",
+            Key.Escape => "Escape",
+            Key.Space => "Space",
+            Key.Left => "ArrowLeft",
+            Key.Right => "ArrowRight",
+            Key.Up => "ArrowUp",
+            Key.Down => "ArrowDown",
+            Key.Home => "Home",
+            Key.End => "End",
+            Key.PageUp => "PageUp",
+            Key.PageDown => "PageDown",
+            Key.Insert => "Insert",
+            _ => name
+        };
+    }
+
+    private static string MapCharacterKey(Key key, KeyModifiers modifiers)
+    {
+        var name = key.ToString();
+        if (name.Length != 1 || !char.IsLetterOrDigit(name[0]))
+        {
+            return name;
+        }
+
+        return (char.IsLetter(name[0]) && (modifiers & KeyModifiers.Shift) == 0)
+            ? name.ToLowerInvariant()
+            : name;
+    }
 }
 
 public sealed class DomTextInputEvent : DomEvent
