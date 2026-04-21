@@ -22,9 +22,99 @@ if (!ctx) {
 }
 
 const theme = {
-  background: '#f8fafc',
-  foreground: '#0f172a',
-  accent: '#2563eb'
+  background: '#0f172a',
+  foreground: '#e2e8f0',
+  accent: '#38bdf8'
+};
+
+const ansiPalette = [
+  '#1e293b', '#ef4444', '#22c55e', '#eab308',
+  '#3b82f6', '#a855f7', '#06b6d4', '#cbd5e1',
+  '#64748b', '#f87171', '#4ade80', '#facc15',
+  '#60a5fa', '#c084fc', '#22d3ee', '#f8fafc'
+];
+
+const colorCubeSteps = [0, 95, 135, 175, 215, 255];
+
+const byteToHex = (value) => {
+  const normalized = Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
+  return normalized.toString(16).padStart(2, '0');
+};
+
+const toHexColor = (red, green, blue) => `#${byteToHex(red)}${byteToHex(green)}${byteToHex(blue)}`;
+
+const rgbIntToColor = (value) => {
+  const color = Math.max(0, Math.floor(Number(value) || 0));
+  return toHexColor((color >> 16) & 255, (color >> 8) & 255, color & 255);
+};
+
+const paletteColor = (index) => {
+  const colorIndex = Math.floor(Number(index));
+  if (!Number.isFinite(colorIndex) || colorIndex < 0) {
+    return null;
+  }
+
+  if (colorIndex < ansiPalette.length) {
+    return ansiPalette[colorIndex];
+  }
+
+  if (colorIndex >= 16 && colorIndex <= 231) {
+    const offset = colorIndex - 16;
+    const red = colorCubeSteps[Math.floor(offset / 36) % 6];
+    const green = colorCubeSteps[Math.floor(offset / 6) % 6];
+    const blue = colorCubeSteps[offset % 6];
+    return toHexColor(red, green, blue);
+  }
+
+  if (colorIndex >= 232 && colorIndex <= 255) {
+    const gray = 8 + (colorIndex - 232) * 10;
+    return toHexColor(gray, gray, gray);
+  }
+
+  return null;
+};
+
+const resolveCellColor = (cell, foreground) => {
+  if (!cell) {
+    return foreground ? theme.foreground : null;
+  }
+
+  const defaultMethod = foreground ? cell.isFgDefault : cell.isBgDefault;
+  if (typeof defaultMethod === 'function' && defaultMethod.call(cell)) {
+    return foreground ? theme.foreground : null;
+  }
+
+  const colorMethod = foreground ? cell.getFgColor : cell.getBgColor;
+  const value = typeof colorMethod === 'function' ? colorMethod.call(cell) : null;
+  if (!Number.isFinite(Number(value))) {
+    return foreground ? theme.foreground : null;
+  }
+
+  const rgbMethod = foreground ? cell.isFgRGB : cell.isBgRGB;
+  if (typeof rgbMethod === 'function' && rgbMethod.call(cell)) {
+    return rgbIntToColor(value);
+  }
+
+  const paletteMethod = foreground ? cell.isFgPalette : cell.isBgPalette;
+  if (typeof paletteMethod === 'function' && paletteMethod.call(cell)) {
+    return paletteColor(value) || (foreground ? theme.foreground : null);
+  }
+
+  return paletteColor(value) || rgbIntToColor(value);
+};
+
+const getCellColors = (cell) => {
+  let foreground = resolveCellColor(cell, true) || theme.foreground;
+  let background = resolveCellColor(cell, false);
+
+  if (cell && typeof cell.isInverse === 'function' && cell.isInverse()) {
+    const originalForeground = foreground || theme.foreground;
+    const originalBackground = background || theme.background;
+    foreground = originalBackground;
+    background = originalForeground;
+  }
+
+  return { foreground, background };
 };
 
 const terminal = new TerminalCtor({
@@ -35,7 +125,7 @@ const terminal = new TerminalCtor({
 });
 
 let fontSize = 14;
-const fontFamily = 'JetBrains Mono, SFMono-Regular, Consolas, monospace';
+const fontFamily = 'Menlo, Monaco, Consolas, "Courier New", monospace';
 const verticalPadding = 12;
 const horizontalPadding = 14;
 let cellWidth = 9;
@@ -134,21 +224,72 @@ const renderBuffer = () => {
   ctx.fillRect(0, 0, width, height);
   ctx.font = `${fontSize}px ${fontFamily}`;
   ctx.textBaseline = 'top';
-  ctx.fillStyle = theme.foreground;
 
   const buffer = terminal.buffer.active;
   const viewportTop = buffer.viewportY;
+  const scratch = buffer.getNullCell();
+  const textTop = verticalPadding;
+  const textLeft = horizontalPadding;
+  let currentFont = '';
+
+  const useCellFont = (cell) => {
+    const italic = cell && typeof cell.isItalic === 'function' && cell.isItalic();
+    const bold = cell && typeof cell.isBold === 'function' && cell.isBold();
+    const font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
+    if (font !== currentFont) {
+      ctx.font = font;
+      currentFont = font;
+    }
+  };
+
   for (let row = 0; row < terminal.rows; row++) {
     const line = buffer.getLine(viewportTop + row);
-    const text = line ? line.translateToString(false) : '';
-    const y = verticalPadding + row * cellHeight + baselineOffset;
-    ctx.fillText(text || '', horizontalPadding, y);
+    let x = textLeft;
+    if (!line) {
+      continue;
+    }
+
+    for (let col = 0; col < terminal.cols; col++) {
+      const cell = line.getCell(col, scratch);
+      const widthUnits = cell && typeof cell.getWidth === 'function' ? cell.getWidth() : 1;
+      if (widthUnits <= 0) {
+        x += cellWidth;
+        continue;
+      }
+
+      const charWidth = Math.max(1, widthUnits);
+      const cellX = x;
+      const cellY = textTop + row * cellHeight;
+      const text = cell && typeof cell.getChars === 'function' ? cell.getChars() : '';
+      const colors = getCellColors(cell);
+
+      if (colors.background && colors.background !== theme.background) {
+        ctx.fillStyle = colors.background;
+        ctx.fillRect(cellX, cellY, cellWidth * charWidth, cellHeight);
+      }
+
+      if (text && text.trim().length > 0 && !(cell && typeof cell.isInvisible === 'function' && cell.isInvisible())) {
+        useCellFont(cell);
+        ctx.globalAlpha = cell && typeof cell.isDim === 'function' && cell.isDim() ? 0.65 : 1;
+        ctx.fillStyle = colors.foreground;
+        ctx.fillText(text, cellX, cellY + baselineOffset);
+        ctx.globalAlpha = 1;
+      }
+
+      if (cell && typeof cell.isUnderline === 'function' && cell.isUnderline()) {
+        ctx.fillStyle = colors.foreground;
+        ctx.fillRect(cellX, cellY + cellHeight - 3, cellWidth * charWidth, 1);
+      }
+
+      x += cellWidth * charWidth;
+      col += charWidth - 1;
+    }
   }
 
   const cursorX = buffer.cursorX;
   const cursorY = buffer.cursorY;
-  const cursorLeft = horizontalPadding + cursorX * cellWidth;
-  const cursorTop = verticalPadding + cursorY * cellHeight;
+  const cursorLeft = textLeft + cursorX * cellWidth;
+  const cursorTop = textTop + cursorY * cellHeight;
   ctx.strokeStyle = theme.accent;
   ctx.lineWidth = 2;
   ctx.strokeRect(Math.floor(cursorLeft) + 0.5, Math.floor(cursorTop) + 0.5, cellWidth - 1, cellHeight - 1);

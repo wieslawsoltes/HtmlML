@@ -1268,34 +1268,213 @@ internal static class CanvasFontParser
             return;
         }
 
-        var tokens = font.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        var tokens = Tokenize(font);
         double size = state.FontSize;
         string family = state.Typeface.FontFamily.Name;
         FontStyle style = state.Typeface.Style;
         FontWeight weight = state.Typeface.Weight;
+        var sizeIndex = -1;
 
-        foreach (var token in tokens)
+        for (var index = 0; index < tokens.Count; index++)
         {
-            if (token.EndsWith("px", StringComparison.OrdinalIgnoreCase) && double.TryParse(token.AsSpan(0, token.Length - 2), NumberStyles.Number, CultureInfo.InvariantCulture, out var px))
+            var token = tokens[index];
+            if (TryParseSize(token, out var px))
             {
                 size = px;
+                sizeIndex = index;
+                break;
             }
-            else if (string.Equals(token, "italic", StringComparison.OrdinalIgnoreCase))
+        }
+
+        var descriptorEnd = sizeIndex >= 0 ? sizeIndex : tokens.Count;
+        for (var index = 0; index < descriptorEnd; index++)
+        {
+            var token = tokens[index];
+            if (string.Equals(token, "italic", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(token, "oblique", StringComparison.OrdinalIgnoreCase))
             {
                 style = FontStyle.Italic;
+            }
+            else if (string.Equals(token, "normal", StringComparison.OrdinalIgnoreCase))
+            {
+                style = FontStyle.Normal;
+                weight = FontWeight.Normal;
             }
             else if (string.Equals(token, "bold", StringComparison.OrdinalIgnoreCase))
             {
                 weight = FontWeight.Bold;
             }
-            else
+            else if (string.Equals(token, "bolder", StringComparison.OrdinalIgnoreCase))
             {
-                family = token;
+                weight = FontWeight.Bold;
             }
+            else if (string.Equals(token, "lighter", StringComparison.OrdinalIgnoreCase))
+            {
+                weight = FontWeight.Light;
+            }
+            else if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericWeight))
+            {
+                weight = numericWeight >= 600 ? FontWeight.Bold : FontWeight.Normal;
+            }
+        }
+
+        if (sizeIndex >= 0 && sizeIndex + 1 < tokens.Count)
+        {
+            family = NormalizeFamily(JoinTokens(tokens, sizeIndex + 1));
         }
 
         state.FontSize = size;
         state.Typeface = new Typeface(family, style, weight);
+    }
+
+    private static bool TryParseSize(string token, out double size)
+    {
+        size = 0;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return false;
+        }
+
+        var slash = token.IndexOf('/');
+        var sizeToken = slash >= 0 ? token[..slash] : token;
+        if (!sizeToken.EndsWith("px", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return double.TryParse(
+            sizeToken.AsSpan(0, sizeToken.Length - 2),
+            NumberStyles.Number,
+            CultureInfo.InvariantCulture,
+            out size);
+    }
+
+    private static List<string> Tokenize(string value)
+    {
+        var result = new List<string>();
+        var start = -1;
+        var quote = '\0';
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            var c = value[index];
+            if (quote != '\0')
+            {
+                if (c == quote)
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                if (start < 0)
+                {
+                    start = index;
+                }
+
+                quote = c;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c))
+            {
+                if (start >= 0)
+                {
+                    result.Add(value[start..index]);
+                    start = -1;
+                }
+
+                continue;
+            }
+
+            if (start < 0)
+            {
+                start = index;
+            }
+        }
+
+        if (start >= 0)
+        {
+            result.Add(value[start..]);
+        }
+
+        return result;
+    }
+
+    private static string JoinTokens(IReadOnlyList<string> tokens, int start)
+    {
+        if (start >= tokens.Count)
+        {
+            return string.Empty;
+        }
+
+        var builder = new System.Text.StringBuilder(tokens[start]);
+        for (var index = start + 1; index < tokens.Count; index++)
+        {
+            builder.Append(' ');
+            builder.Append(tokens[index]);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string NormalizeFamily(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        var families = new List<string>();
+        var start = 0;
+        var quote = '\0';
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            var c = value[index];
+            if (quote != '\0')
+            {
+                if (c == quote)
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                quote = c;
+                continue;
+            }
+
+            if (c == ',')
+            {
+                AddFamily(value[start..index], families);
+                start = index + 1;
+            }
+        }
+
+        AddFamily(value[start..], families);
+        return families.Count == 0 ? value.Trim() : string.Join(", ", families);
+    }
+
+    private static void AddFamily(string value, ICollection<string> families)
+    {
+        var family = value.Trim();
+        if (family.Length >= 2 &&
+            ((family[0] == '"' && family[^1] == '"') || (family[0] == '\'' && family[^1] == '\'')))
+        {
+            family = family[1..^1].Trim();
+        }
+
+        if (family.Length > 0)
+        {
+            families.Add(family);
+        }
     }
 }
 
