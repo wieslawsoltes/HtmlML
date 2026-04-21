@@ -105,6 +105,40 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void Arc_RendersCurvedCircleSegments()
+    {
+        var surface = new CanvasDrawingSurface
+        {
+            Width = 100,
+            Height = 100
+        };
+        var window = new Window
+        {
+            Width = 100,
+            Height = 100,
+            Content = surface
+        };
+        var ctx = surface.Context;
+        ctx.fillStyle = "#ff0000";
+        ctx.beginPath();
+        ctx.arc(50, 50, 30, 0, Math.PI * 2);
+        ctx.fill();
+
+        window.Show();
+
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            var diagonalInsideCircle = ReadPixel(frame!, 68, 32);
+
+            Assert.True(
+                diagonalInsideCircle.R > 150,
+                $"Expected a filled circular arc at the diagonal sample point, but got {diagonalInsideCircle}.");
+        }
+    }
+
+    [AvaloniaFact]
     public void CanvasAdorner_DoesNotDrawOverSiblingControls()
     {
         var canvasTarget = new Border
