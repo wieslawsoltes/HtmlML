@@ -1735,6 +1735,8 @@ const canvas = new fabric.Canvas(surface, {
   preserveObjectStacking: true
 });
 canvas.setDimensions({ width: surface.offsetWidth, height: surface.offsetHeight });
+const interactiveTarget = canvas.upperCanvasEl ?? surface;
+interactiveTarget.tabIndex = 0;
 
 const report = message => {
   if (status) {
@@ -1845,7 +1847,7 @@ const baseShapes = () => {
 
   canvas.add(gradientRect, circle, triangle);
   canvas.renderAll();
-  report('Scene initialised with layered vector objects.');
+  report('Scene initialised. Use mouse to select/drag; arrow keys nudge; Delete removes.');
 };
 
 const addRandomRect = () => {
@@ -1861,6 +1863,7 @@ const addRandomRect = () => {
   });
   canvas.add(rect);
   canvas.setActiveObject(rect);
+  interactiveTarget.focus?.();
   report('Added a draggable rounded rectangle.');
 };
 
@@ -1876,8 +1879,71 @@ const addRandomCircle = () => {
   });
   canvas.add(circle);
   canvas.setActiveObject(circle);
+  interactiveTarget.focus?.();
   report('Added an interactive circle.');
 };
+
+const nudgeActiveObject = (dx, dy) => {
+  const active = canvas.getActiveObject();
+  if (!active) {
+    report('Select a shape before using keyboard shortcuts.');
+    return false;
+  }
+
+  active.set({
+    left: (active.left ?? 0) + dx,
+    top: (active.top ?? 0) + dy
+  });
+  active.setCoords();
+  canvas.requestRenderAll();
+  report(`Nudged ${active.type} to left=${Math.round(active.left ?? 0)}, top=${Math.round(active.top ?? 0)}.`);
+  return true;
+};
+
+interactiveTarget.addEventListener('keydown', evt => {
+  const step = evt.shiftKey ? 10 : 2;
+  let handled = false;
+  switch (evt.key) {
+    case 'ArrowLeft':
+      handled = nudgeActiveObject(-step, 0);
+      break;
+    case 'ArrowRight':
+      handled = nudgeActiveObject(step, 0);
+      break;
+    case 'ArrowUp':
+      handled = nudgeActiveObject(0, -step);
+      break;
+    case 'ArrowDown':
+      handled = nudgeActiveObject(0, step);
+      break;
+    case 'Delete':
+    case 'Backspace': {
+      const active = canvas.getActiveObject();
+      if (active) {
+        canvas.remove(active);
+        canvas.discardActiveObject();
+        canvas.requestRenderAll();
+        report(`Removed ${active.type}.`);
+        handled = true;
+      }
+      break;
+    }
+    case 'Escape':
+      canvas.discardActiveObject();
+      canvas.requestRenderAll();
+      report('Selection cleared.');
+      handled = true;
+      break;
+  }
+
+  if (handled) {
+    evt.preventDefault();
+  }
+});
+
+canvas.on('mouse:down', () => {
+  interactiveTarget.focus?.();
+});
 
 canvas.on('object:modified', evt => {
   const target = evt?.target;
@@ -1891,7 +1957,16 @@ canvas.on('object:modified', evt => {
 canvas.on('selection:created', evt => {
   const target = evt?.selected?.[0];
   if (target) {
+    interactiveTarget.focus?.();
     report(`Selected ${target.type} – try scaling or rotating.`);
+  }
+});
+
+canvas.on('selection:updated', evt => {
+  const target = evt?.selected?.[0];
+  if (target) {
+    interactiveTarget.focus?.();
+    report(`Selected ${target.type} – arrow keys nudge, Delete removes.`);
   }
 });
 

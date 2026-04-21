@@ -53,6 +53,7 @@ internal static class CanvasContextBridge
             }
 
             _target.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+            _target.AddHandler(InputElement.PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
         }
 
         private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)
@@ -73,6 +74,15 @@ internal static class CanvasContextBridge
             }
 
             TryFocus(_target, NavigationMethod.Pointer, e.KeyModifiers);
+            e.Pointer.Capture(_target);
+        }
+
+        private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (ReferenceEquals(e.Source, _target) && ReferenceEquals(e.Pointer.Captured, _target))
+            {
+                e.Pointer.Capture(null);
+            }
         }
 
         private void AttachToLayer()
