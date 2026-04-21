@@ -212,6 +212,26 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void WebGlTexSubImage2D_UsesImageSourceOverloadArguments()
+    {
+        var context = new CanvasWebGlRenderingContext(new CanvasDrawingSurface());
+        var texture = context.createTexture();
+        var pixels = new byte[16];
+
+        context.pixelStorei(context.UNPACK_ALIGNMENT, 1);
+        context.pixelStorei(context.UNPACK_FLIP_Y_WEBGL, true);
+        context.bindTexture(context.TEXTURE_2D, texture);
+        context.texSubImage2D(context.TEXTURE_2D, 0, 0, 0, context.RGBA, context.UNSIGNED_BYTE, pixels);
+
+        Assert.Equal(context.RGBA, texture.Format);
+        Assert.Equal(context.UNSIGNED_BYTE, texture.Type);
+        Assert.Same(pixels, texture.Pixels);
+        Assert.Equal(1, texture.UnpackAlignment);
+        Assert.True(texture.UnpackFlipY);
+        Assert.True(texture.NativeDirty);
+    }
+
+    [AvaloniaFact]
     public void WebGlSurface_UsesDedicatedOpenGlTarget()
     {
         var canvasTarget = new CanvasOpenGlDrawingSurface

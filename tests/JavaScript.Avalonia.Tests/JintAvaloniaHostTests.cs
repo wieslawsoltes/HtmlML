@@ -1243,6 +1243,45 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
     }
 
     [AvaloniaFact]
+    public void NativeWebGlCanvas_WidthHeightSetDrawingBufferNotLayout()
+    {
+        var surface = new CanvasOpenGlDrawingSurface
+        {
+            Name = "nativeSurface",
+            Width = 720,
+            Height = 420
+        };
+        var window = new Window
+        {
+            Width = 800,
+            Height = 500,
+            Content = new VisualLayerManager { Child = surface }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        var element = HostTestUtilities.GetElement(host.Document.getElementById("nativeSurface"));
+
+        element.width = 1440;
+        element.height = 840;
+
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(element.getContext("webgl"));
+
+        Assert.Equal(720, surface.Width);
+        Assert.Equal(420, surface.Height);
+        Assert.Equal(720, element.offsetWidth);
+        Assert.Equal(420, element.offsetHeight);
+        Assert.Equal(1440, element.width);
+        Assert.Equal(840, element.height);
+        Assert.Equal(1440, surface.DrawingBufferWidth);
+        Assert.Equal(840, surface.DrawingBufferHeight);
+        Assert.Equal(1440, context.drawingBufferWidth);
+        Assert.Equal(840, context.drawingBufferHeight);
+    }
+
+    [AvaloniaFact]
     public void WebGl_FramebufferBindingsExposeRenderTargetState()
     {
         var root = new Border
