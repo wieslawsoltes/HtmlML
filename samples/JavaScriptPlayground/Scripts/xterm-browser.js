@@ -970,6 +970,26 @@ const bindInput = () => {
       }
     });
   };
+  const defer = (handler) => {
+    const run = () => {
+      try {
+        handler();
+      } catch (error) {
+        updateStatus(`Input sync failed: ${error}`);
+      }
+    };
+    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+      window.setTimeout(run, 0);
+    } else {
+      setTimeout(run, 0);
+    }
+  };
+  const getInputValue = () => input && typeof input.value === 'string' ? input.value : '';
+  const clearInputBox = () => {
+    if (input && typeof input.value === 'string') {
+      input.value = '';
+    }
+  };
 
   surface.__xtermCleanup = () => {
     stopDemoStream();
@@ -990,7 +1010,7 @@ const bindInput = () => {
   const submit = (rawValue) => {
     const value = typeof rawValue === 'string'
       ? rawValue
-      : (input && typeof input.value === 'string' ? input.value : draftInput);
+      : (getInputValue() || draftInput);
     try {
       updateStatus(executeCommand(value));
     } catch (error) {
@@ -1000,11 +1020,39 @@ const bindInput = () => {
   };
 
   addListener(sendButton, 'click', submit);
+  addListener(input, 'textinput', (event) => {
+    const data = typeof event?.data === 'string' ? event.data : '';
+    if (!activeShellSession || !data) {
+      return;
+    }
+
+    sendToActiveShellSession(data);
+    defer(clearInputBox);
+    event.preventDefault && event.preventDefault();
+  });
   addListener(input, 'input', () => {
-    const value = typeof input.value === 'string' ? input.value : '';
-    setDraftInput(value);
+    if (activeShellSession) {
+      defer(clearInputBox);
+      return;
+    }
+
+    defer(() => {
+      if (!activeShellSession) {
+        setDraftInput(getInputValue());
+      }
+    });
   });
   addListener(input, 'keydown', (event) => {
+    if (activeShellSession) {
+      const sequence = keyToTerminalSequence(event);
+      if (sequence) {
+        sendToActiveShellSession(sequence);
+        defer(clearInputBox);
+        event.preventDefault && event.preventDefault();
+      }
+      return;
+    }
+
     if (event && event.key === 'Enter') {
       event.preventDefault && event.preventDefault();
       submit();
