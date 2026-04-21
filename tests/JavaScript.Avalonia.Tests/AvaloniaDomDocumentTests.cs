@@ -315,6 +315,17 @@ public class AvaloniaDomDocumentTests
     }
 
     [AvaloniaFact]
+    public void CreateElement_CanvasUsesTransparentHitTestSurface()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var element = HostTestUtilities.GetElement(host.Document.createElement("canvas"));
+        var canvas = Assert.IsType<Canvas>(element.Control);
+
+        Assert.Same(Brushes.Transparent, canvas.Background);
+        Assert.True(canvas.IsHitTestVisible);
+    }
+
+    [AvaloniaFact]
     public void SetAttribute_ConvertsNumericValues()
     {
         var (host, _) = HostTestUtilities.CreateHost();
@@ -851,6 +862,38 @@ public class AvaloniaDomDocumentTests
             "parent:BubblingPhase",
             "doc:BubblingPhase"
         }, order);
+    }
+
+    [AvaloniaFact]
+    public void DocumentPointerEvents_CanOriginateFromTopLevel()
+    {
+        var (host, window) = HostTestUtilities.CreateHost();
+        var called = false;
+
+        host.Document.addEventListener("mousedown", JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var evt = Assert.IsType<DomPointerEvent>(arg);
+            Assert.Equal("mousedown", evt.type);
+            Assert.Same(host.Document, evt.target);
+            Assert.Same(host.Document, evt.currentTarget);
+            Assert.Equal(7, evt.clientX);
+            Assert.Equal(9, evt.clientY);
+            called = true;
+        })));
+
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var args = new PointerPressedEventArgs(
+            window,
+            pointer,
+            window,
+            new Point(7, 9),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None);
+
+        window.RaiseEvent(args);
+
+        Assert.True(called);
     }
 
     [AvaloniaFact]

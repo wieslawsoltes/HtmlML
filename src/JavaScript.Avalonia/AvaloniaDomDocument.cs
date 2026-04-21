@@ -39,6 +39,7 @@ public class AvaloniaDomDocument
     private bool _mutationDeliveryScheduled;
     private AvaloniaDomElement? _virtualActiveElement;
     private bool _topLevelInputHandlersAttached;
+    private bool _topLevelPointerHandlersAttached;
 
     protected JintAvaloniaHost Host { get; }
 
@@ -49,6 +50,7 @@ public class AvaloniaDomDocument
         _head = new DomHeadElement(this);
         _documentElement = new DomDocumentElement(this, _head);
         EnsureTopLevelInputHandlers();
+        EnsureTopLevelPointerHandlers();
     }
 
     protected virtual Control? GetDocumentRoot()
@@ -485,6 +487,73 @@ public class AvaloniaDomDocument
         inputElement.AddHandler(InputElement.TextInputEvent, OnTopLevelTextInput, RoutingStrategies.Bubble, handledEventsToo: true);
     }
 
+    private void EnsureTopLevelPointerHandlers()
+    {
+        if (_topLevelPointerHandlersAttached || Host.TopLevel is not InputElement inputElement)
+        {
+            return;
+        }
+
+        _topLevelPointerHandlersAttached = true;
+        inputElement.AddHandler(InputElement.PointerPressedEvent, OnTopLevelPointerPressed, RoutingStrategies.Bubble, handledEventsToo: true);
+        inputElement.AddHandler(InputElement.PointerMovedEvent, OnTopLevelPointerMoved, RoutingStrategies.Bubble, handledEventsToo: true);
+        inputElement.AddHandler(InputElement.PointerReleasedEvent, OnTopLevelPointerReleased, RoutingStrategies.Bubble, handledEventsToo: true);
+        inputElement.AddHandler(InputElement.PointerWheelChangedEvent, OnTopLevelPointerWheelChanged, RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
+    private void OnTopLevelPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (ShouldDispatchTopLevelDocumentPointerEvent(e.Source))
+        {
+            DispatchDocumentPointerEvent("pointerdown", e, bubbles: true, cancelable: true);
+            DispatchDocumentPointerEvent("mousedown", e, bubbles: true, cancelable: true);
+        }
+    }
+
+    private void OnTopLevelPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (ShouldDispatchTopLevelDocumentPointerEvent(e.Source))
+        {
+            DispatchDocumentPointerEvent("pointermove", e, bubbles: true, cancelable: false);
+            DispatchDocumentPointerEvent("mousemove", e, bubbles: true, cancelable: false);
+        }
+    }
+
+    private void OnTopLevelPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (ShouldDispatchTopLevelDocumentPointerEvent(e.Source))
+        {
+            DispatchDocumentPointerEvent("pointerup", e, bubbles: true, cancelable: true);
+            DispatchDocumentPointerEvent("mouseup", e, bubbles: true, cancelable: true);
+        }
+    }
+
+    private void OnTopLevelPointerWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        if (ShouldDispatchTopLevelDocumentPointerEvent(e.Source))
+        {
+            DispatchDocumentPointerEvent("wheel", e, bubbles: true, cancelable: true);
+        }
+    }
+
+    private bool ShouldDispatchTopLevelDocumentPointerEvent(object? source)
+        => source is null || ReferenceEquals(source, Host.TopLevel);
+
+    private void DispatchDocumentPointerEvent(string type, PointerEventArgs args, bool bubbles, bool cancelable)
+    {
+        var relativeTo = Host.TopLevel as Control ?? GetDocumentRoot();
+        if (relativeTo is null)
+        {
+            return;
+        }
+
+        var evt = new DomPointerEvent(type, args, relativeTo, Host.GetTimestamp(), bubbles, cancelable)
+        {
+            target = this
+        };
+        DispatchDocumentEvent(evt);
+    }
+
     private void OnTopLevelKeyDown(object? sender, KeyEventArgs e)
     {
         var target = GetVirtualInputTarget(e.Source);
@@ -615,7 +684,7 @@ public class AvaloniaDomDocument
             case "header":
             case "footer":
             case "nav":
-                return new Canvas();
+                return new Canvas { Background = Brushes.Transparent };
             case "span":
             case "label":
             case "p":
@@ -1367,6 +1436,8 @@ public class AvaloniaDomElement
         "mousemove",
         "mouseup",
         "wheel",
+        "mouseover",
+        "mouseout",
         "mouseenter",
         "mouseleave",
         "pointerdown",
@@ -2294,12 +2365,14 @@ public class AvaloniaDomElement
 
     private void OnPointerEntered(object? sender, PointerEventArgs e)
     {
+        Host.Document.DispatchPointerEvent(this, "mouseover", e, bubbles: true, cancelable: false);
         Host.Document.DispatchPointerEvent(this, "pointerenter", e, bubbles: false, cancelable: false);
         Host.Document.DispatchPointerEvent(this, "mouseenter", e, bubbles: false, cancelable: false);
     }
 
     private void OnPointerExited(object? sender, PointerEventArgs e)
     {
+        Host.Document.DispatchPointerEvent(this, "mouseout", e, bubbles: true, cancelable: false);
         Host.Document.DispatchPointerEvent(this, "pointerleave", e, bubbles: false, cancelable: false);
         Host.Document.DispatchPointerEvent(this, "mouseleave", e, bubbles: false, cancelable: false);
     }
