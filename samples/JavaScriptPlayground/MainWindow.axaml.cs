@@ -1822,6 +1822,238 @@ frameHandle = window.requestAnimationFrame(tick);
 """
             ),
             new Preset(
+                "Canvas WebGL + Three.js Lava Shader",
+                """
+<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#050505" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="Three.js lava shader" FontWeight="SemiBold" Foreground="#f8fafc" />
+    <TextBlock Text="Port of three.js webgl_shader_lava: custom ShaderMaterial, animated torus UVs, repeat textures, and lava/fog uniforms." TextWrapping="Wrap" Foreground="#fca5a5" />
+    <Border Name="lavaSurface" Width="720" Height="420" Background="#000000" BorderBrush="#7f1d1d" BorderThickness="1" CornerRadius="6" />
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="lavaToggle" Content="Pause animation" />
+      <Button Name="lavaReset" Content="Reset rotation" />
+    </StackPanel>
+    <TextBlock Name="lavaStatus" Foreground="#fecaca" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+const surface = document.getElementById('lavaSurface');
+const toggleBtn = document.getElementById('lavaToggle');
+const resetBtn = document.getElementById('lavaReset');
+const status = document.getElementById('lavaStatus');
+
+if (!surface) {
+  throw new Error('lavaSurface element not found');
+}
+
+const gl = surface.getContext('webgl') || surface.getContext('experimental-webgl');
+if (!gl) {
+  throw new Error('Canvas WebGL context unavailable');
+}
+
+let threeModule;
+try {
+  threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+} catch (error) {
+  const message = `Failed to load Three.js: ${error}`;
+  if (status) {
+    status.textContent = message;
+  }
+  console.error(message);
+  throw error;
+}
+
+const THREE = threeModule?.REVISION ? threeModule : (typeof window !== 'undefined' ? window.THREE : undefined);
+if (!THREE) {
+  throw new Error('Three.js did not expose a renderer API');
+}
+
+const fragmentShader = `
+uniform float time;
+
+uniform float fogDensity;
+uniform vec3 fogColor;
+
+uniform sampler2D texture1;
+uniform sampler2D texture2;
+
+varying vec2 vUv;
+
+void main( void ) {
+
+  vec2 position = - 1.0 + 2.0 * vUv;
+
+  vec4 noise = texture2D( texture1, vUv );
+  vec2 T1 = vUv + vec2( 1.5, - 1.5 ) * time * 0.02;
+  vec2 T2 = vUv + vec2( - 0.5, 2.0 ) * time * 0.01;
+
+  T1.x += noise.x * 2.0;
+  T1.y += noise.y * 2.0;
+  T2.x -= noise.y * 0.2;
+  T2.y += noise.z * 0.2;
+
+  float p = texture2D( texture1, T1 * 2.0 ).a;
+
+  vec4 color = texture2D( texture2, T2 * 2.0 );
+  vec4 temp = color * ( vec4( p, p, p, p ) * 2.0 ) + ( color * color - 0.1 );
+
+  if( temp.r > 1.0 ) { temp.bg += clamp( temp.r - 2.0, 0.0, 100.0 ); }
+  if( temp.g > 1.0 ) { temp.rb += temp.g - 1.0; }
+  if( temp.b > 1.0 ) { temp.rg += temp.b - 1.0; }
+
+  gl_FragColor = temp;
+
+  float depth = gl_FragCoord.z / gl_FragCoord.w;
+  const float LOG2 = 1.442695;
+  float fogFactor = exp2( - fogDensity * fogDensity * depth * depth * LOG2 );
+  fogFactor = 1.0 - clamp( fogFactor, 0.0, 1.0 );
+
+  gl_FragColor = mix( gl_FragColor, vec4( fogColor, gl_FragColor.w ), fogFactor );
+
+}`;
+
+const vertexShader = `
+uniform vec2 uvScale;
+varying vec2 vUv;
+
+void main()
+{
+
+  vUv = uvScale * uv;
+  vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+  gl_Position = projectionMatrix * mvPosition;
+
+}`;
+
+const createDataTexture = (width, height, sampler) => {
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const color = sampler(x / width, y / height);
+      data[i + 0] = color[0];
+      data[i + 1] = color[1];
+      data[i + 2] = color[2];
+      data[i + 3] = color[3];
+    }
+  }
+
+  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.needsUpdate = true;
+  return texture;
+};
+
+const cloudTexture = createDataTexture(64, 64, (u, v) => {
+  const n = Math.floor((Math.sin(u * 41.0) * Math.sin(v * 29.0) * 0.5 + 0.5) * 255);
+  return [n, 255 - n, (n * 37) % 255, n];
+});
+
+const lavaTexture = createDataTexture(64, 64, (u, v) => {
+  const vein = Math.abs(Math.sin(u * 18.0 + Math.sin(v * 24.0)));
+  const heat = Math.max(0, Math.min(1, 0.35 + vein * 0.85));
+  return [
+    Math.floor(120 + heat * 135),
+    Math.floor(20 + heat * heat * 170),
+    Math.floor(Math.max(0, heat - 0.8) * 120),
+    255
+  ];
+});
+
+const uniforms = {
+  fogDensity: { value: 0.45 },
+  fogColor: { value: new THREE.Vector3(0, 0, 0) },
+  time: { value: 1.0 },
+  uvScale: { value: new THREE.Vector2(3.0, 1.0) },
+  texture1: { value: cloudTexture },
+  texture2: { value: lavaTexture }
+};
+
+const renderer = new THREE.WebGLRenderer({
+  canvas: surface,
+  context: gl,
+  antialias: false,
+  alpha: false
+});
+renderer.setPixelRatio(1);
+renderer.setSize(surface.offsetWidth, surface.offsetHeight, false);
+renderer.setClearColor(0x000000, 1);
+renderer.autoClear = false;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, surface.offsetWidth / surface.offsetHeight, 1, 3000);
+camera.position.z = 4;
+
+const material = new THREE.ShaderMaterial({
+  uniforms,
+  vertexShader,
+  fragmentShader
+});
+
+const size = 0.65;
+const mesh = new THREE.Mesh(new THREE.TorusGeometry(size, 0.3, 30, 30), material);
+mesh.rotation.x = 0.3;
+scene.add(mesh);
+
+let running = true;
+let frameHandle = 0;
+let lastTimestamp = 0;
+
+const report = () => {
+  if (status) {
+    status.textContent = `three.js ${THREE.REVISION} lava shader. Backend: ${gl.RenderBackend}; draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.`;
+  }
+};
+
+const render = timestamp => {
+  frameHandle = 0;
+  const seconds = timestamp ? timestamp / 1000 : 0;
+  const delta = lastTimestamp ? Math.max(0.001, seconds - lastTimestamp) : 0.016;
+  lastTimestamp = seconds;
+
+  if (running) {
+    const scaledDelta = 5 * delta;
+    uniforms.time.value += 0.2 * scaledDelta;
+    mesh.rotation.y += 0.0125 * scaledDelta;
+    mesh.rotation.x += 0.05 * scaledDelta;
+  }
+
+  renderer.clear();
+  renderer.render(scene, camera);
+  report();
+
+  if (running) {
+    frameHandle = window.requestAnimationFrame(render);
+  }
+};
+
+toggleBtn.addEventListener('click', () => {
+  running = !running;
+  toggleBtn.textContent = running ? 'Pause animation' : 'Resume animation';
+  if (running && !frameHandle) {
+    frameHandle = window.requestAnimationFrame(render);
+  } else if (!running && frameHandle) {
+    window.cancelAnimationFrame(frameHandle);
+    frameHandle = 0;
+  }
+});
+
+resetBtn.addEventListener('click', () => {
+  uniforms.time.value = 1.0;
+  mesh.rotation.set(0.3, 0, 0);
+  renderer.clear();
+  renderer.render(scene, camera);
+  report();
+});
+
+renderer.clear();
+renderer.render(scene, camera);
+report();
+frameHandle = window.requestAnimationFrame(render);
+"""
+            ),
+            new Preset(
                 "Canvas 2D + Fabric.js",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#ffffff" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
