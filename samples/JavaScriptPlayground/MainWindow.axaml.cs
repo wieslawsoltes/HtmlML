@@ -1982,7 +1982,10 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   alpha: false
 });
-renderer.setPixelRatio(1);
+const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+const renderWidth = Math.max(1, Math.round(surface.offsetWidth * pixelRatio));
+const renderHeight = Math.max(1, Math.round(surface.offsetHeight * pixelRatio));
+renderer.setPixelRatio(pixelRatio);
 renderer.setSize(surface.offsetWidth, surface.offsetHeight, false);
 renderer.setClearColor(0x000000, 1);
 renderer.autoClear = false;
@@ -2010,11 +2013,12 @@ const targetOptions = {
   minFilter: THREE.LinearFilter,
   magFilter: THREE.LinearFilter,
   format: THREE.RGBAFormat,
+  type: THREE.HalfFloatType || THREE.UnsignedByteType,
   stencilBuffer: false
 };
-const sceneTarget = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHeight, targetOptions);
-const bloomTargetX = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHeight, targetOptions);
-const bloomTargetY = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHeight, targetOptions);
+const sceneTarget = new THREE.WebGLRenderTarget(renderWidth, renderHeight, targetOptions);
+const bloomTargetX = new THREE.WebGLRenderTarget(renderWidth, renderHeight, targetOptions);
+const bloomTargetY = new THREE.WebGLRenderTarget(renderWidth, renderHeight, targetOptions);
 
 const quadScene = new THREE.Scene();
 const quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
