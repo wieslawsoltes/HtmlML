@@ -667,9 +667,6 @@ send.dispatchEvent('click');
             Content = new VisualLayerManager { Child = root }
         };
 
-        window.Show();
-        Dispatcher.UIThread.RunJobs();
-
         var host = new JintAvaloniaHost(window);
 
         host.Engine.Execute("""
@@ -876,6 +873,7 @@ status.textContent = chart ? 'Chart.js chart created' : 'Chart.js chart missing'
         var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
         Assert.True(context.CommandCount > 0);
 
+        window.Show();
         Dispatcher.UIThread.RunJobs();
         var frame = window.CaptureRenderedFrame();
         Assert.NotNull(frame);
