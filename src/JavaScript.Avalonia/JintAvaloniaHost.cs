@@ -1276,7 +1276,7 @@ try {
 
         public NavigatorJs navigator => _navigator ??= new NavigatorJs(_host);
 
-        public double devicePixelRatio => 1.0;
+        public double devicePixelRatio => Math.Max(1.0, _host.TopLevel.RenderScaling);
 
         public int setTimeout(JsValue callback) => setTimeout(callback, 0);
 

@@ -223,6 +223,8 @@ internal sealed partial class CanvasWebGlRenderingContext
     public int INT => 0x1404;
     public int UNSIGNED_INT => 0x1405;
     public int FLOAT => 0x1406;
+    public int HALF_FLOAT => 0x140B;
+    public int HALF_FLOAT_OES => 0x8D61;
     public int DEPTH_COMPONENT => 0x1902;
     public int ALPHA => 0x1906;
     public int RGB => 0x1907;
@@ -330,6 +332,13 @@ internal sealed partial class CanvasWebGlRenderingContext
     public int RGBA4 => 0x8056;
     public int RGB5_A1 => 0x8057;
     public int RGB565 => 0x8D62;
+    public int RGBA16F => 0x881A;
+    public int RGB16F => 0x881B;
+    public int RGBA32F => 0x8814;
+    public int RGBA16F_EXT => 0x881A;
+    public int RGB16F_EXT => 0x881B;
+    public int FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE_EXT => 0x8211;
+    public int UNSIGNED_NORMALIZED_EXT => 0x8C17;
     public int DEPTH_COMPONENT16 => 0x81A5;
     public int STENCIL_INDEX8 => 0x8D48;
     public int DEPTH_STENCIL => 0x84F9;
@@ -387,6 +396,18 @@ internal sealed partial class CanvasWebGlRenderingContext
             "OES_standard_derivatives" => new { FRAGMENT_SHADER_DERIVATIVE_HINT_OES = 0x8B8B },
             "EXT_frag_depth" => new { },
             "EXT_shader_texture_lod" => new { },
+            "EXT_color_buffer_float" => new { },
+            "EXT_color_buffer_half_float" => new
+            {
+                RGBA16F_EXT,
+                RGB16F_EXT,
+                FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE_EXT,
+                UNSIGNED_NORMALIZED_EXT
+            },
+            "OES_texture_float" => new { },
+            "OES_texture_float_linear" => new { },
+            "OES_texture_half_float" => new { HALF_FLOAT_OES },
+            "OES_texture_half_float_linear" => new { },
             "WEBGL_depth_texture" or "MOZ_WEBGL_depth_texture" or "WEBKIT_WEBGL_depth_texture" => new { UNSIGNED_INT_24_8_WEBGL = 0x84FA },
             "WEBGL_debug_renderer_info" => new { UNMASKED_VENDOR_WEBGL = 0x9245, UNMASKED_RENDERER_WEBGL = 0x9246 },
             "OES_vertex_array_object" => new WebGlVertexArrayExtension(this),
@@ -398,10 +419,16 @@ internal sealed partial class CanvasWebGlRenderingContext
         => new[]
         {
             "EXT_blend_minmax",
+            "EXT_color_buffer_float",
+            "EXT_color_buffer_half_float",
             "EXT_frag_depth",
             "EXT_shader_texture_lod",
             "OES_element_index_uint",
             "OES_standard_derivatives",
+            "OES_texture_float",
+            "OES_texture_float_linear",
+            "OES_texture_half_float",
+            "OES_texture_half_float_linear",
             "OES_vertex_array_object",
             "WEBGL_debug_renderer_info",
             "WEBGL_depth_texture"

@@ -1326,6 +1326,8 @@ globalThis.framebufferCleared = gl.getParameter(gl.FRAMEBUFFER_BINDING) === null
 const surface = document.getElementById('targetSurface');
 const status = document.getElementById('targetStatus');
 const gl = surface.getContext('webgl');
+const halfFloat = gl.getExtension('OES_texture_half_float');
+const colorBufferHalfFloat = gl.getExtension('EXT_color_buffer_half_float');
 const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
 const THREE = threeModule?.REVISION ? threeModule : window.THREE;
 
@@ -1344,6 +1346,7 @@ const target = new THREE.WebGLRenderTarget(surface.offsetWidth, surface.offsetHe
   minFilter: THREE.LinearFilter,
   magFilter: THREE.LinearFilter,
   format: THREE.RGBAFormat,
+  type: THREE.HalfFloatType,
   stencilBuffer: false
 });
 
@@ -1381,11 +1384,13 @@ renderer.clear();
 renderer.render(scene, camera);
 renderer.setRenderTarget(null);
 renderer.render(screenScene, screenCamera);
-status.textContent = gl.DrawCallCount > 0 && gl.CommandCount > 1 ? 'render target composited' : 'render target missing';
+globalThis.halfFloatExtensionAvailable = !!halfFloat && !!colorBufferHalfFloat;
+status.textContent = gl.DrawCallCount > 0 && gl.CommandCount > 1 ? 'half-float render target composited' : 'render target missing';
 """);
 
         var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("targetStatus")).Control);
-        Assert.Equal("render target composited", status.Text);
+        Assert.Equal("half-float render target composited", status.Text);
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("halfFloatExtensionAvailable").ToObject()));
 
         var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("targetSurface"));
         var context = Assert.IsType<CanvasWebGlRenderingContext>(surfaceElement.getContext("webgl"));
