@@ -71,6 +71,22 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void Font_ParsesCssFamilyListAndStyle()
+    {
+        var surface = new CanvasDrawingSurface();
+        var ctx = surface.Context;
+
+        ctx.font = "italic bold 14px Menlo, Monaco, \"Courier New\", monospace";
+        ctx.fillText("x", 0, 0);
+
+        var command = Assert.IsType<FillTextCommand>(surface.Commands.Single());
+        Assert.Equal(14, command.Snapshot.FontSize);
+        Assert.Equal(FontStyle.Italic, command.Snapshot.Typeface.Style);
+        Assert.Equal(FontWeight.Bold, command.Snapshot.Typeface.Weight);
+        Assert.Contains("Menlo", command.Snapshot.Typeface.FontFamily.Name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [AvaloniaFact]
     public void Stroke_PreservesLineDashState()
     {
         var surface = new CanvasDrawingSurface();

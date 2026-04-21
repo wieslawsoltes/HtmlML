@@ -26,6 +26,20 @@ interface XtermBufferLine {
 interface XtermCell {
   getWidth(): number;
   getChars(): string;
+  getFgColor?(): number;
+  getBgColor?(): number;
+  isFgDefault?(): boolean;
+  isBgDefault?(): boolean;
+  isFgPalette?(): boolean;
+  isBgPalette?(): boolean;
+  isFgRGB?(): boolean;
+  isBgRGB?(): boolean;
+  isBold?(): boolean;
+  isDim?(): boolean;
+  isItalic?(): boolean;
+  isInverse?(): boolean;
+  isInvisible?(): boolean;
+  isUnderline?(): boolean;
 }
 
 interface XtermTerminal {
@@ -95,10 +109,101 @@ if (!ctx) {
 }
 
 const theme = {
-  background: '#f8fafc',
-  foreground: '#0f172a',
-  accent: '#2563eb'
+  background: '#0f172a',
+  foreground: '#e2e8f0',
+  accent: '#38bdf8'
 };
+
+const ansiPalette = [
+  '#1e293b', '#ef4444', '#22c55e', '#eab308',
+  '#3b82f6', '#a855f7', '#06b6d4', '#cbd5e1',
+  '#64748b', '#f87171', '#4ade80', '#facc15',
+  '#60a5fa', '#c084fc', '#22d3ee', '#f8fafc'
+];
+
+const colorCubeSteps = [0, 95, 135, 175, 215, 255];
+
+function byteToHex(value: number): string {
+  const normalized = Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
+  return normalized.toString(16).padStart(2, '0');
+}
+
+function toHexColor(red: number, green: number, blue: number): string {
+  return `#${byteToHex(red)}${byteToHex(green)}${byteToHex(blue)}`;
+}
+
+function rgbIntToColor(value: number): string {
+  const color = Math.max(0, Math.floor(Number(value) || 0));
+  return toHexColor((color >> 16) & 255, (color >> 8) & 255, color & 255);
+}
+
+function paletteColor(index: number | undefined | null): string | null {
+  const colorIndex = Math.floor(Number(index));
+  if (!Number.isFinite(colorIndex) || colorIndex < 0) {
+    return null;
+  }
+
+  if (colorIndex < ansiPalette.length) {
+    return ansiPalette[colorIndex];
+  }
+
+  if (colorIndex >= 16 && colorIndex <= 231) {
+    const offset = colorIndex - 16;
+    const red = colorCubeSteps[Math.floor(offset / 36) % 6];
+    const green = colorCubeSteps[Math.floor(offset / 6) % 6];
+    const blue = colorCubeSteps[offset % 6];
+    return toHexColor(red, green, blue);
+  }
+
+  if (colorIndex >= 232 && colorIndex <= 255) {
+    const gray = 8 + (colorIndex - 232) * 10;
+    return toHexColor(gray, gray, gray);
+  }
+
+  return null;
+}
+
+function resolveCellColor(cell: XtermCell | undefined, foreground: boolean): string | null {
+  if (!cell) {
+    return foreground ? theme.foreground : null;
+  }
+
+  const isDefault = foreground ? cell.isFgDefault?.() : cell.isBgDefault?.();
+  if (isDefault) {
+    return foreground ? theme.foreground : null;
+  }
+
+  const value = foreground ? cell.getFgColor?.() : cell.getBgColor?.();
+  if (!Number.isFinite(Number(value))) {
+    return foreground ? theme.foreground : null;
+  }
+
+  const isRgb = foreground ? cell.isFgRGB?.() : cell.isBgRGB?.();
+  if (isRgb) {
+    return rgbIntToColor(value ?? 0);
+  }
+
+  const isPalette = foreground ? cell.isFgPalette?.() : cell.isBgPalette?.();
+  if (isPalette) {
+    return paletteColor(value) || (foreground ? theme.foreground : null);
+  }
+
+  return paletteColor(value) || rgbIntToColor(value ?? 0);
+}
+
+function getCellColors(cell: XtermCell | undefined): { foreground: string; background: string | null } {
+  let foreground = resolveCellColor(cell, true) || theme.foreground;
+  let background = resolveCellColor(cell, false);
+
+  if (cell?.isInverse?.()) {
+    const originalForeground = foreground || theme.foreground;
+    const originalBackground = background || theme.background;
+    foreground = originalBackground;
+    background = originalForeground;
+  }
+
+  return { foreground, background };
+}
 
 const terminal: XtermTerminal = new TerminalCtor({
   cols: 120,
@@ -108,7 +213,7 @@ const terminal: XtermTerminal = new TerminalCtor({
 });
 
 let fontSize = 14;
-const fontFamily = 'JetBrains Mono, SFMono-Regular, Consolas, monospace';
+const fontFamily = 'Menlo, Monaco, Consolas, "Courier New", monospace';
 const verticalPadding = 12;
 const horizontalPadding = 14;
 let cellWidth = 9;
@@ -214,6 +319,17 @@ function renderBuffer() {
   const scratch = buffer.getNullCell();
   const textTop = verticalPadding;
   const textLeft = horizontalPadding;
+  let currentFont = '';
+
+  const useCellFont = (cell: XtermCell | undefined) => {
+    const italic = cell?.isItalic?.() === true;
+    const bold = cell?.isBold?.() === true;
+    const font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
+    if (font !== currentFont) {
+      ctx.font = font;
+      currentFont = font;
+    }
+  };
 
   for (let row = 0; row < terminal.rows; row++) {
     const line = buffer.getLine(viewportTop + row);
@@ -222,14 +338,35 @@ function renderBuffer() {
       for (let col = 0; col < terminal.cols; col++) {
         const cell = line.getCell(col, scratch);
         const widthUnits = cell?.getWidth?.() ?? 1;
+        if (widthUnits <= 0) {
+          x += cellWidth;
+          continue;
+        }
+
         const charWidth = Math.max(1, widthUnits);
         const cellX = x;
         const cellY = textTop + row * cellHeight;
         const text = cell?.getChars?.() || ' ';
-        if (text.trim().length > 0) {
-          ctx.fillStyle = theme.foreground;
-          ctx.fillText(text, cellX, cellY + baselineOffset);
+        const colors = getCellColors(cell);
+
+        if (colors.background && colors.background !== theme.background) {
+          ctx.fillStyle = colors.background;
+          ctx.fillRect(cellX, cellY, cellWidth * charWidth, cellHeight);
         }
+
+        if (text.trim().length > 0 && cell?.isInvisible?.() !== true) {
+          useCellFont(cell);
+          ctx.globalAlpha = cell?.isDim?.() === true ? 0.65 : 1;
+          ctx.fillStyle = colors.foreground;
+          ctx.fillText(text, cellX, cellY + baselineOffset);
+          ctx.globalAlpha = 1;
+        }
+
+        if (cell?.isUnderline?.() === true) {
+          ctx.fillStyle = colors.foreground;
+          ctx.fillRect(cellX, cellY + cellHeight - 3, cellWidth * charWidth, 1);
+        }
+
         x += cellWidth * charWidth;
         col += charWidth - 1;
       }
