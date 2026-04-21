@@ -16,6 +16,7 @@ internal static class CanvasContextBridge
         private readonly Control _target;
         private readonly CanvasDrawingSurface _surface;
         private readonly CanvasRenderingContext2D _context;
+        private CanvasWebGlRenderingContext? _webGlContext;
         private AdornerLayer? _layer;
 
         public CanvasAttachment(Control target)
@@ -35,6 +36,8 @@ internal static class CanvasContextBridge
         }
 
         public CanvasRenderingContext2D Context => _context;
+
+        public CanvasWebGlRenderingContext WebGlContext => _webGlContext ??= new CanvasWebGlRenderingContext(_surface);
 
         public CanvasDrawingSurface Surface => _surface;
 
@@ -121,7 +124,9 @@ internal static class CanvasContextBridge
 
     public static object? GetContext(Control control, string type)
     {
-        if (!string.Equals(type, "2d", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(type, "2d", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(type, "webgl", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(type, "experimental-webgl", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
@@ -132,6 +137,12 @@ internal static class CanvasContextBridge
         }
 
         var attachment = s_attachments.GetValue(control, static c => new CanvasAttachment(c));
+        if (string.Equals(type, "webgl", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(type, "experimental-webgl", StringComparison.OrdinalIgnoreCase))
+        {
+            return attachment.WebGlContext;
+        }
+
         return attachment.Context;
     }
 

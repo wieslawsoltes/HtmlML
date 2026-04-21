@@ -230,6 +230,17 @@ Use `ctx.clearRect(0, 0, surface.offsetWidth, surface.offsetHeight);` to wipe th
 - Gradients via `createLinearGradient` / `createRadialGradient` with standard `addColorStop` semantics.
 - `drawImage` accepts Avalonia `IImage` instances (including `Bitmap` and `Image.Source`) for blitting surfaces into the canvas.
 
+`getContext('webgl')` and `getContext('experimental-webgl')` expose an initial WebGL 1-compatible context for JavaScript libraries that expect a browser canvas. The current backend supports shader/program reflection, buffers, vertex attributes, uniforms, indexed triangle drawing, and enough texture/framebuffer state for libraries such as Three.js to render simple 3D scenes into the Avalonia canvas surface.
+
+```js
+const surface = document.getElementById('threeSurface');
+const gl = surface.getContext('webgl');
+const THREE = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+
+const renderer = new THREE.WebGLRenderer({ canvas: surface, context: gl });
+renderer.setSize(surface.offsetWidth, surface.offsetHeight, false);
+```
+
 
 ## Console Output
 
