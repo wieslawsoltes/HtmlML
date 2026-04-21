@@ -1312,6 +1312,7 @@ internal sealed partial class CanvasWebGlRenderingContext
             SnapshotEnabledAttributes(),
             null,
             SnapshotTextures(),
+            SnapshotUniforms(_currentProgram),
             SnapshotPipelineState()));
         RequestNativeRender();
         LastDrawStatus = $"Queued drawArrays mode {mode} with {count} vertices";
@@ -1353,6 +1354,7 @@ internal sealed partial class CanvasWebGlRenderingContext
             SnapshotEnabledAttributes(),
             elementBuffer,
             SnapshotTextures(),
+            SnapshotUniforms(_currentProgram),
             SnapshotPipelineState()));
         RequestNativeRender();
         LastDrawStatus = $"Queued drawElements mode {mode} with {count} indices";
