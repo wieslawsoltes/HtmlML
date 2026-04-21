@@ -110,6 +110,18 @@ var navigator = (__avaloniaGlobal && __avaloniaGlobal.navigator) || (window && w
 
     internal double GetTimestamp() => _stopwatch.Elapsed.TotalMilliseconds;
 
+    internal void ProcessPendingTasks()
+    {
+        try
+        {
+            Engine.Advanced.ProcessTasks();
+        }
+        catch
+        {
+            // Task processing is best-effort; callback errors are surfaced by the caller.
+        }
+    }
+
     private void RegisterModuleSystem()
     {
         Func<string, JsValue> globalRequire = specifier => RequireModule(specifier, null);
@@ -710,6 +722,7 @@ try {
             try
             {
                 Engine.Invoke(cb, now);
+                ProcessPendingTasks();
             }
             catch
             {
@@ -1363,6 +1376,7 @@ try {
             try
             {
                 _host.Engine.Invoke(callback, Array.Empty<object>());
+                _host.ProcessPendingTasks();
             }
             catch
             {
