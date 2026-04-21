@@ -305,6 +305,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         private readonly HashSet<int> _textures = new();
         private readonly HashSet<int> _enabledAttributes = new();
         private OpenGlApi _api;
+        private int _vertexArray;
 
         public OpenGlRenderer(CanvasWebGlRenderingContext context, GlInterface gl)
         {
@@ -323,6 +324,8 @@ internal sealed partial class CanvasWebGlRenderingContext
             gl.Viewport(0, 0, pixelSize.Width, pixelSize.Height);
 
             var drawCalls = 0;
+            var drawCommands = 0;
+            var lastFailure = string.Empty;
             foreach (var command in commands)
             {
                 switch (command)
@@ -331,9 +334,14 @@ internal sealed partial class CanvasWebGlRenderingContext
                         RenderClear(gl, pixelSize, clear);
                         break;
                     case WebGlDrawCommand draw:
+                        drawCommands++;
                         if (RenderDraw(gl, pixelSize, draw))
                         {
                             drawCalls++;
+                        }
+                        else
+                        {
+                            lastFailure = _context.LastDrawStatus;
                         }
 
                         break;
@@ -341,13 +349,40 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             gl.Flush();
-            _context.LastDrawStatus = drawCalls > 0
-                ? $"Rendered {drawCalls} WebGL draw call(s) through Avalonia OpenGL"
-                : "Rendered WebGL frame through Avalonia OpenGL";
+            if (drawCalls > 0)
+            {
+                _context.LastDrawStatus = $"Rendered {drawCalls} WebGL draw call(s) through Avalonia OpenGL";
+            }
+            else if (drawCommands == 0)
+            {
+                _context.LastDrawStatus = "Rendered WebGL frame through Avalonia OpenGL";
+            }
+            else if (!string.IsNullOrWhiteSpace(lastFailure))
+            {
+                _context.LastDrawStatus = lastFailure;
+            }
+            else
+            {
+                _context.LastDrawStatus = "No WebGL draw calls completed through Avalonia OpenGL";
+            }
         }
 
         public void Dispose(GlInterface gl)
         {
+            if (_vertexArray != 0)
+            {
+                try
+                {
+                    gl.DeleteVertexArray(_vertexArray);
+                }
+                catch
+                {
+                    // Some embedded profiles expose vertex arrays only through extensions.
+                }
+
+                _vertexArray = 0;
+            }
+
             foreach (var buffer in _buffers)
             {
                 gl.DeleteBuffer(buffer);
@@ -401,12 +436,14 @@ internal sealed partial class CanvasWebGlRenderingContext
             ApplyTextures(gl, command.Textures);
             gl.UseProgram(program.NativeId);
             ApplyUniforms(gl, program, command);
+            EnsureVertexArray(gl);
             ApplyAttributes(gl, command);
 
             if (command.Indexed)
             {
                 if (command.ElementArrayBuffer is not { Deleted: false } elementBuffer)
                 {
+                    _context.LastDrawStatus = "WebGL drawElements skipped: no element array buffer";
                     return false;
                 }
 
@@ -419,7 +456,48 @@ internal sealed partial class CanvasWebGlRenderingContext
                 gl.DrawArrays(command.Mode, command.First, new IntPtr(command.Count));
             }
 
-            return true;
+            var error = gl.GetError();
+            if (error == _context.NO_ERROR)
+            {
+                return true;
+            }
+
+            _context.LastDrawStatus = $"OpenGL draw failed with error 0x{error:X}";
+            return false;
+        }
+
+        private void EnsureVertexArray(GlInterface gl)
+        {
+            if (_vertexArray != 0)
+            {
+                TryBindVertexArray(gl, _vertexArray);
+                return;
+            }
+
+            try
+            {
+                _vertexArray = gl.GenVertexArray();
+                if (_vertexArray != 0)
+                {
+                    gl.BindVertexArray(_vertexArray);
+                }
+            }
+            catch
+            {
+                _vertexArray = 0;
+            }
+        }
+
+        private static void TryBindVertexArray(GlInterface gl, int vertexArray)
+        {
+            try
+            {
+                gl.BindVertexArray(vertexArray);
+            }
+            catch
+            {
+                // Desktop compatibility profiles do not need a VAO; core profiles do.
+            }
         }
 
         private void ApplyFramebufferAndMasks(GlInterface gl, PixelSize pixelSize, WebGlPipelineState state)
