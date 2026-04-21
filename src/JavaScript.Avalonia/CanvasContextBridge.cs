@@ -17,6 +17,7 @@ internal static class CanvasContextBridge
         private readonly CanvasDrawingSurface _surface;
         private readonly CanvasRenderingContext2D _context;
         private CanvasOpenGlDrawingSurface? _openGlSurface;
+        private Decorator? _openGlAdorner;
         private CanvasWebGlRenderingContext? _webGlContext;
         private AdornerLayer? _layer;
 
@@ -48,12 +49,19 @@ internal static class CanvasContextBridge
                 }
 
                 _openGlSurface = new CanvasOpenGlDrawingSurface();
+                _openGlAdorner = new Decorator
+                {
+                    Child = _openGlSurface,
+                    ClipToBounds = true,
+                    IsHitTestVisible = false,
+                    Focusable = false
+                };
                 _webGlContext = new CanvasWebGlRenderingContext(_surface, _openGlSurface);
                 _openGlSurface.Context = _webGlContext;
 
                 if (_layer is not null)
                 {
-                    AttachSurface(_openGlSurface);
+                    AttachSurface(_openGlAdorner);
                 }
 
                 return _webGlContext;
@@ -130,7 +138,7 @@ internal static class CanvasContextBridge
 
             if (_openGlSurface is not null)
             {
-                AttachSurface(_openGlSurface);
+                AttachSurface(_openGlAdorner);
             }
         }
 
@@ -139,24 +147,24 @@ internal static class CanvasContextBridge
             if (_layer is { } layer)
             {
                 layer.Children.Remove(_surface);
-                if (_openGlSurface is not null)
+                if (_openGlAdorner is not null)
                 {
-                    layer.Children.Remove(_openGlSurface);
+                    layer.Children.Remove(_openGlAdorner);
                 }
 
                 _layer = null;
             }
 
             AdornerLayer.SetAdornedElement(_surface, null);
-            if (_openGlSurface is not null)
+            if (_openGlAdorner is not null)
             {
-                AdornerLayer.SetAdornedElement(_openGlSurface, null);
+                AdornerLayer.SetAdornedElement(_openGlAdorner, null);
             }
         }
 
-        private void AttachSurface(Control surface)
+        private void AttachSurface(Control? surface)
         {
-            if (_layer is not { } layer || layer.Children.Contains(surface))
+            if (surface is null || _layer is not { } layer || layer.Children.Contains(surface))
             {
                 return;
             }
