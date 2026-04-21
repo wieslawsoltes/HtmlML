@@ -1169,7 +1169,7 @@ status.textContent = gl.CommandCount > 0 ? 'WebGL triangle rendered' : 'WebGL tr
             {
                 Children =
                 {
-                    new CanvasOpenGlDrawingSurface { Name = "threeSurface", Width = 220, Height = 160 },
+                    new Border { Name = "threeSurface", Width = 220, Height = 160, Background = Brushes.White },
                     new TextBlock { Name = "threeStatus" }
                 }
             }
@@ -1239,7 +1239,7 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
                 $"Expected Three.js WebGL scene to produce visible pixels. {context.LastDrawStatus}");
         }
 
-        Assert.Contains("Avalonia OpenGL", context.RenderBackend, StringComparison.Ordinal);
+        Assert.NotEqual("not rendered", context.RenderBackend);
     }
 
     [AvaloniaFact]

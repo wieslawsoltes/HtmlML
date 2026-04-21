@@ -54,6 +54,7 @@ internal static class CanvasContextBridge
                     _openGlSurface = nativeSurface;
                     _webGlContext = new CanvasWebGlRenderingContext(_surface, _openGlSurface);
                     _openGlSurface.Context = _webGlContext;
+                    _openGlSurface.RequestRender();
                     return _webGlContext;
                 }
 
@@ -74,6 +75,8 @@ internal static class CanvasContextBridge
         }
 
         public CanvasDrawingSurface Surface => _surface;
+
+        private bool UsesNativeOpenGlTarget => ReferenceEquals(_openGlSurface, _target) || _target is CanvasOpenGlDrawingSurface;
 
         private static bool IsAttached(Visual visual) => visual.GetVisualRoot() is not null;
 
@@ -124,6 +127,11 @@ internal static class CanvasContextBridge
 
         private void AttachToLayer()
         {
+            if (UsesNativeOpenGlTarget)
+            {
+                return;
+            }
+
             if (_layer is not null)
             {
                 return;
