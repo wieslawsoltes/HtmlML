@@ -99,6 +99,8 @@ internal sealed partial class CanvasWebGlRenderingContext
     public string RenderBackend => _openGlSurface?.RenderBackend ?? _openGlRenderBackend ?? _surface.LastWebGlRenderBackend;
     public bool IsOpenGlBacked => RenderBackend.StartsWith("Avalonia OpenGL", StringComparison.Ordinal);
     public bool IsSkiaGpuBacked => string.Equals(RenderBackend, "Skia GRContext", StringComparison.Ordinal);
+    public int drawingBufferWidth => Math.Max(1, (int)Math.Round(GetSurfaceWidth()));
+    public int drawingBufferHeight => Math.Max(1, (int)Math.Round(GetSurfaceHeight()));
 
     public int DEPTH_BUFFER_BIT => 0x00000100;
     public int STENCIL_BUFFER_BIT => 0x00000400;
@@ -983,9 +985,9 @@ internal sealed partial class CanvasWebGlRenderingContext
         }
         else
         {
-            texture.Format = ToInt(args[3]);
-            texture.Type = ToInt(args[4]);
-            if (TryExtractImagePixels(args[5], out var width, out var height, out var pixels))
+            texture.Format = ToInt(args[4]);
+            texture.Type = ToInt(args[5]);
+            if (TryExtractImagePixels(args[6], out var width, out var height, out var pixels))
             {
                 texture.Width = width;
                 texture.Height = height;
@@ -993,10 +995,13 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
             else
             {
-                texture.Pixels = ExtractArray(args[5]);
+                texture.Pixels = ExtractArray(args[6]);
             }
         }
 
+        texture.UnpackAlignment = _unpackAlignment;
+        texture.UnpackFlipY = _unpackFlipY;
+        texture.UnpackPremultiplyAlpha = _unpackPremultiplyAlpha;
         texture.NativeDirty = true;
     }
     public void compressedTexImage2D(params object?[] args) { }
@@ -1547,9 +1552,35 @@ internal sealed partial class CanvasWebGlRenderingContext
         _parameters[COMPRESSED_TEXTURE_FORMATS.ToString(CultureInfo.InvariantCulture)] = Array.Empty<int>();
     }
 
-    private double GetSurfaceWidth() => _surface.Bounds.Width > 0 ? _surface.Bounds.Width : 300;
+    private double GetSurfaceWidth()
+    {
+        if (_openGlSurface?.DrawingBufferWidth > 0)
+        {
+            return _openGlSurface.DrawingBufferWidth;
+        }
 
-    private double GetSurfaceHeight() => _surface.Bounds.Height > 0 ? _surface.Bounds.Height : 150;
+        if (_openGlSurface?.Bounds.Width > 0)
+        {
+            return _openGlSurface.Bounds.Width;
+        }
+
+        return _surface.Bounds.Width > 0 ? _surface.Bounds.Width : 300;
+    }
+
+    private double GetSurfaceHeight()
+    {
+        if (_openGlSurface?.DrawingBufferHeight > 0)
+        {
+            return _openGlSurface.DrawingBufferHeight;
+        }
+
+        if (_openGlSurface?.Bounds.Height > 0)
+        {
+            return _openGlSurface.Bounds.Height;
+        }
+
+        return _surface.Bounds.Height > 0 ? _surface.Bounds.Height : 150;
+    }
 
     private static string ToCssColor(double[] color)
     {

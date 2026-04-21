@@ -1635,11 +1635,25 @@ public class AvaloniaDomElement
 
     public virtual double width
     {
-        get => GetExplicitOrArrangedSize(Control.Width, Control.Bounds.Width);
+        get
+        {
+            if (Control is CanvasOpenGlDrawingSurface openGlSurface && openGlSurface.DrawingBufferWidth > 0)
+            {
+                return openGlSurface.DrawingBufferWidth;
+            }
+
+            return GetExplicitOrArrangedSize(Control.Width, Control.Bounds.Width);
+        }
         set
         {
             if (double.IsFinite(value) && value >= 0)
             {
+                if (Control is CanvasOpenGlDrawingSurface openGlSurface)
+                {
+                    openGlSurface.SetDrawingBufferWidth(value);
+                    return;
+                }
+
                 Control.Width = value;
             }
         }
@@ -1647,11 +1661,25 @@ public class AvaloniaDomElement
 
     public virtual double height
     {
-        get => GetExplicitOrArrangedSize(Control.Height, Control.Bounds.Height);
+        get
+        {
+            if (Control is CanvasOpenGlDrawingSurface openGlSurface && openGlSurface.DrawingBufferHeight > 0)
+            {
+                return openGlSurface.DrawingBufferHeight;
+            }
+
+            return GetExplicitOrArrangedSize(Control.Height, Control.Bounds.Height);
+        }
         set
         {
             if (double.IsFinite(value) && value >= 0)
             {
+                if (Control is CanvasOpenGlDrawingSurface openGlSurface)
+                {
+                    openGlSurface.SetDrawingBufferHeight(value);
+                    return;
+                }
+
                 Control.Height = value;
             }
         }

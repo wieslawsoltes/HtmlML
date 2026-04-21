@@ -21,6 +21,32 @@ public sealed class CanvasOpenGlDrawingSurface : OpenGlControlBase
 
     internal string RenderBackend { get; private set; } = "Avalonia OpenGL pending";
 
+    internal double DrawingBufferWidth { get; private set; }
+
+    internal double DrawingBufferHeight { get; private set; }
+
+    internal void SetDrawingBufferWidth(double width)
+    {
+        if (!double.IsFinite(width) || width < 0)
+        {
+            return;
+        }
+
+        DrawingBufferWidth = width;
+        RequestRender();
+    }
+
+    internal void SetDrawingBufferHeight(double height)
+    {
+        if (!double.IsFinite(height) || height < 0)
+        {
+            return;
+        }
+
+        DrawingBufferHeight = height;
+        RequestRender();
+    }
+
     internal void RequestRender()
     {
         RequestNextFrameRendering();
