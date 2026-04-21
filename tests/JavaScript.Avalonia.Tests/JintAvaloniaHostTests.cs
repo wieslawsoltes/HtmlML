@@ -2,11 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Jint.Native;
 using Xunit;
@@ -642,22 +648,29 @@ send.dispatchEvent('click');
     {
         var root = new Border
         {
+            Background = Brushes.White,
             Child = new StackPanel
             {
                 Children =
                 {
-                    new Border { Name = "chartSurface", Width = 540, Height = 300 },
+                    new Border { Name = "chartSurface", Width = 540, Height = 300, Background = Brushes.White },
                     new Button { Name = "chartRandomize" },
                     new Button { Name = "chartToggle" },
                     new TextBlock { Name = "chartStatus" }
                 }
             }
         };
+        var window = new Window
+        {
+            Width = 640,
+            Height = 420,
+            Content = new VisualLayerManager { Child = root }
+        };
 
-        root.Measure(new Size(900, 700));
-        root.Arrange(new Rect(0, 0, 900, 700));
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
 
-        var (host, _) = HostTestUtilities.CreateHost(root);
+        var host = new JintAvaloniaHost(window);
 
         host.Engine.Execute("""
 const surface = document.getElementById('chartSurface');
@@ -792,9 +805,7 @@ if (typeof Chart.register === 'function' && chartModule?.registerables) {
 
 const BasePlatform = Chart?.BasicPlatform ?? chartModule?.BasicPlatform;
 const AvaloniaChartPlatform = typeof BasePlatform === 'function'
-  ? class extends BasePlatform {
-      updateConfig() {}
-    }
+  ? class extends BasePlatform {}
   : undefined;
 
 const helpers = Chart?.helpers ?? chartModule?.helpers;
@@ -864,6 +875,16 @@ status.textContent = chart ? 'Chart.js chart created' : 'Chart.js chart missing'
         var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("chartSurface"));
         var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
         Assert.True(context.CommandCount > 0);
+
+        Dispatcher.UIThread.RunJobs();
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            Assert.True(
+                HasNonWhitePixel(frame!, 0, 0, 540, 300),
+                "Expected Chart.js to render visible canvas pixels, but the chart surface stayed blank.");
+        }
     }
 
     [AvaloniaFact]
@@ -1140,5 +1161,51 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
         public string cwd { get; init; } = string.Empty;
 
         public bool success { get; init; }
+    }
+
+    private static bool HasNonWhitePixel(Bitmap bitmap, int startX, int startY, int width, int height)
+    {
+        var maxX = Math.Min(bitmap.PixelSize.Width, startX + width);
+        var maxY = Math.Min(bitmap.PixelSize.Height, startY + height);
+        for (var y = Math.Max(0, startY); y < maxY; y += 2)
+        {
+            for (var x = Math.Max(0, startX); x < maxX; x += 2)
+            {
+                var pixel = ReadPixel(bitmap, x, y);
+                if (pixel.A > 0 && (pixel.R < 245 || pixel.G < 245 || pixel.B < 245))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static Color ReadPixel(Bitmap bitmap, int x, int y)
+    {
+        var buffer = new byte[4];
+        var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            bitmap.CopyPixels(new PixelRect(x, y, 1, 1), handle.AddrOfPinnedObject(), buffer.Length, 4);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        var format = bitmap.Format ?? PixelFormat.Bgra8888;
+        if (format == PixelFormat.Bgra8888 || format == PixelFormat.Rgb32)
+        {
+            return Color.FromArgb(buffer[3], buffer[2], buffer[1], buffer[0]);
+        }
+
+        if (format == PixelFormat.Rgba8888)
+        {
+            return Color.FromArgb(buffer[3], buffer[0], buffer[1], buffer[2]);
+        }
+
+        throw new NotSupportedException($"Unsupported screenshot pixel format: {format}.");
     }
 }

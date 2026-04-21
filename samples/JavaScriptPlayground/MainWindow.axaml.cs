@@ -1547,9 +1547,7 @@ if (typeof Chart.register === 'function' && chartModule?.registerables) {
 
 const BasePlatform = Chart?.BasicPlatform ?? chartModule?.BasicPlatform;
 const AvaloniaChartPlatform = typeof BasePlatform === 'function'
-  ? class extends BasePlatform {
-      updateConfig() {}
-    }
+  ? class extends BasePlatform {}
   : undefined;
 
 const helpers = Chart?.helpers ?? chartModule?.helpers;
@@ -1599,10 +1597,7 @@ const createConfig = type => ({
   },
   options: {
     responsive: false,
-    animation: {
-      duration: 600,
-      easing: 'easeInOutCubic'
-    },
+    animation: false,
     scales: {
       x: {
         ticks: { color: '#64748b' },
@@ -1659,7 +1654,7 @@ const randomiseData = () => {
     chart.data.datasets[0].backgroundColor = buildGradient();
   }
   chart.update();
-  report('Dataset randomised with smooth animation');
+  report('Dataset randomised');
 };
 
 randomBtn.addEventListener('click', () => {
