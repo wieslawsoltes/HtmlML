@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace JavaScriptPlayground;
 
@@ -11,12 +13,15 @@ internal sealed class PlaygroundShellBridge
 {
     private readonly object _gate = new();
     private readonly ShellSpec _shellSpec;
+    private readonly string? _scriptPath;
     private string _workingDirectory;
     private string? _previousWorkingDirectory;
+    private PlaygroundShellSession? _activeSession;
 
     public PlaygroundShellBridge(string? workingDirectory = null)
     {
         _shellSpec = ResolveShellSpec();
+        _scriptPath = ResolveScriptPath();
         _workingDirectory = ResolveStartingDirectory(workingDirectory);
     }
 
@@ -33,11 +38,13 @@ internal sealed class PlaygroundShellBridge
         }
     }
 
-    public bool supportsTty => false;
+    public bool supportsTty => !RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && !string.IsNullOrWhiteSpace(_scriptPath);
 
     public PlaygroundShellResult execute(string? command) => execute(command, 15000);
 
-    public PlaygroundShellResult execute(string? command, int timeoutMs)
+    public PlaygroundShellResult execute(string? command, int timeoutMs) => execute(command, timeoutMs, 0, 0);
+
+    public PlaygroundShellResult execute(string? command, int timeoutMs, int columns, int rows)
     {
         var trimmed = command?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(trimmed))
@@ -52,15 +59,40 @@ internal sealed class PlaygroundShellBridge
                 return cdResult;
             }
 
-            return RunCommand(trimmed, timeoutMs);
+            return RunCommand(trimmed, timeoutMs, columns, rows);
         }
     }
 
-    private PlaygroundShellResult RunCommand(string command, int timeoutMs)
+    public PlaygroundShellSession? start(string? command, int columns, int rows)
+    {
+        var trimmed = command?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmed) || !supportsTty || string.IsNullOrWhiteSpace(_scriptPath))
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            _activeSession?.kill();
+
+            var session = PlaygroundShellSession.Start(
+                _scriptPath!,
+                _shellSpec,
+                trimmed,
+                _workingDirectory,
+                SanitizeTerminalColumns(columns),
+                SanitizeTerminalRows(rows));
+
+            _activeSession = session;
+            return session;
+        }
+    }
+
+    private PlaygroundShellResult RunCommand(string command, int timeoutMs, int columns, int rows)
     {
         using var process = new Process
         {
-            StartInfo = CreateStartInfo(command, _workingDirectory)
+            StartInfo = CreateStartInfo(command, _workingDirectory, columns, rows)
         };
 
         try
@@ -202,7 +234,7 @@ internal sealed class PlaygroundShellBridge
         return value;
     }
 
-    private ProcessStartInfo CreateStartInfo(string command, string workingDirectory)
+    private ProcessStartInfo CreateStartInfo(string command, string workingDirectory, int columns, int rows)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -220,7 +252,19 @@ internal sealed class PlaygroundShellBridge
         }
 
         startInfo.ArgumentList.Add(command);
+        ConfigureTerminalEnvironment(startInfo, columns, rows);
         return startInfo;
+    }
+
+    private static void ConfigureTerminalEnvironment(ProcessStartInfo startInfo, int columns, int rows)
+    {
+        var normalizedColumns = SanitizeTerminalColumns(columns);
+        var normalizedRows = SanitizeTerminalRows(rows);
+
+        startInfo.Environment["TERM"] = "xterm-256color";
+        startInfo.Environment["COLORTERM"] = "truecolor";
+        startInfo.Environment["COLUMNS"] = normalizedColumns.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        startInfo.Environment["LINES"] = normalizedRows.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static string AwaitOutput(System.Threading.Tasks.Task<string> task)
@@ -313,6 +357,26 @@ internal sealed class PlaygroundShellBridge
         return new ShellSpec(shell, new[] { "-lc" }, Path.GetFileName(shell));
     }
 
+    private static string? ResolveScriptPath()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return null;
+        }
+
+        var script = FindCommandOnPath("script");
+        if (!string.IsNullOrWhiteSpace(script))
+        {
+            return script;
+        }
+
+        return File.Exists("/usr/bin/script") ? "/usr/bin/script" : null;
+    }
+
+    private static int SanitizeTerminalColumns(int columns) => Math.Clamp(columns, 40, 240);
+
+    private static int SanitizeTerminalRows(int rows) => Math.Clamp(rows, 12, 120);
+
     private static string? FindCommandOnPath(string command)
     {
         var path = Environment.GetEnvironmentVariable("PATH");
@@ -348,7 +412,248 @@ internal sealed class PlaygroundShellBridge
         yield return command + ".bat";
     }
 
-    private sealed record ShellSpec(string FileName, string[] ArgumentPrefix, string DisplayName);
+    internal sealed record ShellSpec(string FileName, string[] ArgumentPrefix, string DisplayName);
+}
+
+internal sealed class PlaygroundShellSession
+{
+    private readonly object _gate = new();
+    private readonly Process _process;
+    private readonly StringBuilder _pendingOutput = new();
+    private readonly Task _stdoutReader;
+    private readonly Task _stderrReader;
+    private bool _killed;
+
+    private PlaygroundShellSession(Process process)
+    {
+        _process = process;
+        _stdoutReader = Task.Run(() => ReadStream(_process.StandardOutput.BaseStream));
+        _stderrReader = Task.Run(() => ReadStream(_process.StandardError.BaseStream));
+    }
+
+    public bool isRunning
+    {
+        get
+        {
+            try
+            {
+                return !_process.HasExited;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    public int exitCode
+    {
+        get
+        {
+            try
+            {
+                return _process.HasExited ? _process.ExitCode : 0;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+    }
+
+    public bool wasKilled => _killed;
+
+    internal static PlaygroundShellSession Start(
+        string scriptPath,
+        PlaygroundShellBridge.ShellSpec shellSpec,
+        string command,
+        string workingDirectory,
+        int columns,
+        int rows)
+    {
+        var process = new Process
+        {
+            StartInfo = CreateStartInfo(scriptPath, shellSpec, command, workingDirectory, columns, rows)
+        };
+
+        process.Start();
+        return new PlaygroundShellSession(process);
+    }
+
+    public string read()
+    {
+        lock (_gate)
+        {
+            if (_pendingOutput.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            var text = _pendingOutput.ToString();
+            _pendingOutput.Clear();
+            return StripScriptEofMarker(text);
+        }
+    }
+
+    public bool write(string? data)
+    {
+        if (string.IsNullOrEmpty(data))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (_process.HasExited)
+            {
+                return false;
+            }
+
+            _process.StandardInput.Write(data);
+            _process.StandardInput.Flush();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool resize(int columns, int rows)
+    {
+        // The portable script-backed path cannot issue TIOCSWINSZ after startup.
+        // The initial rows/columns are applied before exec; report success so the
+        // JavaScript side can keep one code path for future richer PTY backends.
+        return columns > 0 && rows > 0;
+    }
+
+    public void kill()
+    {
+        _killed = true;
+        try
+        {
+            if (!_process.HasExited)
+            {
+                _process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    public void close() => kill();
+
+    private async Task ReadStream(Stream stream)
+    {
+        var buffer = new byte[4096];
+        var decoder = Encoding.UTF8.GetDecoder();
+        var chars = new char[Encoding.UTF8.GetMaxCharCount(buffer.Length)];
+
+        try
+        {
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                var charCount = decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
+                if (charCount <= 0)
+                {
+                    continue;
+                }
+
+                lock (_gate)
+                {
+                    _pendingOutput.Append(chars, 0, charCount);
+                }
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static ProcessStartInfo CreateStartInfo(
+        string scriptPath,
+        PlaygroundShellBridge.ShellSpec shellSpec,
+        string command,
+        string workingDirectory,
+        int columns,
+        int rows)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = scriptPath,
+            WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        var wrappedCommand = CreateWrappedCommand(command, columns, rows);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            startInfo.ArgumentList.Add("-q");
+            startInfo.ArgumentList.Add("/dev/null");
+            startInfo.ArgumentList.Add(shellSpec.FileName);
+            foreach (var argument in shellSpec.ArgumentPrefix)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+            startInfo.ArgumentList.Add(wrappedCommand);
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("-q");
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(BuildShellCommand(shellSpec, wrappedCommand));
+            startInfo.ArgumentList.Add("/dev/null");
+        }
+
+        startInfo.Environment["TERM"] = "xterm-256color";
+        startInfo.Environment["COLORTERM"] = "truecolor";
+        startInfo.Environment["COLUMNS"] = columns.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        startInfo.Environment["LINES"] = rows.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return startInfo;
+    }
+
+    private static string CreateWrappedCommand(string command, int columns, int rows)
+    {
+        return $"stty rows {rows} cols {columns} 2>/dev/null; export TERM=xterm-256color COLORTERM=truecolor COLUMNS={columns} LINES={rows}; exec {command}";
+    }
+
+    private static string BuildShellCommand(PlaygroundShellBridge.ShellSpec shellSpec, string command)
+    {
+        var builder = new StringBuilder();
+        builder.Append(ShellQuote(shellSpec.FileName));
+        foreach (var argument in shellSpec.ArgumentPrefix)
+        {
+            builder.Append(' ');
+            builder.Append(ShellQuote(argument));
+        }
+
+        builder.Append(' ');
+        builder.Append(ShellQuote(command));
+        return builder.ToString();
+    }
+
+    private static string ShellQuote(string value)
+    {
+        return "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+    }
+
+    private static string StripScriptEofMarker(string value)
+    {
+        return value.Replace("\u0004\b\b", string.Empty, StringComparison.Ordinal);
+    }
 }
 
 internal sealed class PlaygroundShellResult
