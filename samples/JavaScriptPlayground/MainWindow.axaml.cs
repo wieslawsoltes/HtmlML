@@ -1827,7 +1827,7 @@ frameHandle = window.requestAnimationFrame(tick);
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#050505" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="Three.js lava shader" FontWeight="SemiBold" Foreground="#f8fafc" />
-    <TextBlock Text="Port of three.js webgl_shader_lava: custom ShaderMaterial, animated torus UVs, repeat textures, and lava/fog uniforms." TextWrapping="Wrap" Foreground="#fca5a5" />
+    <TextBlock Text="Port of three.js webgl_shader_lava: custom ShaderMaterial, official lava textures, animated torus UVs, and lava/fog uniforms." TextWrapping="Wrap" Foreground="#fca5a5" />
     <Border Name="lavaSurface" Width="720" Height="420" Background="#000000" BorderBrush="#7f1d1d" BorderThickness="1" CornerRadius="6" />
     <StackPanel Orientation="Horizontal" Spacing="8">
       <Button Name="lavaToggle" Content="Pause animation" />
@@ -1926,40 +1926,21 @@ void main()
 
 }`;
 
-const createDataTexture = (width, height, sampler) => {
-  const data = new Uint8Array(width * height * 4);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
-      const color = sampler(x / width, y / height);
-      data[i + 0] = color[0];
-      data[i + 1] = color[1];
-      data[i + 2] = color[2];
-      data[i + 3] = color[3];
-    }
-  }
-
-  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.needsUpdate = true;
-  return texture;
-};
-
-const cloudTexture = createDataTexture(64, 64, (u, v) => {
-  const n = Math.floor((Math.sin(u * 41.0) * Math.sin(v * 29.0) * 0.5 + 0.5) * 255);
-  return [n, 255 - n, (n * 37) % 255, n];
+const textureLoader = new THREE.TextureLoader();
+const cloudTexture = textureLoader.load('https://threejs.org/examples/textures/lava/cloud.png', () => {
+  renderer.clear();
+  renderer.render(scene, camera);
+  report();
+});
+const lavaTexture = textureLoader.load('https://threejs.org/examples/textures/lava/lavatile.jpg', () => {
+  renderer.clear();
+  renderer.render(scene, camera);
+  report();
 });
 
-const lavaTexture = createDataTexture(64, 64, (u, v) => {
-  const vein = Math.abs(Math.sin(u * 18.0 + Math.sin(v * 24.0)));
-  const heat = Math.max(0, Math.min(1, 0.35 + vein * 0.85));
-  return [
-    Math.floor(120 + heat * 135),
-    Math.floor(20 + heat * heat * 170),
-    Math.floor(Math.max(0, heat - 0.8) * 120),
-    255
-  ];
-});
+lavaTexture.colorSpace = THREE.SRGBColorSpace;
+cloudTexture.wrapS = cloudTexture.wrapT = THREE.RepeatWrapping;
+lavaTexture.wrapS = lavaTexture.wrapT = THREE.RepeatWrapping;
 
 const uniforms = {
   fogDensity: { value: 0.45 },
