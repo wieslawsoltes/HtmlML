@@ -1005,6 +1005,203 @@ status.textContent = canvas ? 'Fabric.js scene ready' : 'Fabric.js canvas missin
     }
 
     [AvaloniaFact]
+    public void WebGl_CanRenderIndexedTriangle()
+    {
+        var root = new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border { Name = "webglSurface", Width = 180, Height = 140, Background = Brushes.White },
+                    new TextBlock { Name = "webglStatus" }
+                }
+            }
+        };
+        var window = new Window
+        {
+            Width = 240,
+            Height = 220,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.Engine.Execute("""
+const surface = document.getElementById('webglSurface');
+const status = document.getElementById('webglStatus');
+const gl = surface.getContext('webgl');
+if (!gl) {
+  throw new Error('WebGL context unavailable');
+}
+
+gl.viewport(0, 0, surface.offsetWidth, surface.offsetHeight);
+gl.clearColor(1, 1, 1, 1);
+gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+gl.shaderSource(vertexShader, `
+attribute vec3 position;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+void main() {
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`);
+gl.compileShader(vertexShader);
+
+const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+gl.shaderSource(fragmentShader, `
+precision mediump float;
+uniform vec3 diffuse;
+uniform float opacity;
+void main() {
+  gl_FragColor = vec4(diffuse, opacity);
+}`);
+gl.compileShader(fragmentShader);
+
+const program = gl.createProgram();
+gl.attachShader(program, vertexShader);
+gl.attachShader(program, fragmentShader);
+gl.linkProgram(program);
+gl.useProgram(program);
+
+const position = gl.getAttribLocation(program, 'position');
+const positionBuffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+  -0.8, -0.7, 0,
+   0.8, -0.7, 0,
+   0.0,  0.8, 0
+]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 3, gl.FLOAT, false, 0, 0);
+
+const indexBuffer = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2]), gl.STATIC_DRAW);
+
+gl.uniformMatrix4fv(gl.getUniformLocation(program, 'modelViewMatrix'), false, new Float32Array([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1
+]));
+gl.uniformMatrix4fv(gl.getUniformLocation(program, 'projectionMatrix'), false, new Float32Array([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1
+]));
+gl.uniform3f(gl.getUniformLocation(program, 'diffuse'), 0.1, 0.45, 0.95);
+gl.uniform1f(gl.getUniformLocation(program, 'opacity'), 1);
+gl.drawElements(gl.TRIANGLES, 3, gl.UNSIGNED_SHORT, 0);
+
+status.textContent = gl.CommandCount > 0 ? 'WebGL triangle rendered' : 'WebGL triangle missing';
+""");
+
+        var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("webglStatus")).Control);
+        Assert.Equal("WebGL triangle rendered", status.Text);
+
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("webglSurface"));
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(surfaceElement.getContext("webgl"));
+        Assert.True(context.CommandCount > 0);
+
+        Dispatcher.UIThread.RunJobs();
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            Assert.True(
+                HasNonWhitePixel(frame!, 0, 0, 180, 140),
+                "Expected WebGL triangle rendering to produce visible pixels.");
+        }
+    }
+
+    [AvaloniaFact]
+    public void ThreeJs_CanRenderBasicWebGlScene()
+    {
+        var root = new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border { Name = "threeSurface", Width = 220, Height = 160, Background = Brushes.White },
+                    new TextBlock { Name = "threeStatus" }
+                }
+            }
+        };
+        var window = new Window
+        {
+            Width = 300,
+            Height = 240,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.Engine.Execute("""
+const surface = document.getElementById('threeSurface');
+const status = document.getElementById('threeStatus');
+const gl = surface.getContext('webgl');
+const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+const THREE = threeModule?.REVISION ? threeModule : window.THREE;
+if (!THREE) {
+  throw new Error('Three.js did not load');
+}
+
+const renderer = new THREE.WebGLRenderer({
+  canvas: surface,
+  context: gl,
+  antialias: false,
+  alpha: true
+});
+renderer.setSize(surface.offsetWidth, surface.offsetHeight, false);
+renderer.setPixelRatio(1);
+renderer.setClearColor(0xffffff, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, surface.offsetWidth / surface.offsetHeight, 0.1, 10);
+camera.position.z = 2.4;
+
+const geometry = new THREE.BoxGeometry(1, 1, 1);
+const material = new THREE.MeshBasicMaterial({ color: 0x2563eb });
+const cube = new THREE.Mesh(geometry, material);
+cube.rotation.x = 0.35;
+cube.rotation.y = 0.55;
+scene.add(cube);
+
+renderer.render(scene, camera);
+status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered` : 'Three.js render missing';
+""");
+
+        var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("threeStatus")).Control);
+        Assert.Contains("Three.js", status.Text);
+
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("threeSurface"));
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(surfaceElement.getContext("webgl"));
+        Assert.True(context.CommandCount > 0);
+        Assert.True(context.DrawCallCount > 0, context.LastDrawStatus);
+        Assert.True(context.TriangleCount > 0, context.LastDrawStatus);
+
+        Dispatcher.UIThread.RunJobs();
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            Assert.True(
+                HasNonWhitePixel(frame!, 0, 0, 220, 160),
+                $"Expected Three.js WebGL scene to produce visible pixels. {context.LastDrawStatus}");
+        }
+    }
+
+    [AvaloniaFact]
     public void PaperJs_CanInitializeCanvasPreset()
     {
         var root = new Border

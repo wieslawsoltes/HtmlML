@@ -1560,6 +1560,10 @@ public class AvaloniaDomElement
         {
             canvasContext.canvas = this;
         }
+        else if (context is CanvasWebGlRenderingContext webGlContext)
+        {
+            webGlContext.canvas = this;
+        }
 
         return context;
     }
