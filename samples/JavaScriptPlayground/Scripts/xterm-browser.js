@@ -145,6 +145,16 @@ let activeShellCommand = '';
 let activeShellPollTimer = null;
 let lastSessionCols = terminal.cols;
 let lastSessionRows = terminal.rows;
+let activeMouseButton = null;
+let lastMouseMoveKey = '';
+let mouseModeParserBuffer = '';
+const terminalMouseModes = {
+  x10: false,
+  normal: false,
+  button: false,
+  any: false,
+  sgr: false
+};
 
 const scheduleRender = () => {
   if (renderPending) {
@@ -334,6 +344,58 @@ const getExecutableName = (command) => {
 
 const shouldStartTerminalSession = (command) => canStartHostTerminal && terminalCommands.indexOf(getExecutableName(command)) >= 0;
 
+const resetTerminalMouseModes = () => {
+  terminalMouseModes.x10 = false;
+  terminalMouseModes.normal = false;
+  terminalMouseModes.button = false;
+  terminalMouseModes.any = false;
+  terminalMouseModes.sgr = false;
+  activeMouseButton = null;
+  lastMouseMoveKey = '';
+  mouseModeParserBuffer = '';
+};
+
+const updateTerminalMouseModes = (data) => {
+  if (!data) {
+    return;
+  }
+
+  const text = `${mouseModeParserBuffer}${String(data)}`;
+  const pattern = /\x1b\[\?([0-9;]+)([hl])/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const enabled = match[2] === 'h';
+    const codes = match[1].split(';');
+    for (const code of codes) {
+      switch (Number(code)) {
+        case 9:
+          terminalMouseModes.x10 = enabled;
+          break;
+        case 1000:
+          terminalMouseModes.normal = enabled;
+          break;
+        case 1002:
+          terminalMouseModes.button = enabled;
+          break;
+        case 1003:
+          terminalMouseModes.any = enabled;
+          break;
+        case 1006:
+          terminalMouseModes.sgr = enabled;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  const tail = text.slice(-64);
+  mouseModeParserBuffer = tail.indexOf('\x1b[?') >= 0 ? tail : '';
+};
+
+const hasTerminalMouseTracking = () =>
+  terminalMouseModes.x10 || terminalMouseModes.normal || terminalMouseModes.button || terminalMouseModes.any;
+
 const stopActiveShellSession = () => {
   if (activeShellPollTimer != null) {
     stopInterval(activeShellPollTimer);
@@ -345,6 +407,8 @@ const stopActiveShellSession = () => {
     activeShellSession = null;
     activeShellCommand = '';
   }
+
+  resetTerminalMouseModes();
 };
 
 const flushActiveShellOutput = () => {
@@ -357,6 +421,7 @@ const flushActiveShellOutput = () => {
     return false;
   }
 
+  updateTerminalMouseModes(output);
   terminal.write(output, () => scheduleRender());
   scheduleRender();
   return true;
@@ -416,7 +481,7 @@ const startActiveShellSession = (command) => {
   lastSessionRows = terminal.rows;
   activeShellPollTimer = startInterval(pollActiveShellSession, 50);
   pollActiveShellSession();
-  updateStatus(`Started ${activeShellCommand} in ${terminal.cols}x${terminal.rows} terminal context. Focus the canvas to send keys; use Ctrl+C or Clear to stop.`);
+  updateStatus(`Started ${activeShellCommand} in ${terminal.cols}x${terminal.rows} terminal context. Focus the canvas for keyboard and mouse; use Ctrl+C or Clear to stop.`);
   return true;
 };
 
@@ -429,16 +494,74 @@ const sendToActiveShellSession = (data) => {
   return true;
 };
 
+const terminalModifierCode = (event) => {
+  let modifier = 1;
+  if (event?.shiftKey) {
+    modifier += 1;
+  }
+  if (event?.altKey || event?.metaKey) {
+    modifier += 2;
+  }
+  if (event?.ctrlKey) {
+    modifier += 4;
+  }
+  return modifier;
+};
+
+const terminalModifierPrefix = (event, sequence) => {
+  const modifier = terminalModifierCode(event);
+  return modifier > 1 ? sequence(modifier) : sequence(0);
+};
+
+const ctrlSequenceForKey = (key) => {
+  if (!key || key.length !== 1) {
+    return '';
+  }
+
+  const upper = key.toUpperCase();
+  if (upper >= 'A' && upper <= 'Z') {
+    return String.fromCharCode(upper.charCodeAt(0) - 64);
+  }
+
+  switch (key) {
+    case ' ':
+    case '2':
+      return '\x00';
+    case '[':
+    case '3':
+      return '\x1b';
+    case '\\':
+    case '4':
+      return '\x1c';
+    case ']':
+    case '5':
+      return '\x1d';
+    case '^':
+    case '6':
+      return '\x1e';
+    case '_':
+    case '7':
+      return '\x1f';
+    case '?':
+    case '8':
+      return '\x7f';
+    default:
+      return '';
+  }
+};
+
 const keyToTerminalSequence = (event) => {
   const key = event?.key;
-  if (event?.ctrlKey && (key === 'c' || key === 'C')) {
-    return '\x03';
+
+  if (event?.ctrlKey) {
+    const control = ctrlSequenceForKey(key);
+    if (control) {
+      return event?.altKey || event?.metaKey ? `\x1b${control}` : control;
+    }
   }
-  if (event?.ctrlKey && (key === 'd' || key === 'D')) {
-    return '\x04';
-  }
-  if (event?.ctrlKey && (key === 'l' || key === 'L')) {
-    return '\x0c';
+
+  if ((event?.altKey || event?.metaKey) && typeof key === 'string' && key.length === 1) {
+    return `\x1b${key}`;
   }
 
   switch (key) {
@@ -448,30 +571,189 @@ const keyToTerminalSequence = (event) => {
     case 'Back':
       return '\x7f';
     case 'Tab':
-      return '\t';
+      return event?.shiftKey ? '\x1b[Z' : '\t';
     case 'Escape':
       return '\x1b';
     case 'ArrowUp':
-      return '\x1b[A';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}A` : '\x1b[A');
     case 'ArrowDown':
-      return '\x1b[B';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}B` : '\x1b[B');
     case 'ArrowRight':
-      return '\x1b[C';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}C` : '\x1b[C');
     case 'ArrowLeft':
-      return '\x1b[D';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}D` : '\x1b[D');
     case 'Home':
-      return '\x1b[H';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}H` : '\x1b[H');
     case 'End':
-      return '\x1b[F';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}F` : '\x1b[F');
+    case 'Insert':
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[2;${modifier}~` : '\x1b[2~');
     case 'PageUp':
-      return '\x1b[5~';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[5;${modifier}~` : '\x1b[5~');
     case 'PageDown':
-      return '\x1b[6~';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[6;${modifier}~` : '\x1b[6~');
     case 'Delete':
-      return '\x1b[3~';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[3;${modifier}~` : '\x1b[3~');
     default:
-      return '';
+      break;
   }
+
+  const functionKeyCodes = {
+    F1: ['P', '1'],
+    F2: ['Q', '1'],
+    F3: ['R', '1'],
+    F4: ['S', '1'],
+    F5: ['15', 'tilde'],
+    F6: ['17', 'tilde'],
+    F7: ['18', 'tilde'],
+    F8: ['19', 'tilde'],
+    F9: ['20', 'tilde'],
+    F10: ['21', 'tilde'],
+    F11: ['23', 'tilde'],
+    F12: ['24', 'tilde']
+  };
+  const functionKey = functionKeyCodes[key];
+  if (!functionKey) {
+    return '';
+  }
+
+  const modifier = terminalModifierCode(event);
+  if (functionKey[1] === '1') {
+    return modifier > 1 ? `\x1b[1;${modifier}${functionKey[0]}` : `\x1bO${functionKey[0]}`;
+  }
+
+  return modifier > 1 ? `\x1b[${functionKey[0]};${modifier}~` : `\x1b[${functionKey[0]}~`;
+};
+
+const xtermMouseModifierBits = (event) => {
+  let modifiers = 0;
+  if (event?.shiftKey) {
+    modifiers += 4;
+  }
+  if (event?.altKey || event?.metaKey) {
+    modifiers += 8;
+  }
+  if (event?.ctrlKey) {
+    modifiers += 16;
+  }
+  return modifiers;
+};
+
+const domButtonToXtermButton = (button) => {
+  switch (Number(button)) {
+    case 0:
+      return 0;
+    case 1:
+      return 1;
+    case 2:
+      return 2;
+    default:
+      return -1;
+  }
+};
+
+const buttonsToXtermButton = (buttons) => {
+  const value = Number(buttons) || 0;
+  if ((value & 1) !== 0) {
+    return 0;
+  }
+  if ((value & 4) !== 0) {
+    return 1;
+  }
+  if ((value & 2) !== 0) {
+    return 2;
+  }
+  return -1;
+};
+
+const getTerminalCellFromEvent = (event) => {
+  ensureTerminalSize();
+  const pointerX = Number(event?.x ?? event?.clientX);
+  const pointerY = Number(event?.y ?? event?.clientY);
+  if (!Number.isFinite(pointerX) || !Number.isFinite(pointerY)) {
+    return null;
+  }
+
+  const col = Math.floor((pointerX - horizontalPadding) / cellWidth) + 1;
+  const row = Math.floor((pointerY - verticalPadding) / cellHeight) + 1;
+  if (col < 1 || row < 1 || col > terminal.cols || row > terminal.rows) {
+    return null;
+  }
+
+  return { col, row };
+};
+
+const encodeTerminalMouseSequence = (buttonCode, col, row, final, event) => {
+  const code = buttonCode + xtermMouseModifierBits(event);
+  if (terminalMouseModes.sgr) {
+    return `\x1b[<${code};${col};${row}${final}`;
+  }
+
+  if (col > 223 || row > 223) {
+    return '';
+  }
+
+  const legacyCode = final === 'm' ? 3 + xtermMouseModifierBits(event) : code;
+  return `\x1b[M${String.fromCharCode(legacyCode + 32)}${String.fromCharCode(col + 32)}${String.fromCharCode(row + 32)}`;
+};
+
+const sendTerminalMouseEvent = (event, kind) => {
+  if (!activeShellSession || !hasTerminalMouseTracking()) {
+    return false;
+  }
+
+  const cell = getTerminalCellFromEvent(event);
+  if (!cell) {
+    return false;
+  }
+
+  let buttonCode = 0;
+  let final = 'M';
+  if (kind === 'down') {
+    buttonCode = domButtonToXtermButton(event?.button);
+    if (buttonCode < 0) {
+      return false;
+    }
+    activeMouseButton = buttonCode;
+  } else if (kind === 'up') {
+    buttonCode = domButtonToXtermButton(event?.button);
+    if (buttonCode < 0) {
+      buttonCode = activeMouseButton ?? 0;
+    }
+    final = 'm';
+    activeMouseButton = null;
+  } else if (kind === 'move') {
+    if (!terminalMouseModes.any && !(terminalMouseModes.button && Number(event?.buttons))) {
+      return false;
+    }
+    const moveButton = buttonsToXtermButton(event?.buttons);
+    buttonCode = 32 + (moveButton >= 0 ? moveButton : 3);
+    const moveKey = `${cell.col}:${cell.row}:${buttonCode}:${Number(event?.buttons) || 0}`;
+    if (moveKey === lastMouseMoveKey) {
+      return false;
+    }
+    lastMouseMoveKey = moveKey;
+  } else if (kind === 'wheel') {
+    const deltaX = Number(event?.deltaX) || 0;
+    const deltaY = Number(event?.deltaY) || 0;
+    if (deltaX === 0 && deltaY === 0) {
+      return false;
+    }
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      buttonCode = deltaX < 0 ? 66 : 67;
+    } else {
+      buttonCode = deltaY < 0 ? 64 : 65;
+    }
+  } else {
+    return false;
+  }
+
+  const sequence = encodeTerminalMouseSequence(buttonCode, cell.col, cell.row, final, event);
+  if (!sequence) {
+    return false;
+  }
+
+  return sendToActiveShellSession(sequence);
 };
 
 const stopDemoStream = () => {
@@ -707,11 +989,29 @@ const bindInput = () => {
     renderPrompt();
   });
 
-  surface && surface.addEventListener && surface.addEventListener('pointerdown', () => {
+  surface && surface.addEventListener && surface.addEventListener('pointerdown', (event) => {
     surface.focus && surface.focus();
+    if (sendTerminalMouseEvent(event, 'down')) {
+      event.preventDefault && event.preventDefault();
+    }
   });
   surface && surface.addEventListener && surface.addEventListener('click', () => {
     surface.focus && surface.focus();
+  });
+  surface && surface.addEventListener && surface.addEventListener('pointermove', (event) => {
+    if (sendTerminalMouseEvent(event, 'move')) {
+      event.preventDefault && event.preventDefault();
+    }
+  });
+  surface && surface.addEventListener && surface.addEventListener('pointerup', (event) => {
+    if (sendTerminalMouseEvent(event, 'up')) {
+      event.preventDefault && event.preventDefault();
+    }
+  });
+  surface && surface.addEventListener && surface.addEventListener('wheel', (event) => {
+    if (sendTerminalMouseEvent(event, 'wheel')) {
+      event.preventDefault && event.preventDefault();
+    }
   });
   surface && surface.addEventListener && surface.addEventListener('textinput', (event) => {
     const data = typeof event?.data === 'string' ? event.data : '';

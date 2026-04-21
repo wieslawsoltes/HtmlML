@@ -1366,6 +1366,7 @@ public class AvaloniaDomElement
         "mousedown",
         "mousemove",
         "mouseup",
+        "wheel",
         "mouseenter",
         "mouseleave",
         "pointerdown",
@@ -1393,6 +1394,7 @@ public class AvaloniaDomElement
     private double _scrollTop;
     private bool _pointerHandlersAttached;
     private bool _pointerOverHandlersAttached;
+    private bool _wheelHandlersAttached;
     private bool _keyboardHandlersAttached;
     private bool _textInputHandlersAttached;
     private bool _clickHandlersAttached;
@@ -1994,6 +1996,11 @@ public class AvaloniaDomElement
             AttachPointerOverHandlers();
         }
 
+        if (!_wheelHandlersAttached)
+        {
+            AttachWheelHandlers();
+        }
+
         if (!_keyboardHandlersAttached)
         {
             AttachKeyboardHandlers();
@@ -2170,6 +2177,12 @@ public class AvaloniaDomElement
         Control.PointerExited += OnPointerExited;
     }
 
+    private void AttachWheelHandlers()
+    {
+        _wheelHandlersAttached = true;
+        Control.AddHandler(InputElement.PointerWheelChangedEvent, OnPointerWheelChanged, RoutingStrategies.Direct | RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
     private void AttachKeyboardHandlers()
     {
         _keyboardHandlersAttached = true;
@@ -2247,6 +2260,16 @@ public class AvaloniaDomElement
     {
         Host.Document.DispatchPointerEvent(this, "pointerleave", e, bubbles: false, cancelable: false);
         Host.Document.DispatchPointerEvent(this, "mouseleave", e, bubbles: false, cancelable: false);
+    }
+
+    private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, Control))
+        {
+            return;
+        }
+
+        Host.Document.DispatchPointerEvent(this, "wheel", e, bubbles: true, cancelable: true);
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)

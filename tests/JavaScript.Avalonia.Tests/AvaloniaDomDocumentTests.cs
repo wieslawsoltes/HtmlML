@@ -451,6 +451,49 @@ public class AvaloniaDomDocumentTests
     }
 
     [AvaloniaFact]
+    public void WheelEvents_PassThroughDeltaAndCanPreventDefault()
+    {
+        var panel = new StackPanel();
+        var border = new Border();
+        panel.Children.Add(border);
+        var (host, _) = HostTestUtilities.CreateHost(panel);
+        var element = HostTestUtilities.GetElement(host.Document.querySelector("Border"));
+
+        var handled = false;
+        var callback = JsValue.FromObject(host.Engine, new Action<object>(arg =>
+        {
+            var info = Assert.IsType<DomPointerEvent>(arg);
+            Assert.Equal("wheel", info.type);
+            Assert.Equal(5, info.x);
+            Assert.Equal(6, info.y);
+            Assert.Equal(-1, info.deltaY);
+            Assert.True(info.ctrlKey);
+            info.preventDefault();
+            handled = true;
+        }));
+
+        element.addEventListener("wheel", callback);
+
+        using var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        var args = new PointerWheelEventArgs(
+            border,
+            pointer,
+            border,
+            new Point(5, 6),
+            0,
+            new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.Other),
+            KeyModifiers.Control,
+            new Vector(0, 1));
+
+        border.RaiseEvent(args);
+
+        Assert.True(handled);
+        Assert.True(args.Handled);
+
+        element.removeEventListener("wheel", callback);
+    }
+
+    [AvaloniaFact]
     public void KeyEvents_SetHandledFlagWhenRequested()
     {
         var panel = new StackPanel();
