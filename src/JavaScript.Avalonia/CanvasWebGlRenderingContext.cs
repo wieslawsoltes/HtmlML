@@ -903,9 +903,18 @@ internal sealed partial class CanvasWebGlRenderingContext
             texture.InternalFormat = ToInt(args[2]);
             texture.Format = ToInt(args[3]);
             texture.Type = ToInt(args[4]);
-            texture.Pixels = ExtractArray(args[5]);
-            texture.Width = Math.Max(1, texture.Width);
-            texture.Height = Math.Max(1, texture.Height);
+            if (TryExtractImagePixels(args[5], out var width, out var height, out var pixels))
+            {
+                texture.Width = width;
+                texture.Height = height;
+                texture.Pixels = pixels;
+            }
+            else
+            {
+                texture.Pixels = ExtractArray(args[5]);
+                texture.Width = Math.Max(1, texture.Width);
+                texture.Height = Math.Max(1, texture.Height);
+            }
         }
 
         texture.UnpackAlignment = _unpackAlignment;
@@ -937,7 +946,16 @@ internal sealed partial class CanvasWebGlRenderingContext
         {
             texture.Format = ToInt(args[3]);
             texture.Type = ToInt(args[4]);
-            texture.Pixels = ExtractArray(args[5]);
+            if (TryExtractImagePixels(args[5], out var width, out var height, out var pixels))
+            {
+                texture.Width = width;
+                texture.Height = height;
+                texture.Pixels = pixels;
+            }
+            else
+            {
+                texture.Pixels = ExtractArray(args[5]);
+            }
         }
 
         texture.NativeDirty = true;
@@ -1512,6 +1530,41 @@ internal sealed partial class CanvasWebGlRenderingContext
         }
 
         return null;
+    }
+
+    private static bool TryExtractImagePixels(object? source, out int width, out int height, out Array? pixels)
+    {
+        width = 0;
+        height = 0;
+        pixels = null;
+
+        if (source is JsValue jsValue)
+        {
+            return TryExtractImagePixels(jsValue.ToObject(), out width, out height, out pixels);
+        }
+
+        if (source is AvaloniaDomImageElement image &&
+            image.TryGetRgbaPixels(out width, out height, out var imagePixels))
+        {
+            pixels = imagePixels;
+            return true;
+        }
+
+        if (source is AvaloniaDomElement element &&
+            AvaloniaDomImageElement.TryGetRgbaPixels(element, out width, out height, out imagePixels))
+        {
+            pixels = imagePixels;
+            return true;
+        }
+
+        if (source is global::Avalonia.Controls.Image control &&
+            AvaloniaDomImageElement.TryGetRgbaPixels(control, out width, out height, out imagePixels))
+        {
+            pixels = imagePixels;
+            return true;
+        }
+
+        return false;
     }
 
     private static double[] ExtractDoubles(object? data)
