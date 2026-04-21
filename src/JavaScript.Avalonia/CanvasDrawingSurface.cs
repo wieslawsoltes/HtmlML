@@ -92,10 +92,15 @@ internal sealed class CanvasDrawingSurface : Control
         // also clip its own Render output so oversized draws cannot cover siblings.
         using (context.PushClip(bounds))
         {
-            foreach (var command in _commands)
-            {
-                command.Render(context);
-            }
+            RenderCommands(context);
+        }
+    }
+
+    internal void RenderCommands(DrawingContext context)
+    {
+        foreach (var command in _commands)
+        {
+            command.Render(context);
         }
     }
 
@@ -386,6 +391,50 @@ internal sealed class DrawImageCommand : CanvasDrawCommand
     public override Rect? GetBounds() => _destinationRect;
 }
 
+internal sealed class DrawCanvasSurfaceCommand : CanvasDrawCommand
+{
+    private readonly IReadOnlyList<CanvasDrawCommand> _commands;
+    private readonly Rect _sourceRect;
+    private readonly Rect _destinationRect;
+
+    public DrawCanvasSurfaceCommand(CanvasDrawingSurface surface, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot state)
+        : base(state)
+    {
+        _commands = new List<CanvasDrawCommand>((surface ?? throw new ArgumentNullException(nameof(surface))).Commands);
+        _sourceRect = sourceRect;
+        _destinationRect = destinationRect;
+    }
+
+    protected override void RenderCore(DrawingContext context)
+    {
+        if (_sourceRect.Width <= 0 || _sourceRect.Height <= 0 || _destinationRect.Width <= 0 || _destinationRect.Height <= 0)
+        {
+            return;
+        }
+
+        var scaleX = _destinationRect.Width / _sourceRect.Width;
+        var scaleY = _destinationRect.Height / _sourceRect.Height;
+        var transform = new Matrix(
+            scaleX,
+            0,
+            0,
+            scaleY,
+            _destinationRect.X - (_sourceRect.X * scaleX),
+            _destinationRect.Y - (_sourceRect.Y * scaleY));
+
+        using (context.PushClip(_destinationRect))
+        using (context.PushTransform(transform))
+        {
+            foreach (var command in _commands)
+            {
+                command.Render(context);
+            }
+        }
+    }
+
+    public override Rect? GetBounds() => _destinationRect;
+}
+
 internal sealed class CanvasTextMetrics
 {
     public CanvasTextMetrics(double width)
@@ -477,6 +526,18 @@ internal sealed class CanvasRenderingContext2D
         get => CanvasTextParser.ToString(_state.TextBaseline);
         set => _state.TextBaseline = CanvasTextParser.ParseBaseline(value, _state.TextBaseline);
     }
+
+    public bool imageSmoothingEnabled { get; set; } = true;
+
+    public string globalCompositeOperation { get; set; } = "source-over";
+
+    public string shadowColor { get; set; } = string.Empty;
+
+    public double shadowBlur { get; set; }
+
+    public double shadowOffsetX { get; set; }
+
+    public double shadowOffsetY { get; set; }
 
     public void save()
     {
@@ -694,6 +755,12 @@ internal sealed class CanvasRenderingContext2D
 
     public void drawImage(object image, double dx, double dy)
     {
+        if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
+        {
+            DrawCanvasSurface(surface, canvasSourceRect, new Rect(dx, dy, canvasSourceRect.Width, canvasSourceRect.Height));
+            return;
+        }
+
         if (!TryResolveImage(image, out var resolved, out var sourceRect))
         {
             return;
@@ -715,6 +782,12 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
+        if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
+        {
+            DrawCanvasSurface(surface, canvasSourceRect, new Rect(dx, dy, dWidth, dHeight));
+            return;
+        }
+
         if (!TryResolveImage(image, out var resolved, out var sourceRect))
         {
             return;
@@ -728,6 +801,19 @@ internal sealed class CanvasRenderingContext2D
     {
         if (sWidth <= 0 || sHeight <= 0 || dWidth <= 0 || dHeight <= 0)
         {
+            return;
+        }
+
+        if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
+        {
+            var canvasCrop = new Rect(sx, sy, sWidth, sHeight);
+            var canvasBounded = canvasCrop.Intersect(canvasSourceRect);
+            if (canvasBounded.Width <= 0 || canvasBounded.Height <= 0)
+            {
+                return;
+            }
+
+            DrawCanvasSurface(surface, canvasBounded, new Rect(dx, dy, dWidth, dHeight));
             return;
         }
 
@@ -745,6 +831,44 @@ internal sealed class CanvasRenderingContext2D
 
         var destRect = new Rect(dx, dy, dWidth, dHeight);
         _owner.AddCommand(new DrawImageCommand(resolved, bounded, destRect, _state.CreateSnapshot()));
+    }
+
+    private void DrawCanvasSurface(CanvasDrawingSurface surface, Rect sourceRect, Rect destinationRect)
+    {
+        if (ReferenceEquals(surface, _owner) || sourceRect.Width <= 0 || sourceRect.Height <= 0 || destinationRect.Width <= 0 || destinationRect.Height <= 0)
+        {
+            return;
+        }
+
+        _owner.AddCommand(new DrawCanvasSurfaceCommand(surface, sourceRect, destinationRect, _state.CreateSnapshot()));
+    }
+
+    private static bool TryResolveCanvasSurface(object image, [NotNullWhen(true)] out CanvasDrawingSurface? surface, out Rect sourceRect)
+    {
+        if (image is AvaloniaDomElement element && CanvasContextBridge.TryGetSurface(element.Control, out surface))
+        {
+            var width = GetCanvasDimension(element.width, element.offsetWidth, element.Control.Bounds.Width);
+            var height = GetCanvasDimension(element.height, element.offsetHeight, element.Control.Bounds.Height);
+            sourceRect = new Rect(0, 0, width, height);
+            return sourceRect.Width > 0 && sourceRect.Height > 0;
+        }
+
+        surface = null;
+        sourceRect = default;
+        return false;
+    }
+
+    private static double GetCanvasDimension(params double[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (double.IsFinite(candidate) && candidate > 0)
+            {
+                return candidate;
+            }
+        }
+
+        return 0;
     }
 
     private static bool TryResolveImage(object image, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IImage? resolved, out Rect sourceRect)

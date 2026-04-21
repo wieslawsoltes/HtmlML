@@ -1725,6 +1725,10 @@ if (!fabric?.Canvas) {
   throw new Error(message);
 }
 
+if (fabric.Object?.prototype) {
+  fabric.Object.prototype.objectCaching = false;
+}
+
 const canvas = new fabric.Canvas(surface, {
   selection: true,
   backgroundColor: '#f8fafc',
@@ -1814,53 +1818,32 @@ const baseShapes = () => {
     height: 140,
     rx: 26,
     ry: 26,
-    fill: new fabric.Gradient({
-      type: 'linear',
-      gradientUnits: 'percentage',
-      coords: { x1: 0, y1: 0, x2: 0, y2: 1 },
-      colorStops: [
-        { offset: 0, color: '#93c5fd' },
-        { offset: 1, color: '#1d4ed8' }
-      ]
-    }),
+    fill: '#3b82f6',
     stroke: '#1e3a8a',
     strokeWidth: 2
-  });
-  gradientRect.shadow = new fabric.Shadow({
-    color: 'rgba(15, 23, 42, 0.18)',
-    blur: 16,
-    offsetX: 0,
-    offsetY: 10
   });
 
   const circle = new fabric.Circle({
     left: 320,
     top: 90,
     radius: 70,
-    fill: new fabric.Gradient({
-      type: 'radial',
-      coords: { r1: 0, r2: 1, x1: 0.5, y1: 0.5, x2: 0.5, y2: 0.5 },
-      colorStops: [
-        { offset: 0, color: '#fda4af' },
-        { offset: 1, color: '#db2777' }
-      ]
-    }),
+    fill: '#ec4899',
     stroke: '#be123c',
     strokeWidth: 2
   });
 
-  const text = new fabric.Textbox('Fabric.js', {
-    left: 200,
-    top: 240,
-    width: 200,
-    fontSize: 28,
-    fontFamily: 'Segoe UI',
-    fontWeight: 'bold',
-    fill: '#0f172a',
-    textAlign: 'center'
+  const triangle = new fabric.Triangle({
+    left: 235,
+    top: 230,
+    width: 96,
+    height: 72,
+    fill: '#f59e0b',
+    stroke: '#92400e',
+    strokeWidth: 2,
+    angle: -8
   });
 
-  canvas.add(gradientRect, circle, text);
+  canvas.add(gradientRect, circle, triangle);
   canvas.renderAll();
   report('Scene initialised with layered vector objects.');
 };
@@ -1876,12 +1859,6 @@ const addRandomRect = () => {
     fill: randomColor(),
     opacity: 0.85
   });
-  rect.shadow = new fabric.Shadow({
-    color: 'rgba(15, 23, 42, 0.15)',
-    blur: 14,
-    offsetX: 0,
-    offsetY: 8
-  });
   canvas.add(rect);
   canvas.setActiveObject(rect);
   report('Added a draggable rounded rectangle.');
@@ -1896,12 +1873,6 @@ const addRandomCircle = () => {
     stroke: '#1f2937',
     strokeWidth: 1.5,
     opacity: 0.9
-  });
-  circle.shadow = new fabric.Shadow({
-    color: 'rgba(15, 23, 42, 0.12)',
-    blur: 12,
-    offsetX: 0,
-    offsetY: 6
   });
   canvas.add(circle);
   canvas.setActiveObject(circle);

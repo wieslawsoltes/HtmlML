@@ -892,20 +892,27 @@ status.textContent = chart ? 'Chart.js chart created' : 'Chart.js chart missing'
     {
         var root = new Border
         {
+            Background = Brushes.White,
             Child = new StackPanel
             {
                 Children =
                 {
-                    new Border { Name = "fabricSurface", Width = 560, Height = 320 },
+                    new Border { Name = "fabricSurface", Width = 560, Height = 320, Background = Brushes.White },
                     new TextBlock { Name = "fabricStatus" }
                 }
             }
         };
+        var window = new Window
+        {
+            Width = 640,
+            Height = 420,
+            Content = new VisualLayerManager { Child = root }
+        };
 
-        root.Measure(new Size(900, 700));
-        root.Arrange(new Rect(0, 0, 900, 700));
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
 
-        var (host, _) = HostTestUtilities.CreateHost(root);
+        var host = new JintAvaloniaHost(window);
 
         host.Engine.Execute("""
 const surface = document.getElementById('fabricSurface');
@@ -924,11 +931,57 @@ const canvas = new fabric.Canvas(surface, {
   preserveObjectStacking: true
 });
 canvas.setDimensions({ width: surface.offsetWidth, height: surface.offsetHeight });
+canvas.add(
+  new fabric.Rect({
+    left: 80,
+    top: 70,
+    width: 200,
+    height: 140,
+    rx: 26,
+    ry: 26,
+    fill: '#3b82f6',
+    stroke: '#1e3a8a',
+    strokeWidth: 2
+  }),
+  new fabric.Circle({
+    left: 320,
+    top: 90,
+    radius: 70,
+    fill: '#ec4899',
+    stroke: '#be123c',
+    strokeWidth: 2
+  }),
+  new fabric.Triangle({
+    left: 235,
+    top: 230,
+    width: 96,
+    height: 72,
+    fill: '#f59e0b',
+    stroke: '#92400e',
+    strokeWidth: 2,
+    angle: -8
+  })
+);
+canvas.renderAll();
 status.textContent = canvas ? 'Fabric.js scene ready' : 'Fabric.js canvas missing';
 """);
 
         var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("fabricStatus")).Control);
         Assert.Equal("Fabric.js scene ready", status.Text);
+
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("fabricSurface"));
+        var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
+        Assert.True(context.CommandCount > 0);
+
+        Dispatcher.UIThread.RunJobs();
+        var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+        using (frame)
+        {
+            Assert.True(
+                HasNonWhitePixel(frame!, 0, 0, 560, 320),
+                "Expected Fabric.js to render visible canvas pixels, but the canvas surface stayed blank.");
+        }
     }
 
     [AvaloniaFact]
