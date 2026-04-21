@@ -81,9 +81,20 @@ internal sealed class CanvasDrawingSurface : Control
     {
         base.Render(context);
 
-        foreach (var command in _commands)
+        var bounds = new Rect(Bounds.Size);
+        if (bounds.Width <= 0 || bounds.Height <= 0)
         {
-            command.Render(context);
+            return;
+        }
+
+        // AdornerLayer clipping follows explicit clip ancestors; the canvas must
+        // also clip its own Render output so oversized draws cannot cover siblings.
+        using (context.PushClip(bounds))
+        {
+            foreach (var command in _commands)
+            {
+                command.Render(context);
+            }
         }
     }
 
