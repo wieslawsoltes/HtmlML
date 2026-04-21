@@ -1535,6 +1535,30 @@ public class AvaloniaDomElement
 
     public virtual double offsetLeft => GetOffsetRelativeToParent().X;
 
+    public virtual double width
+    {
+        get => GetExplicitOrArrangedSize(Control.Width, Control.Bounds.Width);
+        set
+        {
+            if (double.IsFinite(value) && value >= 0)
+            {
+                Control.Width = value;
+            }
+        }
+    }
+
+    public virtual double height
+    {
+        get => GetExplicitOrArrangedSize(Control.Height, Control.Bounds.Height);
+        set
+        {
+            if (double.IsFinite(value) && value >= 0)
+            {
+                Control.Height = value;
+            }
+        }
+    }
+
     public virtual AvaloniaDomElement? offsetParent => FindOffsetParentElement();
 
     public virtual double scrollWidth => GetScrollSize().Width;
@@ -1835,6 +1859,16 @@ public class AvaloniaDomElement
 
     private static bool IsFiniteSize(Size size)
         => double.IsFinite(size.Width) && double.IsFinite(size.Height) && size.Width >= 0 && size.Height >= 0;
+
+    private static double GetExplicitOrArrangedSize(double explicitSize, double arrangedSize)
+    {
+        if (double.IsFinite(explicitSize) && explicitSize >= 0)
+        {
+            return explicitSize;
+        }
+
+        return double.IsFinite(arrangedSize) && arrangedSize >= 0 ? arrangedSize : 0;
+    }
 
     private static double Clamp(double value, double min, double max)
     {

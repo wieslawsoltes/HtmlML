@@ -36,6 +36,8 @@ internal static class CanvasContextBridge
 
         public CanvasRenderingContext2D Context => _context;
 
+        public CanvasDrawingSurface Surface => _surface;
+
         private static bool IsAttached(Visual visual) => visual.GetVisualRoot() is not null;
 
         private void EnsureInteractiveTarget()
@@ -121,6 +123,18 @@ internal static class CanvasContextBridge
 
         var attachment = s_attachments.GetValue(control, static c => new CanvasAttachment(c));
         return attachment.Context;
+    }
+
+    internal static bool TryGetSurface(Control control, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CanvasDrawingSurface? surface)
+    {
+        if (control is not null && s_attachments.TryGetValue(control, out var attachment))
+        {
+            surface = attachment.Surface;
+            return true;
+        }
+
+        surface = null;
+        return false;
     }
 
     private static bool TryFocus(Control control, NavigationMethod navigationMethod, KeyModifiers keyModifiers)
