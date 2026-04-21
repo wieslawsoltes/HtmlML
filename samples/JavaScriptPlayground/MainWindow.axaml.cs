@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly TextDocument _xamlDocument = new();
     private readonly TextDocument _scriptDocument = new();
     private readonly RegistryOptions _registryOptions = new(ThemeName.LightPlus);
+    private int _xamlLoadVersion;
 
     public MainWindow()
     {
@@ -84,6 +85,8 @@ public partial class MainWindow : Window
 
     private void LoadXaml(bool runScript)
     {
+        var loadVersion = ++_xamlLoadVersion;
+
         try
         {
             var xaml = _xamlDocument.Text ?? string.Empty;
@@ -98,7 +101,7 @@ public partial class MainWindow : Window
             ResetHost();
             if (runScript)
             {
-                RunScript(resetHost: false);
+                ScheduleAutoRun(loadVersion);
             }
         }
         catch (Exception ex)
@@ -106,6 +109,28 @@ public partial class MainWindow : Window
             PreviewHost.Child = null;
             SetStatus($"XAML error: {ex.Message}", true);
         }
+    }
+
+    private void ScheduleAutoRun(int loadVersion)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (loadVersion != _xamlLoadVersion)
+            {
+                return;
+            }
+
+            RequestAnimationFrame(_ =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (loadVersion == _xamlLoadVersion)
+                    {
+                        RunScript(resetHost: false);
+                    }
+                }, DispatcherPriority.Background);
+            });
+        }, DispatcherPriority.Loaded);
     }
 
     private void ResetHost()
