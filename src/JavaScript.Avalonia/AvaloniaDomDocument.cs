@@ -541,13 +541,13 @@ public class AvaloniaDomDocument
 
     private void DispatchDocumentPointerEvent(string type, PointerEventArgs args, bool bubbles, bool cancelable)
     {
-        var relativeTo = Host.TopLevel as Control ?? GetDocumentRoot();
+        var relativeTo = GetDocumentViewport();
         if (relativeTo is null)
         {
             return;
         }
 
-        var evt = new DomPointerEvent(type, args, relativeTo, Host.GetTimestamp(), bubbles, cancelable)
+        var evt = new DomPointerEvent(type, args, relativeTo, relativeTo, Host.GetTimestamp(), bubbles, cancelable)
         {
             target = this
         };
@@ -966,8 +966,20 @@ public class AvaloniaDomDocument
 
     internal void DispatchPointerEvent(AvaloniaDomElement target, string type, PointerEventArgs args, bool bubbles, bool cancelable)
     {
-        var evt = new DomPointerEvent(type, args, target.Control, Host.GetTimestamp(), bubbles, cancelable);
+        var viewport = GetDocumentViewport() ?? target.Control;
+        var evt = new DomPointerEvent(type, args, target.Control, viewport, Host.GetTimestamp(), bubbles, cancelable);
         DispatchDomEventInternal(target, evt);
+    }
+
+    private Control? GetDocumentViewport()
+    {
+        var content = Host.TopLevel.Content as Control;
+        if (content?.GetVisualRoot() is not null)
+        {
+            return content;
+        }
+
+        return Host.TopLevel as Control ?? content ?? GetDocumentRoot();
     }
 
     internal void DispatchKeyboardEvent(AvaloniaDomElement target, string type, KeyEventArgs args, bool bubbles, bool cancelable)
@@ -1788,7 +1800,12 @@ public class AvaloniaDomElement
         var bounds = Control.Bounds;
         var width = GetExplicitOrArrangedSize(Control.Width, bounds.Width);
         var height = GetExplicitOrArrangedSize(Control.Height, bounds.Height);
-        return new Rect(bounds.Position, new Size(width, height));
+        var viewport = Host.TopLevel.Content as Control ?? Host.TopLevel as Control;
+        var position = viewport is not null
+            ? Control.TranslatePoint(new Point(0, 0), viewport) ?? bounds.Position
+            : bounds.Position;
+
+        return new Rect(position, new Size(width, height));
     }
 
     private Vector GetScrollOffset()
@@ -5438,6 +5455,10 @@ public sealed class DomRect
         y = rect.Y;
         width = rect.Width;
         height = rect.Height;
+        left = rect.Left;
+        top = rect.Top;
+        right = rect.Right;
+        bottom = rect.Bottom;
     }
 
     public double x { get; }
@@ -5447,4 +5468,12 @@ public sealed class DomRect
     public double width { get; }
 
     public double height { get; }
+
+    public double left { get; }
+
+    public double top { get; }
+
+    public double right { get; }
+
+    public double bottom { get; }
 }
