@@ -1228,8 +1228,8 @@ internal sealed partial class CanvasWebGlRenderingContext
 
     public void depthMask(bool flag) => _depthMask = flag;
 
-    public void stencilMask(int mask) { }
-    public void stencilMaskSeparate(int face, int mask) { }
+    public void stencilMask(double mask) { }
+    public void stencilMaskSeparate(int face, double mask) { }
 
     public void enable(int cap) => _enabledCaps.Add(cap);
 

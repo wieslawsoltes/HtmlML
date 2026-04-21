@@ -1189,7 +1189,7 @@ status.textContent = gl.CommandCount > 0 ? 'WebGL triangle rendered' : 'WebGL tr
 const surface = document.getElementById('threeSurface');
 const status = document.getElementById('threeStatus');
 const gl = surface.getContext('webgl');
-const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js');
 const THREE = threeModule?.REVISION ? threeModule : window.THREE;
 if (!THREE) {
   throw new Error('Three.js did not load');
@@ -1328,7 +1328,7 @@ const status = document.getElementById('targetStatus');
 const gl = surface.getContext('webgl');
 const halfFloat = gl.getExtension('OES_texture_half_float');
 const colorBufferHalfFloat = gl.getExtension('EXT_color_buffer_half_float');
-const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js');
+const threeModule = require('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js');
 const THREE = threeModule?.REVISION ? threeModule : window.THREE;
 
 const renderer = new THREE.WebGLRenderer({
