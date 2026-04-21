@@ -99,6 +99,7 @@ Each `AvaloniaDomElement` exposes:
 - `pointerdown` / `mousedown`
 - `pointermove` / `mousemove`
 - `pointerup` / `mouseup`
+- `wheel`
 - `pointerenter` / `mouseenter`
 - `pointerleave` / `mouseleave`
 - `click` (uses `Button.Click` when available, otherwise falls back to `PointerReleased`)
@@ -145,6 +146,10 @@ interface DomPointerEvent {
   pointerType: string;
   x: number;
   y: number;
+  deltaX: number;
+  deltaY: number;
+  deltaZ: number;
+  deltaMode: number;
   button: number;
   buttons: number;
   altKey: boolean;

@@ -230,6 +230,16 @@ let activeShellCommand = '';
 let activeShellPollTimer: number | null = null;
 let lastSessionCols = terminal.cols;
 let lastSessionRows = terminal.rows;
+let activeMouseButton: number | null = null;
+let lastMouseMoveKey = '';
+let mouseModeParserBuffer = '';
+const terminalMouseModes = {
+  x10: false,
+  normal: false,
+  button: false,
+  any: false,
+  sgr: false,
+};
 
 terminal.onResize(() => scheduleRender());
 terminal.onScroll(() => scheduleRender());
@@ -506,6 +516,59 @@ function shouldStartTerminalSession(command: string): boolean {
   return canStartHostTerminal && terminalCommands.indexOf(getExecutableName(command)) >= 0;
 }
 
+function resetTerminalMouseModes() {
+  terminalMouseModes.x10 = false;
+  terminalMouseModes.normal = false;
+  terminalMouseModes.button = false;
+  terminalMouseModes.any = false;
+  terminalMouseModes.sgr = false;
+  activeMouseButton = null;
+  lastMouseMoveKey = '';
+  mouseModeParserBuffer = '';
+}
+
+function updateTerminalMouseModes(data: string) {
+  if (!data) {
+    return;
+  }
+
+  const text = `${mouseModeParserBuffer}${String(data)}`;
+  const pattern = /\x1b\[\?([0-9;]+)([hl])/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const enabled = match[2] === 'h';
+    const codes = match[1].split(';');
+    for (const code of codes) {
+      switch (Number(code)) {
+        case 9:
+          terminalMouseModes.x10 = enabled;
+          break;
+        case 1000:
+          terminalMouseModes.normal = enabled;
+          break;
+        case 1002:
+          terminalMouseModes.button = enabled;
+          break;
+        case 1003:
+          terminalMouseModes.any = enabled;
+          break;
+        case 1006:
+          terminalMouseModes.sgr = enabled;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  const tail = text.slice(-64);
+  mouseModeParserBuffer = tail.indexOf('\x1b[?') >= 0 ? tail : '';
+}
+
+function hasTerminalMouseTracking(): boolean {
+  return terminalMouseModes.x10 || terminalMouseModes.normal || terminalMouseModes.button || terminalMouseModes.any;
+}
+
 function stopActiveShellSession() {
   if (activeShellPollTimer != null) {
     stopInterval(activeShellPollTimer);
@@ -517,6 +580,8 @@ function stopActiveShellSession() {
     activeShellSession = null;
     activeShellCommand = '';
   }
+
+  resetTerminalMouseModes();
 }
 
 function flushActiveShellOutput(): boolean {
@@ -529,6 +594,7 @@ function flushActiveShellOutput(): boolean {
     return false;
   }
 
+  updateTerminalMouseModes(output);
   terminal.write(output, () => scheduleRender());
   scheduleRender();
   return true;
@@ -588,7 +654,7 @@ function startActiveShellSession(command: string): boolean {
   lastSessionRows = terminal.rows;
   activeShellPollTimer = startInterval(pollActiveShellSession, 50);
   pollActiveShellSession();
-  updateStatus(`Started ${activeShellCommand} in ${terminal.cols}x${terminal.rows} terminal context. Focus the canvas to send keys; use Ctrl+C or Clear to stop.`);
+  updateStatus(`Started ${activeShellCommand} in ${terminal.cols}x${terminal.rows} terminal context. Focus the canvas for keyboard and mouse; use Ctrl+C or Clear to stop.`);
   return true;
 }
 
@@ -601,16 +667,73 @@ function sendToActiveShellSession(data: string): boolean {
   return true;
 }
 
+function terminalModifierCode(event: any): number {
+  let modifier = 1;
+  if (event?.shiftKey) {
+    modifier += 1;
+  }
+  if (event?.altKey || event?.metaKey) {
+    modifier += 2;
+  }
+  if (event?.ctrlKey) {
+    modifier += 4;
+  }
+  return modifier;
+}
+
+function terminalModifierPrefix(event: any, sequence: (modifier: number) => string): string {
+  const modifier = terminalModifierCode(event);
+  return modifier > 1 ? sequence(modifier) : sequence(0);
+}
+
+function ctrlSequenceForKey(key: string): string {
+  if (!key || key.length !== 1) {
+    return '';
+  }
+
+  const upper = key.toUpperCase();
+  if (upper >= 'A' && upper <= 'Z') {
+    return String.fromCharCode(upper.charCodeAt(0) - 64);
+  }
+
+  switch (key) {
+    case ' ':
+    case '2':
+      return '\x00';
+    case '[':
+    case '3':
+      return '\x1b';
+    case '\\':
+    case '4':
+      return '\x1c';
+    case ']':
+    case '5':
+      return '\x1d';
+    case '^':
+    case '6':
+      return '\x1e';
+    case '_':
+    case '7':
+      return '\x1f';
+    case '?':
+    case '8':
+      return '\x7f';
+    default:
+      return '';
+  }
+}
+
 function keyToTerminalSequence(event: any): string {
   const key = event?.key;
-  if (event?.ctrlKey && (key === 'c' || key === 'C')) {
-    return '\x03';
+  if (event?.ctrlKey) {
+    const control = ctrlSequenceForKey(key);
+    if (control) {
+      return event?.altKey || event?.metaKey ? `\x1b${control}` : control;
+    }
   }
-  if (event?.ctrlKey && (key === 'd' || key === 'D')) {
-    return '\x04';
-  }
-  if (event?.ctrlKey && (key === 'l' || key === 'L')) {
-    return '\x0c';
+
+  if ((event?.altKey || event?.metaKey) && typeof key === 'string' && key.length === 1) {
+    return `\x1b${key}`;
   }
 
   switch (key) {
@@ -620,30 +743,187 @@ function keyToTerminalSequence(event: any): string {
     case 'Back':
       return '\x7f';
     case 'Tab':
-      return '\t';
+      return event?.shiftKey ? '\x1b[Z' : '\t';
     case 'Escape':
       return '\x1b';
     case 'ArrowUp':
-      return '\x1b[A';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}A` : '\x1b[A');
     case 'ArrowDown':
-      return '\x1b[B';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}B` : '\x1b[B');
     case 'ArrowRight':
-      return '\x1b[C';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}C` : '\x1b[C');
     case 'ArrowLeft':
-      return '\x1b[D';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}D` : '\x1b[D');
     case 'Home':
-      return '\x1b[H';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}H` : '\x1b[H');
     case 'End':
-      return '\x1b[F';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[1;${modifier}F` : '\x1b[F');
+    case 'Insert':
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[2;${modifier}~` : '\x1b[2~');
     case 'PageUp':
-      return '\x1b[5~';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[5;${modifier}~` : '\x1b[5~');
     case 'PageDown':
-      return '\x1b[6~';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[6;${modifier}~` : '\x1b[6~');
     case 'Delete':
-      return '\x1b[3~';
+      return terminalModifierPrefix(event, modifier => modifier ? `\x1b[3;${modifier}~` : '\x1b[3~');
     default:
-      return '';
+      break;
   }
+
+  const functionKeyCodes: Record<string, [string, string]> = {
+    F1: ['P', '1'],
+    F2: ['Q', '1'],
+    F3: ['R', '1'],
+    F4: ['S', '1'],
+    F5: ['15', 'tilde'],
+    F6: ['17', 'tilde'],
+    F7: ['18', 'tilde'],
+    F8: ['19', 'tilde'],
+    F9: ['20', 'tilde'],
+    F10: ['21', 'tilde'],
+    F11: ['23', 'tilde'],
+    F12: ['24', 'tilde'],
+  };
+  const functionKey = functionKeyCodes[key];
+  if (!functionKey) {
+    return '';
+  }
+
+  const modifier = terminalModifierCode(event);
+  if (functionKey[1] === '1') {
+    return modifier > 1 ? `\x1b[1;${modifier}${functionKey[0]}` : `\x1bO${functionKey[0]}`;
+  }
+
+  return modifier > 1 ? `\x1b[${functionKey[0]};${modifier}~` : `\x1b[${functionKey[0]}~`;
+}
+
+function xtermMouseModifierBits(event: any): number {
+  let modifiers = 0;
+  if (event?.shiftKey) {
+    modifiers += 4;
+  }
+  if (event?.altKey || event?.metaKey) {
+    modifiers += 8;
+  }
+  if (event?.ctrlKey) {
+    modifiers += 16;
+  }
+  return modifiers;
+}
+
+function domButtonToXtermButton(button: unknown): number {
+  switch (Number(button)) {
+    case 0:
+      return 0;
+    case 1:
+      return 1;
+    case 2:
+      return 2;
+    default:
+      return -1;
+  }
+}
+
+function buttonsToXtermButton(buttons: unknown): number {
+  const value = Number(buttons) || 0;
+  if ((value & 1) !== 0) {
+    return 0;
+  }
+  if ((value & 4) !== 0) {
+    return 1;
+  }
+  if ((value & 2) !== 0) {
+    return 2;
+  }
+  return -1;
+}
+
+function getTerminalCellFromEvent(event: any): { col: number; row: number } | null {
+  ensureTerminalSize();
+  const pointerX = Number(event?.x ?? event?.clientX);
+  const pointerY = Number(event?.y ?? event?.clientY);
+  if (!Number.isFinite(pointerX) || !Number.isFinite(pointerY)) {
+    return null;
+  }
+
+  const col = Math.floor((pointerX - horizontalPadding) / cellWidth) + 1;
+  const row = Math.floor((pointerY - verticalPadding) / cellHeight) + 1;
+  if (col < 1 || row < 1 || col > terminal.cols || row > terminal.rows) {
+    return null;
+  }
+
+  return { col, row };
+}
+
+function encodeTerminalMouseSequence(buttonCode: number, col: number, row: number, final: 'M' | 'm', event: any): string {
+  const code = buttonCode + xtermMouseModifierBits(event);
+  if (terminalMouseModes.sgr) {
+    return `\x1b[<${code};${col};${row}${final}`;
+  }
+
+  if (col > 223 || row > 223) {
+    return '';
+  }
+
+  const legacyCode = final === 'm' ? 3 + xtermMouseModifierBits(event) : code;
+  return `\x1b[M${String.fromCharCode(legacyCode + 32)}${String.fromCharCode(col + 32)}${String.fromCharCode(row + 32)}`;
+}
+
+function sendTerminalMouseEvent(event: any, kind: 'down' | 'up' | 'move' | 'wheel'): boolean {
+  if (!activeShellSession || !hasTerminalMouseTracking()) {
+    return false;
+  }
+
+  const cell = getTerminalCellFromEvent(event);
+  if (!cell) {
+    return false;
+  }
+
+  let buttonCode = 0;
+  let final: 'M' | 'm' = 'M';
+  if (kind === 'down') {
+    buttonCode = domButtonToXtermButton(event?.button);
+    if (buttonCode < 0) {
+      return false;
+    }
+    activeMouseButton = buttonCode;
+  } else if (kind === 'up') {
+    buttonCode = domButtonToXtermButton(event?.button);
+    if (buttonCode < 0) {
+      buttonCode = activeMouseButton ?? 0;
+    }
+    final = 'm';
+    activeMouseButton = null;
+  } else if (kind === 'move') {
+    if (!terminalMouseModes.any && !(terminalMouseModes.button && Number(event?.buttons))) {
+      return false;
+    }
+    const moveButton = buttonsToXtermButton(event?.buttons);
+    buttonCode = 32 + (moveButton >= 0 ? moveButton : 3);
+    const moveKey = `${cell.col}:${cell.row}:${buttonCode}:${Number(event?.buttons) || 0}`;
+    if (moveKey === lastMouseMoveKey) {
+      return false;
+    }
+    lastMouseMoveKey = moveKey;
+  } else if (kind === 'wheel') {
+    const deltaX = Number(event?.deltaX) || 0;
+    const deltaY = Number(event?.deltaY) || 0;
+    if (deltaX === 0 && deltaY === 0) {
+      return false;
+    }
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      buttonCode = deltaX < 0 ? 66 : 67;
+    } else {
+      buttonCode = deltaY < 0 ? 64 : 65;
+    }
+  }
+
+  const sequence = encodeTerminalMouseSequence(buttonCode, cell.col, cell.row, final, event);
+  if (!sequence) {
+    return false;
+  }
+
+  return sendToActiveShellSession(sequence);
 }
 
 commands.demo = () => {
@@ -807,11 +1087,29 @@ function bindInput() {
     renderPrompt();
   });
 
-  (surface as any)?.addEventListener?.('pointerdown', () => {
+  (surface as any)?.addEventListener?.('pointerdown', (event: any) => {
     (surface as any)?.focus?.();
+    if (sendTerminalMouseEvent(event, 'down')) {
+      event.preventDefault?.();
+    }
   });
   (surface as any)?.addEventListener?.('click', () => {
     (surface as any)?.focus?.();
+  });
+  (surface as any)?.addEventListener?.('pointermove', (event: any) => {
+    if (sendTerminalMouseEvent(event, 'move')) {
+      event.preventDefault?.();
+    }
+  });
+  (surface as any)?.addEventListener?.('pointerup', (event: any) => {
+    if (sendTerminalMouseEvent(event, 'up')) {
+      event.preventDefault?.();
+    }
+  });
+  (surface as any)?.addEventListener?.('wheel', (event: any) => {
+    if (sendTerminalMouseEvent(event, 'wheel')) {
+      event.preventDefault?.();
+    }
   });
   (surface as any)?.addEventListener?.('textinput', (event: any) => {
     const data = typeof event?.data === 'string' ? event.data : '';

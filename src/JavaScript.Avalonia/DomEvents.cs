@@ -143,6 +143,14 @@ public sealed class DomPointerEvent : DomEvent
 
     public double screenY => clientY;
 
+    public double deltaX => _args is PointerWheelEventArgs wheel ? wheel.Delta.X : 0;
+
+    public double deltaY => _args is PointerWheelEventArgs wheel ? -wheel.Delta.Y : 0;
+
+    public double deltaZ => 0;
+
+    public int deltaMode => 0;
+
     public int buttons
     {
         get
