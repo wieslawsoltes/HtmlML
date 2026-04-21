@@ -49,11 +49,25 @@ internal static class CanvasContextBridge
                     return _webGlContext;
                 }
 
-                _openGlSurface = new CanvasOpenGlDrawingSurface();
-                _webGlContext = new CanvasWebGlRenderingContext(_surface, _openGlSurface);
-                _openGlSurface.Context = _webGlContext;
+                if (_target is CanvasOpenGlDrawingSurface nativeSurface)
+                {
+                    _openGlSurface = nativeSurface;
+                    _webGlContext = new CanvasWebGlRenderingContext(_surface, _openGlSurface);
+                    _openGlSurface.Context = _webGlContext;
+                    return _webGlContext;
+                }
 
-                AttachOpenGlSurface();
+                if (EnableInjectedOpenGlSurface)
+                {
+                    _openGlSurface = new CanvasOpenGlDrawingSurface();
+                    _webGlContext = new CanvasWebGlRenderingContext(_surface, _openGlSurface);
+                    _openGlSurface.Context = _webGlContext;
+
+                    AttachOpenGlSurface();
+                    return _webGlContext;
+                }
+
+                _webGlContext = new CanvasWebGlRenderingContext(_surface);
 
                 return _webGlContext;
             }
@@ -127,7 +141,7 @@ internal static class CanvasContextBridge
             _layer = layer;
             _surface.InvalidateVisual();
 
-            if (_openGlSurface is not null)
+            if (_openGlSurface is not null && !ReferenceEquals(_openGlSurface, _target))
             {
                 AttachOpenGlSurface();
             }
@@ -158,6 +172,11 @@ internal static class CanvasContextBridge
         private void AttachOpenGlSurface()
         {
             if (_openGlSurface is null)
+            {
+                return;
+            }
+
+            if (ReferenceEquals(_openGlSurface, _target))
             {
                 return;
             }
@@ -213,6 +232,9 @@ internal static class CanvasContextBridge
     }
 
     private static readonly ConditionalWeakTable<Control, CanvasAttachment> s_attachments = new();
+
+    private static bool EnableInjectedOpenGlSurface =>
+        AppContext.TryGetSwitch("JavaScript.Avalonia.EnableInjectedOpenGlCanvasSurface", out var enabled) && enabled;
 
     public static object? GetContext(Control control, string type)
     {

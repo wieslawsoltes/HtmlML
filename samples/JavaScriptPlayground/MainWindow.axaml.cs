@@ -1677,11 +1677,13 @@ renderChart(currentType);
             new Preset(
                 "Canvas WebGL + Three.js",
                 """
-<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#0f172a" BorderBrush="#1e293b" BorderThickness="1" CornerRadius="8">
+<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=JavaScript.Avalonia" Padding="16" Background="#0f172a" BorderBrush="#1e293b" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="Canvas WebGL with Three.js" FontWeight="SemiBold" Foreground="#e5e7eb" />
     <TextBlock Text="Runs Three.js against JavaScript.Avalonia's browser-style WebGL context and renders the scene into the canvas surface." TextWrapping="Wrap" Foreground="#94a3b8" />
-    <Border Name="threeSurface" Width="720" Height="420" Background="#0b1220" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" />
+    <Border Background="#0b1220" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+      <js:CanvasOpenGlDrawingSurface Name="threeSurface" Width="720" Height="420" />
+    </Border>
     <StackPanel Orientation="Horizontal" Spacing="8">
       <Button Name="threeToggle" Content="Pause rotation" />
       <Button Name="threeShuffle" Content="Shuffle colors" />
@@ -1824,11 +1826,13 @@ frameHandle = window.requestAnimationFrame(tick);
             new Preset(
                 "Canvas WebGL + Three.js Lava Shader",
                 """
-<Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#050505" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
+<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=JavaScript.Avalonia" Padding="16" Background="#050505" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="Three.js lava shader" FontWeight="SemiBold" Foreground="#f8fafc" />
     <TextBlock Text="Port of the current three.js webgl_shader_lava: custom ShaderMaterial, official lava textures, BloomPass blur, and OutputPass sRGB transfer." TextWrapping="Wrap" Foreground="#fca5a5" />
-    <Border Name="lavaSurface" Width="720" Height="420" Background="#000000" BorderBrush="#7f1d1d" BorderThickness="1" CornerRadius="6" />
+    <Border Background="#000000" BorderBrush="#7f1d1d" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+      <js:CanvasOpenGlDrawingSurface Name="lavaSurface" Width="720" Height="420" />
+    </Border>
     <StackPanel Orientation="Horizontal" Spacing="8">
       <Button Name="lavaToggle" Content="Pause animation" />
       <Button Name="lavaReset" Content="Reset rotation" />

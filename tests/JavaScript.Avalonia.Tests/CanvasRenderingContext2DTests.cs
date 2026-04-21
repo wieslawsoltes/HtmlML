@@ -188,7 +188,7 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
-    public void WebGlSurface_AttachesInsideEmptyDecoratorTarget()
+    public void WebGlSurface_UsesSkiaFallbackForRegularControlsByDefault()
     {
         var canvasTarget = new Border
         {
@@ -206,10 +206,32 @@ public class CanvasRenderingContext2DTests
         window.Show();
 
         var context = Assert.IsType<CanvasWebGlRenderingContext>(CanvasContextBridge.GetContext(canvasTarget, "webgl"));
-        var surface = Assert.IsType<CanvasOpenGlDrawingSurface>(canvasTarget.Child);
 
-        Assert.Same(context, surface.Context);
-        Assert.Same(canvasTarget, surface.GetVisualParent());
+        Assert.Null(canvasTarget.Child);
+        Assert.Equal("not rendered", context.RenderBackend);
+    }
+
+    [AvaloniaFact]
+    public void WebGlSurface_UsesDedicatedOpenGlTarget()
+    {
+        var canvasTarget = new CanvasOpenGlDrawingSurface
+        {
+            Width = 80,
+            Height = 40
+        };
+        var window = new Window
+        {
+            Width = 100,
+            Height = 80,
+            Content = new VisualLayerManager { Child = canvasTarget }
+        };
+
+        window.Show();
+
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(CanvasContextBridge.GetContext(canvasTarget, "webgl"));
+
+        Assert.Same(context, canvasTarget.Context);
+        Assert.NotNull(canvasTarget.GetVisualParent());
     }
 
     private static Color ReadPixel(Bitmap bitmap, int x, int y)

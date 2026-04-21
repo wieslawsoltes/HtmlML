@@ -232,7 +232,7 @@ Use `ctx.clearRect(0, 0, surface.offsetWidth, surface.offsetHeight);` to wipe th
 
 `getContext('webgl')` and `getContext('experimental-webgl')` expose an initial WebGL 1-compatible context for JavaScript libraries that expect a browser canvas. The current backend supports shader/program reflection, buffers, vertex attributes, uniforms, indexed triangle drawing, textures, and enough render state for libraries such as Three.js to render simple 3D scenes into the Avalonia canvas surface.
 
-On desktop renderers that expose Avalonia OpenGL compositor interop, WebGL frames are replayed by an `OpenGlControlBase` adorner surface into Avalonia's shared composition texture. JavaScript calls stay synchronous and only queue WebGL state; native GL objects are created and used inside Avalonia's OpenGL render callback where the context is current. Headless runs keep the software canvas fallback for tests. `gl.RenderBackend` reports the active render path after the surface has rendered.
+When the canvas element is a `CanvasOpenGlDrawingSurface`, WebGL frames are replayed by that dedicated `OpenGlControlBase` into Avalonia's shared composition texture. JavaScript calls stay synchronous and only queue WebGL state; native GL objects are created and used inside Avalonia's OpenGL render callback where the context is current. Regular controls keep the clipped Skia canvas fallback by default, avoiding compositor-surface leakage from dynamically injected OpenGL controls. `gl.RenderBackend` reports the active render path after the surface has rendered. Dynamic OpenGL surface injection remains available for experiments through the `JavaScript.Avalonia.EnableInjectedOpenGlCanvasSurface` AppContext switch.
 
 ```js
 const surface = document.getElementById('threeSurface');

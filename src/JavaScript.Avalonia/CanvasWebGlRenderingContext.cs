@@ -49,7 +49,7 @@ internal sealed partial class CanvasWebGlRenderingContext
     private bool _unpackFlipY;
     private bool _unpackPremultiplyAlpha;
     private int _activeTextureUnit;
-    private string _openGlRenderBackend = "Avalonia OpenGL pending";
+    private string? _openGlRenderBackend;
     private OpenGlRenderer? _openGlRenderer;
     private WebGlBuffer? _arrayBuffer;
     private WebGlBuffer? _elementArrayBuffer;

@@ -1169,7 +1169,7 @@ status.textContent = gl.CommandCount > 0 ? 'WebGL triangle rendered' : 'WebGL tr
             {
                 Children =
                 {
-                    new Border { Name = "threeSurface", Width = 220, Height = 160, Background = Brushes.White },
+                    new CanvasOpenGlDrawingSurface { Name = "threeSurface", Width = 220, Height = 160 },
                     new TextBlock { Name = "threeStatus" }
                 }
             }
