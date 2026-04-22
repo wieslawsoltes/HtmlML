@@ -319,7 +319,7 @@ globalThis.contextMatrixValues = Array.from(context.mozCurrentTransform);
     {
         var (host, _) = HostTestUtilities.CreateHost();
 
-        host.ExecuteScriptText("console.log('log'); console.info('info'); console.warn('warn'); console.error('error'); console.table({ value: 1 });");
+        host.ExecuteScriptText("const cyclic = {}; cyclic.self = cyclic; console.log('log', cyclic); console.info('info', 1, true); console.warn(); console.error('error', { value: 1 }); console.table({ value: 1 }, ['value']);");
     }
 
     [AvaloniaFact]
@@ -994,6 +994,8 @@ const canvas = new fabric.Canvas(surface, {
   preserveObjectStacking: true
 });
 canvas.setDimensions({ width: surface.offsetWidth, height: surface.offsetHeight });
+canvas.clear();
+canvas.backgroundColor = '#f8fafc';
 const circle = new fabric.Circle({
   left: 320,
   top: 90,
