@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -54,8 +55,8 @@ var navigator = (__avaloniaGlobal && __avaloniaGlobal.navigator) || (window && w
             ConfigureEngineOptions(options);
         });
 
-        Engine.SetValue("console", CreateConsoleObject());
         Engine.SetValue("window", CreateWindowObject());
+        RegisterConsole();
         try
         {
             var windowValue = Engine.GetValue("window");
@@ -107,6 +108,60 @@ var navigator = (__avaloniaGlobal && __avaloniaGlobal.navigator) || (window && w
 
     protected virtual AvaloniaDomDocument CreateDocument()
         => new AvaloniaDomDocument(this);
+
+    private void RegisterConsole()
+    {
+        Engine.SetValue("__avaloniaConsoleSink", CreateConsoleObject());
+        try
+        {
+            Engine.Execute("""
+(function () {
+  var sink = globalThis.__avaloniaConsoleSink;
+  function format(value) {
+    if (value === undefined) {
+      return 'undefined';
+    }
+    if (value === null) {
+      return 'null';
+    }
+    if (typeof value === 'string') {
+      return value;
+    }
+    try {
+      return String(value);
+    } catch (_) {
+      try {
+        return Object.prototype.toString.call(value);
+      } catch (_) {
+        return '[object Object]';
+      }
+    }
+  }
+  function write(method, args) {
+    var text = Array.prototype.map.call(args, format).join(' ');
+    try {
+      sink[method](text);
+    } catch (_) {
+    }
+  }
+  var consoleObject = {
+    log: function () { write('log', arguments); },
+    info: function () { write('info', arguments); },
+    warn: function () { write('warn', arguments); },
+    error: function () { write('error', arguments); },
+    table: function () { write('table', arguments); }
+  };
+  globalThis.console = consoleObject;
+  if (typeof window !== 'undefined' && window) {
+    window.console = consoleObject;
+  }
+})();
+""");
+        }
+        catch
+        {
+        }
+    }
 
     internal double GetTimestamp() => _stopwatch.Elapsed.TotalMilliseconds;
 
@@ -1407,23 +1462,57 @@ try {
 
     public class ConsoleJs
     {
-        public virtual void log(object? value) => Console.WriteLine(value);
+        public virtual void log(params JsValue[] values) => Console.WriteLine(FormatConsoleArgs(values));
 
-        public virtual void info(object? value) => Console.WriteLine(value);
+        public virtual void info(params JsValue[] values) => Console.WriteLine(FormatConsoleArgs(values));
 
-        public virtual void warn(object? value) => Console.WriteLine(value);
+        public virtual void warn(params JsValue[] values) => Console.WriteLine(FormatConsoleArgs(values));
 
-        public virtual void error(object? value) => Console.Error.WriteLine(value);
+        public virtual void error(params JsValue[] values) => Console.Error.WriteLine(FormatConsoleArgs(values));
 
-        public virtual void table(object? value)
+        public virtual void table(params JsValue[] values)
         {
-            if (value is null)
+            Console.WriteLine(FormatConsoleArgs(values));
+        }
+
+        private static string FormatConsoleArgs(IReadOnlyList<JsValue> values)
+        {
+            if (values.Count == 0)
             {
-                Console.WriteLine("null");
-                return;
+                return string.Empty;
             }
 
-            Console.WriteLine(value);
+            return string.Join(" ", values.Select(FormatConsoleArg));
+        }
+
+        private static string FormatConsoleArg(JsValue value)
+        {
+            if (value.IsUndefined())
+            {
+                return "undefined";
+            }
+
+            if (value.IsNull())
+            {
+                return "null";
+            }
+
+            if (value.IsString())
+            {
+                return value.AsString();
+            }
+
+            if (value.IsNumber())
+            {
+                return value.AsNumber().ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (value.IsBoolean())
+            {
+                return value.AsBoolean() ? "true" : "false";
+            }
+
+            return value.IsObject() ? "[object Object]" : value.ToString();
         }
     }
 
