@@ -463,12 +463,36 @@ internal sealed class CanvasTextMetrics
     public double width { get; }
 }
 
+internal sealed class CanvasImageData
+{
+    public CanvasImageData(int width, int height)
+        : this(width, height, new byte[Math.Max(0, width) * Math.Max(0, height) * 4])
+    {
+    }
+
+    public CanvasImageData(int width, int height, byte[] data)
+    {
+        this.width = Math.Max(0, width);
+        this.height = Math.Max(0, height);
+        this.data = data ?? Array.Empty<byte>();
+    }
+
+    public int width { get; }
+
+    public int height { get; }
+
+    public byte[] data { get; }
+}
+
 internal sealed class CanvasRenderingContext2D
 {
     private readonly CanvasDrawingSurface _owner;
     private readonly CanvasPathBuilder _path = new();
     private CanvasState _state = CanvasState.CreateDefault();
     private readonly Stack<CanvasState> _stateStack = new();
+    private byte[]? _rgbaPixels;
+    private int _rgbaWidth;
+    private int _rgbaHeight;
 
     internal CanvasRenderingContext2D(CanvasDrawingSurface owner)
     {
@@ -771,8 +795,74 @@ internal sealed class CanvasRenderingContext2D
         return new CanvasTextMetrics(formatted.Width);
     }
 
+    public CanvasImageData createImageData(double sw, double sh)
+        => new(Math.Max(0, (int)Math.Round(sw)), Math.Max(0, (int)Math.Round(sh)));
+
+    public CanvasImageData createImageData(CanvasImageData imageData)
+        => new(imageData?.width ?? 0, imageData?.height ?? 0);
+
+    public CanvasImageData getImageData(double sx, double sy, double sw, double sh)
+    {
+        var width = Math.Max(0, (int)Math.Round(sw));
+        var height = Math.Max(0, (int)Math.Round(sh));
+        var data = new byte[width * height * 4];
+        if (_rgbaPixels is null || width == 0 || height == 0)
+        {
+            return new CanvasImageData(width, height, data);
+        }
+
+        var sourceX = (int)Math.Round(sx);
+        var sourceY = (int)Math.Round(sy);
+        for (var y = 0; y < height; y++)
+        {
+            var srcY = sourceY + y;
+            if (srcY < 0 || srcY >= _rgbaHeight)
+            {
+                continue;
+            }
+
+            for (var x = 0; x < width; x++)
+            {
+                var srcX = sourceX + x;
+                if (srcX < 0 || srcX >= _rgbaWidth)
+                {
+                    continue;
+                }
+
+                var source = ((srcY * _rgbaWidth) + srcX) * 4;
+                var target = ((y * width) + x) * 4;
+                data[target] = _rgbaPixels[source];
+                data[target + 1] = _rgbaPixels[source + 1];
+                data[target + 2] = _rgbaPixels[source + 2];
+                data[target + 3] = _rgbaPixels[source + 3];
+            }
+        }
+
+        return new CanvasImageData(width, height, data);
+    }
+
+    public void putImageData(CanvasImageData imageData, double dx, double dy)
+        => PutImageData(imageData, dx, dy);
+
+    public void putImageData(CanvasImageData imageData, double dx, double dy, double dirtyX, double dirtyY, double dirtyWidth, double dirtyHeight)
+        => PutImageData(imageData, dx + dirtyX, dy + dirtyY, dirtyX, dirtyY, dirtyWidth, dirtyHeight);
+
+    internal bool TryGetRgbaPixels(out int width, out int height, out byte[] pixels)
+    {
+        width = _rgbaWidth;
+        height = _rgbaHeight;
+        pixels = _rgbaPixels is null ? Array.Empty<byte>() : (byte[])_rgbaPixels.Clone();
+        return width > 0 && height > 0 && pixels.Length == width * height * 4;
+    }
+
     public void drawImage(object image, double dx, double dy)
     {
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            var pixelSourceRect = new Rect(0, 0, pixelWidth, pixelHeight);
+            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, pixelSourceRect.Width, pixelSourceRect.Height));
+        }
+
         if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
         {
             DrawCanvasSurface(surface, canvasSourceRect, new Rect(dx, dy, canvasSourceRect.Width, canvasSourceRect.Height));
@@ -800,6 +890,11 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, new Rect(0, 0, pixelWidth, pixelHeight), new Rect(dx, dy, dWidth, dHeight));
+        }
+
         if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
         {
             DrawCanvasSurface(surface, canvasSourceRect, new Rect(dx, dy, dWidth, dHeight));
@@ -820,6 +915,15 @@ internal sealed class CanvasRenderingContext2D
         if (sWidth <= 0 || sHeight <= 0 || dWidth <= 0 || dHeight <= 0)
         {
             return;
+        }
+
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            var pixelSourceRect = new Rect(sx, sy, sWidth, sHeight).Intersect(new Rect(0, 0, pixelWidth, pixelHeight));
+            if (pixelSourceRect.Width > 0 && pixelSourceRect.Height > 0)
+            {
+                BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, dWidth, dHeight));
+            }
         }
 
         if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
@@ -851,6 +955,102 @@ internal sealed class CanvasRenderingContext2D
         _owner.AddCommand(new DrawImageCommand(resolved, bounded, destRect, _state.CreateSnapshot()));
     }
 
+    private void PutImageData(CanvasImageData? imageData, double dx, double dy)
+        => PutImageData(imageData, dx, dy, 0, 0, imageData?.width ?? 0, imageData?.height ?? 0);
+
+    private void PutImageData(CanvasImageData? imageData, double dx, double dy, double sourceX, double sourceY, double sourceWidth, double sourceHeight)
+    {
+        if (imageData is null || imageData.width <= 0 || imageData.height <= 0 || imageData.data.Length < imageData.width * imageData.height * 4)
+        {
+            return;
+        }
+
+        var sourceRect = new Rect(sourceX, sourceY, sourceWidth, sourceHeight).Intersect(new Rect(0, 0, imageData.width, imageData.height));
+        if (sourceRect.Width <= 0 || sourceRect.Height <= 0)
+        {
+            return;
+        }
+
+        BlitRgbaPixels(imageData.data, imageData.width, imageData.height, sourceRect, new Rect(dx, dy, sourceRect.Width, sourceRect.Height));
+    }
+
+    private void BlitRgbaPixels(byte[] sourcePixels, int sourceWidth, int sourceHeight, Rect sourceRect, Rect destinationRect)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0 || sourcePixels.Length < sourceWidth * sourceHeight * 4 || sourceRect.Width <= 0 || sourceRect.Height <= 0 || destinationRect.Width <= 0 || destinationRect.Height <= 0)
+        {
+            return;
+        }
+
+        var canvasWidth = GetCanvasPixelWidth(destinationRect.Right);
+        var canvasHeight = GetCanvasPixelHeight(destinationRect.Bottom);
+        EnsureRgbaBuffer(canvasWidth, canvasHeight);
+
+        var startX = Math.Max(0, (int)Math.Floor(destinationRect.X));
+        var startY = Math.Max(0, (int)Math.Floor(destinationRect.Y));
+        var endX = Math.Min(_rgbaWidth, (int)Math.Ceiling(destinationRect.Right));
+        var endY = Math.Min(_rgbaHeight, (int)Math.Ceiling(destinationRect.Bottom));
+
+        for (var y = startY; y < endY; y++)
+        {
+            var sourceYRatio = (y + 0.5 - destinationRect.Y) / destinationRect.Height;
+            var srcY = (int)Math.Floor(sourceRect.Y + (sourceYRatio * sourceRect.Height));
+            srcY = Math.Clamp(srcY, 0, sourceHeight - 1);
+
+            for (var x = startX; x < endX; x++)
+            {
+                var sourceXRatio = (x + 0.5 - destinationRect.X) / destinationRect.Width;
+                var srcX = (int)Math.Floor(sourceRect.X + (sourceXRatio * sourceRect.Width));
+                srcX = Math.Clamp(srcX, 0, sourceWidth - 1);
+
+                var source = ((srcY * sourceWidth) + srcX) * 4;
+                var target = ((y * _rgbaWidth) + x) * 4;
+                _rgbaPixels![target] = sourcePixels[source];
+                _rgbaPixels[target + 1] = sourcePixels[source + 1];
+                _rgbaPixels[target + 2] = sourcePixels[source + 2];
+                _rgbaPixels[target + 3] = sourcePixels[source + 3];
+            }
+        }
+    }
+
+    private int GetCanvasPixelWidth(double minimumWidth)
+    {
+        var width = canvas is AvaloniaDomElement element ? element.width : _owner.Bounds.Width;
+        return Math.Max(1, (int)Math.Ceiling(Math.Max(width, minimumWidth)));
+    }
+
+    private int GetCanvasPixelHeight(double minimumHeight)
+    {
+        var height = canvas is AvaloniaDomElement element ? element.height : _owner.Bounds.Height;
+        return Math.Max(1, (int)Math.Ceiling(Math.Max(height, minimumHeight)));
+    }
+
+    private void EnsureRgbaBuffer(int width, int height)
+    {
+        if (_rgbaPixels is not null && _rgbaWidth == width && _rgbaHeight == height)
+        {
+            return;
+        }
+
+        var oldPixels = _rgbaPixels;
+        var oldWidth = _rgbaWidth;
+        var oldHeight = _rgbaHeight;
+        _rgbaWidth = width;
+        _rgbaHeight = height;
+        _rgbaPixels = new byte[width * height * 4];
+
+        if (oldPixels is null)
+        {
+            return;
+        }
+
+        var copyWidth = Math.Min(oldWidth, width);
+        var copyHeight = Math.Min(oldHeight, height);
+        for (var y = 0; y < copyHeight; y++)
+        {
+            Array.Copy(oldPixels, y * oldWidth * 4, _rgbaPixels, y * width * 4, copyWidth * 4);
+        }
+    }
+
     private void DrawCanvasSurface(CanvasDrawingSurface surface, Rect sourceRect, Rect destinationRect)
     {
         if (ReferenceEquals(surface, _owner) || sourceRect.Width <= 0 || sourceRect.Height <= 0 || destinationRect.Width <= 0 || destinationRect.Height <= 0)
@@ -859,6 +1059,26 @@ internal sealed class CanvasRenderingContext2D
         }
 
         _owner.AddCommand(new DrawCanvasSurfaceCommand(surface, sourceRect, destinationRect, _state.CreateSnapshot()));
+    }
+
+    private static bool TryResolveImagePixels(object image, out int width, out int height, out byte[] pixels)
+    {
+        if (image is AvaloniaDomElement element &&
+            CanvasContextBridge.TryGetSurface(element.Control, out var canvasSurface) &&
+            canvasSurface.Context.TryGetRgbaPixels(out width, out height, out pixels))
+        {
+            return true;
+        }
+
+        if (AvaloniaDomImageElement.TryGetRgbaPixels(image, out width, out height, out pixels))
+        {
+            return true;
+        }
+
+        width = 0;
+        height = 0;
+        pixels = Array.Empty<byte>();
+        return false;
     }
 
     private static bool TryResolveCanvasSurface(object image, [NotNullWhen(true)] out CanvasDrawingSurface? surface, out Rect sourceRect)

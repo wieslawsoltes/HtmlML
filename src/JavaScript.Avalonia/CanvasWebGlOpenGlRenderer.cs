@@ -7,12 +7,16 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.OpenGL;
+using Avalonia.Threading;
 using Jint.Native;
 
 namespace JavaScript.Avalonia;
 
 internal sealed partial class CanvasWebGlRenderingContext
 {
+    private WebGlCommand[] _submittedCommands = Array.Empty<WebGlCommand>();
+    private bool _submitQueued;
+
     internal void OnOpenGlInit(GlInterface gl)
     {
         _openGlRenderer?.Dispose(gl);
@@ -42,7 +46,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         WebGlCommand[] commands;
         lock (_commandLock)
         {
-            commands = _commands.ToArray();
+            commands = _submittedCommands;
         }
 
         _openGlRenderer.Render(gl, framebuffer, pixelSize, commands);
@@ -52,8 +56,44 @@ internal sealed partial class CanvasWebGlRenderingContext
 
     private void RequestNativeRender()
     {
-        _openGlSurface?.RequestRender();
+        if (_openGlSurface is null)
+        {
+            return;
+        }
+
+        lock (_commandLock)
+        {
+            if (_submitQueued)
+            {
+                return;
+            }
+
+            _submitQueued = true;
+        }
+
+        Dispatcher.UIThread.Post(() => SubmitNativeFrame(allowClearOnly: false), DispatcherPriority.Send);
     }
+
+    private void SubmitNativeFrame(bool allowClearOnly)
+    {
+        CanvasOpenGlDrawingSurface? surface;
+        lock (_commandLock)
+        {
+            var commands = _commands.ToArray();
+            if (allowClearOnly || HasDrawCommand(commands) || !HasDrawCommand(_submittedCommands))
+            {
+                _submittedCommands = commands;
+            }
+
+            _submitQueued = false;
+            surface = _openGlSurface;
+        }
+
+        surface?.RequestRender();
+    }
+
+    private static bool HasDrawCommand(IEnumerable<WebGlCommand> commands)
+        => commands.Any(static command => command is WebGlDrawCommand);
 
     private void QueueClear(int mask)
     {
@@ -369,6 +409,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         {
             _context = context;
             _api = new OpenGlApi(gl);
+            _context.NativeGlCapabilities = _api.CapabilitySummary;
         }
 
         public void Render(GlInterface gl, int framebuffer, PixelSize pixelSize, IReadOnlyList<WebGlCommand> commands)
@@ -378,6 +419,7 @@ internal sealed partial class CanvasWebGlRenderingContext
                 _api = new OpenGlApi(gl);
             }
 
+            _context.NativeGlCapabilities = _api.CapabilitySummary;
             _api.BindFramebuffer(_context.FRAMEBUFFER, framebuffer);
             gl.Viewport(0, 0, pixelSize.Width, pixelSize.Height);
 
@@ -407,22 +449,30 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             gl.Flush();
+            string status;
             if (drawCalls > 0)
             {
-                _context.LastDrawStatus = $"Rendered {drawCalls} WebGL draw call(s) through Avalonia OpenGL";
+                status = $"Rendered {drawCalls}/{drawCommands} WebGL draw call(s) through Avalonia OpenGL";
+                if (drawCalls < drawCommands && !string.IsNullOrWhiteSpace(lastFailure))
+                {
+                    status += $"; last skipped draw: {lastFailure}";
+                }
             }
             else if (drawCommands == 0)
             {
-                _context.LastDrawStatus = "Rendered WebGL frame through Avalonia OpenGL";
+                status = $"Rendered WebGL frame through Avalonia OpenGL ({commands.Count} command(s), no draw commands)";
             }
             else if (!string.IsNullOrWhiteSpace(lastFailure))
             {
-                _context.LastDrawStatus = lastFailure;
+                status = lastFailure;
             }
             else
             {
-                _context.LastDrawStatus = "No WebGL draw calls completed through Avalonia OpenGL";
+                status = "No WebGL draw calls completed through Avalonia OpenGL";
             }
+
+            _context.LastDrawStatus = status;
+            _context.LastNativeDrawStatus = status;
         }
 
         public void Dispose(GlInterface gl)
@@ -502,6 +552,8 @@ internal sealed partial class CanvasWebGlRenderingContext
 
         private bool RenderDraw(GlInterface gl, int defaultFramebuffer, PixelSize pixelSize, WebGlDrawCommand command)
         {
+            DrainGlErrors(gl);
+
             if (command.Program is not { Deleted: false } program || !EnsureProgram(gl, program))
             {
                 return false;
@@ -511,13 +563,44 @@ internal sealed partial class CanvasWebGlRenderingContext
             {
                 return false;
             }
+            if (!CheckGlError(gl, "pipeline state"))
+            {
+                return false;
+            }
 
             ApplyViewport(gl, GetTargetPixelSize(pixelSize, command.State.Framebuffer), command.State.Viewport);
-            ApplyTextures(gl, command.Textures);
+            if (!CheckGlError(gl, "viewport"))
+            {
+                return false;
+            }
+
+            if (!ApplyTextures(gl, command.Textures))
+            {
+                return false;
+            }
+            if (!CheckGlError(gl, "texture binding"))
+            {
+                return false;
+            }
+
             gl.UseProgram(program.NativeId);
+            if (!CheckGlError(gl, "program bind"))
+            {
+                return false;
+            }
+
             ApplyUniforms(gl, program, command);
+            if (!CheckGlError(gl, "uniform upload"))
+            {
+                return false;
+            }
+
             EnsureVertexArray(gl);
             ApplyAttributes(gl, command);
+            if (!CheckGlError(gl, "attribute binding"))
+            {
+                return false;
+            }
 
             if (command.Indexed)
             {
@@ -536,15 +619,36 @@ internal sealed partial class CanvasWebGlRenderingContext
                 gl.DrawArrays(command.Mode, command.First, new IntPtr(command.Count));
             }
 
+            return CheckGlError(gl, $"draw {DescribeDrawCommand(command)}");
+        }
+
+        private bool CheckGlError(GlInterface gl, string stage)
+        {
             var error = gl.GetError();
             if (error == _context.NO_ERROR)
             {
                 return true;
             }
 
-            _context.LastDrawStatus = $"OpenGL draw failed with error 0x{error:X}";
+            _context.LastDrawStatus = $"OpenGL {stage} failed with error 0x{error:X}";
             return false;
         }
+
+        private void DrainGlErrors(GlInterface gl)
+        {
+            for (var i = 0; i < 16; i++)
+            {
+                if (gl.GetError() == _context.NO_ERROR)
+                {
+                    return;
+                }
+            }
+        }
+
+        private static string DescribeDrawCommand(WebGlDrawCommand command)
+            => command.Indexed
+                ? $"elements mode {command.Mode}, count {command.Count}, type 0x{command.Type:X}, offset {command.Offset}"
+                : $"arrays mode {command.Mode}, first {command.First}, count {command.Count}";
 
         private void EnsureVertexArray(GlInterface gl)
         {
@@ -586,19 +690,47 @@ internal sealed partial class CanvasWebGlRenderingContext
             {
                 return false;
             }
+            if (!CheckGlError(gl, "framebuffer bind"))
+            {
+                return false;
+            }
 
             var targetSize = GetTargetPixelSize(pixelSize, state.Framebuffer);
             gl.Viewport(0, 0, targetSize.Width, targetSize.Height);
+            if (!CheckGlError(gl, "framebuffer viewport"))
+            {
+                return false;
+            }
+
             _api.ColorMask(
                 ToByte(state.ColorMask.ElementAtOrDefault(0)),
                 ToByte(state.ColorMask.ElementAtOrDefault(1)),
                 ToByte(state.ColorMask.ElementAtOrDefault(2)),
                 ToByte(state.ColorMask.ElementAtOrDefault(3)));
+            if (!CheckGlError(gl, "color mask"))
+            {
+                return false;
+            }
+
             _api.DepthMask(ToByte(state.DepthMask));
+            if (!CheckGlError(gl, "depth mask"))
+            {
+                return false;
+            }
+
             Toggle(gl, _context.SCISSOR_TEST, state.EnabledCaps.Contains(_context.SCISSOR_TEST));
+            if (!CheckGlError(gl, "scissor toggle"))
+            {
+                return false;
+            }
+
             if (state.EnabledCaps.Contains(_context.SCISSOR_TEST))
             {
                 ApplyScissor(targetSize, state.Scissor);
+                if (!CheckGlError(gl, "scissor"))
+                {
+                    return false;
+                }
             }
 
             return true;
@@ -612,22 +744,81 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             gl.DepthFunc(state.DepthFunc);
+            if (!CheckGlError(gl, "depth func"))
+            {
+                return false;
+            }
+
             Toggle(gl, _context.DEPTH_TEST, state.EnabledCaps.Contains(_context.DEPTH_TEST));
+            if (!CheckGlError(gl, "depth test toggle"))
+            {
+                return false;
+            }
+
             Toggle(gl, _context.BLEND, state.EnabledCaps.Contains(_context.BLEND));
+            if (!CheckGlError(gl, "blend toggle"))
+            {
+                return false;
+            }
+
             Toggle(gl, _context.CULL_FACE, state.EnabledCaps.Contains(_context.CULL_FACE));
+            if (!CheckGlError(gl, "cull face toggle"))
+            {
+                return false;
+            }
+
             Toggle(gl, _context.POLYGON_OFFSET_FILL, state.EnabledCaps.Contains(_context.POLYGON_OFFSET_FILL));
+            if (!CheckGlError(gl, "polygon offset toggle"))
+            {
+                return false;
+            }
 
             _api.CullFace(state.CullFaceMode);
+            if (!CheckGlError(gl, "cull face"))
+            {
+                return false;
+            }
+
             _api.FrontFace(state.FrontFaceMode);
+            if (!CheckGlError(gl, "front face"))
+            {
+                return false;
+            }
+
             _api.LineWidth((float)state.LineWidth);
+            if (!CheckGlError(gl, "line width"))
+            {
+                return false;
+            }
+
             _api.PolygonOffset((float)state.PolygonOffsetFactor, (float)state.PolygonOffsetUnits);
+            if (!CheckGlError(gl, "polygon offset"))
+            {
+                return false;
+            }
+
             _api.BlendColor(
                 (float)state.BlendColor.ElementAtOrDefault(0),
                 (float)state.BlendColor.ElementAtOrDefault(1),
                 (float)state.BlendColor.ElementAtOrDefault(2),
                 (float)state.BlendColor.ElementAtOrDefault(3));
+            if (!CheckGlError(gl, "blend color"))
+            {
+                return false;
+            }
+
             _api.BlendEquationSeparate(state.BlendEquationRgb, state.BlendEquationAlpha);
+            if (!CheckGlError(gl, "blend equation"))
+            {
+                return false;
+            }
+
             _api.BlendFuncSeparate(state.BlendSrcRgb, state.BlendDstRgb, state.BlendSrcAlpha, state.BlendDstAlpha);
+            if (!CheckGlError(gl, "blend func"))
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -674,7 +865,11 @@ internal sealed partial class CanvasWebGlRenderingContext
 
             if (framebuffer.ColorTexture is { Deleted: false } colorTexture)
             {
-                EnsureTexture(gl, colorTexture);
+                if (!EnsureTexture(gl, colorTexture))
+                {
+                    return false;
+                }
+
                 if (relinkAttachments)
                 {
                     _api.FramebufferTexture2D(
@@ -686,9 +881,12 @@ internal sealed partial class CanvasWebGlRenderingContext
                 }
             }
 
-            AttachRenderbuffer(gl, framebuffer.DepthRenderbuffer, _context.DEPTH_ATTACHMENT, relinkAttachments);
-            AttachRenderbuffer(gl, framebuffer.StencilRenderbuffer, _context.STENCIL_ATTACHMENT, relinkAttachments);
-            AttachRenderbuffer(gl, framebuffer.DepthStencilRenderbuffer, _context.DEPTH_STENCIL_ATTACHMENT, relinkAttachments);
+            if (!AttachRenderbuffer(gl, framebuffer.DepthRenderbuffer, _context.DEPTH_ATTACHMENT, relinkAttachments) ||
+                !AttachRenderbuffer(gl, framebuffer.StencilRenderbuffer, _context.STENCIL_ATTACHMENT, relinkAttachments) ||
+                !AttachRenderbuffer(gl, framebuffer.DepthStencilRenderbuffer, _context.DEPTH_STENCIL_ATTACHMENT, relinkAttachments))
+            {
+                return false;
+            }
 
             if (!relinkAttachments)
             {
@@ -706,22 +904,30 @@ internal sealed partial class CanvasWebGlRenderingContext
             return true;
         }
 
-        private void AttachRenderbuffer(GlInterface gl, WebGlRenderbuffer? renderbuffer, int attachment, bool relink)
+        private bool AttachRenderbuffer(GlInterface gl, WebGlRenderbuffer? renderbuffer, int attachment, bool relink)
         {
             if (renderbuffer is not { Deleted: false })
             {
-                return;
+                return true;
             }
 
             if (!EnsureRenderbuffer(gl, renderbuffer))
             {
-                return;
+                return false;
             }
 
             if (relink)
             {
                 _api.FramebufferRenderbuffer(_context.FRAMEBUFFER, attachment, _context.RENDERBUFFER, renderbuffer.NativeId);
+                var error = gl.GetError();
+                if (error != _context.NO_ERROR)
+                {
+                    _context.LastDrawStatus = $"WebGL renderbuffer attachment 0x{attachment:X} failed with error 0x{error:X}";
+                    return false;
+                }
             }
+
+            return true;
         }
 
         private bool EnsureRenderbuffer(GlInterface gl, WebGlRenderbuffer renderbuffer)
@@ -742,16 +948,30 @@ internal sealed partial class CanvasWebGlRenderingContext
             _api.BindRenderbuffer(_context.RENDERBUFFER, renderbuffer.NativeId);
             if (renderbuffer.NativeDirty)
             {
+                var internalFormat = GetNativeRenderbufferInternalFormat(
+                    renderbuffer.InternalFormat == 0 ? _context.DEPTH_COMPONENT16 : renderbuffer.InternalFormat);
                 _api.RenderbufferStorage(
                     _context.RENDERBUFFER,
-                    renderbuffer.InternalFormat == 0 ? _context.DEPTH_COMPONENT16 : renderbuffer.InternalFormat,
+                    internalFormat,
                     renderbuffer.Width,
                     renderbuffer.Height);
+                var error = gl.GetError();
+                if (error != _context.NO_ERROR)
+                {
+                    _context.LastDrawStatus = $"WebGL renderbuffer storage failed for internal format 0x{internalFormat:X} with error 0x{error:X}";
+                    return false;
+                }
+
                 renderbuffer.NativeDirty = false;
             }
 
             return true;
         }
+
+        private int GetNativeRenderbufferInternalFormat(int internalFormat)
+            => internalFormat == _context.DEPTH_STENCIL
+                ? 0x88F0 // GL_DEPTH24_STENCIL8; WebGL exposes DEPTH_STENCIL as a renderbuffer storage shortcut.
+                : internalFormat;
 
         private static PixelSize GetTargetPixelSize(PixelSize defaultPixelSize, WebGlFramebuffer? framebuffer)
         {
@@ -1017,7 +1237,7 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
         }
 
-        private void ApplyTextures(GlInterface gl, IReadOnlyDictionary<int, WebGlTexture?> textures)
+        private bool ApplyTextures(GlInterface gl, IReadOnlyDictionary<int, WebGlTexture?> textures)
         {
             foreach (var entry in textures.OrderBy(static pair => pair.Key))
             {
@@ -1027,12 +1247,18 @@ internal sealed partial class CanvasWebGlRenderingContext
                 }
 
                 gl.ActiveTexture(_context.TEXTURE0 + entry.Key);
-                EnsureTexture(gl, texture);
+                if (!EnsureTexture(gl, texture))
+                {
+                    return false;
+                }
+
                 gl.BindTexture(texture.Target, texture.NativeId);
             }
+
+            return true;
         }
 
-        private void EnsureTexture(GlInterface gl, WebGlTexture texture)
+        private bool EnsureTexture(GlInterface gl, WebGlTexture texture)
         {
             if (texture.NativeId == 0)
             {
@@ -1045,11 +1271,17 @@ internal sealed partial class CanvasWebGlRenderingContext
             foreach (var parameter in texture.Parameters)
             {
                 gl.TexParameteri(texture.Target, parameter.Key, parameter.Value);
+                var parameterError = gl.GetError();
+                if (parameterError != _context.NO_ERROR)
+                {
+                    _context.LastDrawStatus = $"WebGL texture parameter 0x{parameter.Key:X}=0x{parameter.Value:X} failed with error 0x{parameterError:X}";
+                    return false;
+                }
             }
 
             if (!texture.NativeDirty)
             {
-                return;
+                return true;
             }
 
             _api.PixelStorei(_context.UNPACK_ALIGNMENT, texture.UnpackAlignment);
@@ -1070,12 +1302,26 @@ internal sealed partial class CanvasWebGlRenderingContext
                 WithPinned(bytes, ptr => gl.TexImage2D(texture.Target, texture.Level, nativeInternalFormat, texture.Width, texture.Height, texture.Border, texture.Format, nativeType, ptr));
             }
 
+            var imageError = gl.GetError();
+            if (imageError != _context.NO_ERROR)
+            {
+                _context.LastDrawStatus = $"WebGL texture upload failed target 0x{texture.Target:X}, internal 0x{nativeInternalFormat:X}, size {texture.Width}x{texture.Height}, format 0x{texture.Format:X}, type 0x{nativeType:X} with error 0x{imageError:X}";
+                return false;
+            }
+
             if (texture.GenerateMipmap)
             {
                 _api.GenerateMipmap(texture.Target);
+                var mipmapError = gl.GetError();
+                if (mipmapError != _context.NO_ERROR)
+                {
+                    _context.LastDrawStatus = $"WebGL texture mipmap failed target 0x{texture.Target:X} with error 0x{mipmapError:X}";
+                    return false;
+                }
             }
 
             texture.NativeDirty = false;
+            return true;
         }
 
         private int GetNativeTextureInternalFormat(WebGlTexture texture)
@@ -1376,6 +1622,8 @@ internal sealed partial class CanvasWebGlRenderingContext
 
     private sealed class OpenGlApi
     {
+        private static readonly Lazy<IntPtr> s_nativeOpenGl = new(LoadNativeOpenGlLibrary);
+
         private readonly Uniform1fDelegate? _uniform1f;
         private readonly Uniform2fDelegate? _uniform2f;
         private readonly Uniform3fDelegate? _uniform3f;
@@ -1450,9 +1698,12 @@ internal sealed partial class CanvasWebGlRenderingContext
             _bindRenderbuffer = Load<BindObjectDelegate>(gl, "glBindRenderbuffer");
             _renderbufferStorage = Load<RenderbufferStorageDelegate>(gl, "glRenderbufferStorage");
             _framebufferRenderbuffer = Load<FramebufferRenderbufferDelegate>(gl, "glFramebufferRenderbuffer");
+            CapabilitySummary = BuildCapabilitySummary();
         }
 
         public GlInterface Gl { get; }
+
+        public string CapabilitySummary { get; }
 
         public void Uniform1f(int location, float x)
         {
@@ -1493,15 +1744,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         public void PixelStorei(int pname, int param) => _pixelStorei?.Invoke(pname, param);
         public void GenerateMipmap(int target) => _generateMipmap?.Invoke(target);
         public int GenFramebuffer()
-        {
-            if (_genFramebuffers is null)
-            {
-                return Gl.GenFramebuffer();
-            }
-
-            _genFramebuffers(1, out var id);
-            return id;
-        }
+            => Gl.GenFramebuffer();
 
         public void DeleteFramebuffer(int framebuffer)
         {
@@ -1511,53 +1754,20 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             var id = framebuffer;
-            if (_deleteFramebuffers is not null)
-            {
-                _deleteFramebuffers(1, ref id);
-            }
-            else
-            {
-                Gl.DeleteFramebuffer(id);
-            }
+            Gl.DeleteFramebuffer(id);
         }
 
         public void BindFramebuffer(int target, int framebuffer)
-        {
-            if (_bindFramebuffer is not null)
-            {
-                _bindFramebuffer(target, framebuffer);
-            }
-            else
-            {
-                Gl.BindFramebuffer(target, framebuffer);
-            }
-        }
+            => Gl.BindFramebuffer(target, framebuffer);
 
         public int CheckFramebufferStatus(int target)
-            => _checkFramebufferStatus?.Invoke(target) ?? Gl.CheckFramebufferStatus(target);
+            => Gl.CheckFramebufferStatus(target);
 
         public void FramebufferTexture2D(int target, int attachment, int textarget, int texture, int level)
-        {
-            if (_framebufferTexture2D is not null)
-            {
-                _framebufferTexture2D(target, attachment, textarget, texture, level);
-            }
-            else
-            {
-                Gl.FramebufferTexture2D(target, attachment, textarget, texture, level);
-            }
-        }
+            => Gl.FramebufferTexture2D(target, attachment, textarget, texture, level);
 
         public int GenRenderbuffer()
-        {
-            if (_genRenderbuffers is null)
-            {
-                return Gl.GenRenderbuffer();
-            }
-
-            _genRenderbuffers(1, out var id);
-            return id;
-        }
+            => Gl.GenRenderbuffer();
 
         public void DeleteRenderbuffer(int renderbuffer)
         {
@@ -1567,49 +1777,40 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             var id = renderbuffer;
-            if (_deleteRenderbuffers is not null)
-            {
-                _deleteRenderbuffers(1, ref id);
-            }
-            else
-            {
-                Gl.DeleteRenderbuffer(id);
-            }
+            Gl.DeleteRenderbuffer(id);
         }
 
         public void BindRenderbuffer(int target, int renderbuffer)
-        {
-            if (_bindRenderbuffer is not null)
-            {
-                _bindRenderbuffer(target, renderbuffer);
-            }
-            else
-            {
-                Gl.BindRenderbuffer(target, renderbuffer);
-            }
-        }
+            => Gl.BindRenderbuffer(target, renderbuffer);
 
         public void RenderbufferStorage(int target, int internalFormat, int width, int height)
-        {
-            if (_renderbufferStorage is not null)
-            {
-                _renderbufferStorage(target, internalFormat, width, height);
-            }
-            else
-            {
-                Gl.RenderbufferStorage(target, internalFormat, width, height);
-            }
-        }
+            => Gl.RenderbufferStorage(target, internalFormat, width, height);
 
         public void FramebufferRenderbuffer(int target, int attachment, int renderbufferTarget, int renderbuffer)
+            => Gl.FramebufferRenderbuffer(target, attachment, renderbufferTarget, renderbuffer);
+
+        private string BuildCapabilitySummary()
         {
-            if (_framebufferRenderbuffer is not null)
+            var missing = new List<string>();
+            AddMissing(missing, _uniform2f, "uniform2f");
+            AddMissing(missing, _uniform3f, "uniform3f");
+            AddMissing(missing, _uniform4f, "uniform4f");
+            AddMissing(missing, _uniform1fv, "uniform1fv");
+            AddMissing(missing, _uniform1i, "uniform1i");
+            AddMissing(missing, _uniformMatrix2fv, "uniformMatrix2fv");
+            AddMissing(missing, _uniformMatrix3fv, "uniformMatrix3fv");
+            AddMissing(missing, _uniformMatrix4fv, "uniformMatrix4fv");
+            AddMissing(missing, _blendFuncSeparate, "blendFuncSeparate");
+            return missing.Count == 0
+                ? "native GL entry points available"
+                : "missing native GL entry points: " + string.Join(", ", missing);
+        }
+
+        private static void AddMissing(List<string> missing, Delegate? entryPoint, string name)
+        {
+            if (entryPoint is null)
             {
-                _framebufferRenderbuffer(target, attachment, renderbufferTarget, renderbuffer);
-            }
-            else
-            {
-                Gl.FramebufferRenderbuffer(target, attachment, renderbufferTarget, renderbuffer);
+                missing.Add(name);
             }
         }
 
@@ -1617,7 +1818,43 @@ internal sealed partial class CanvasWebGlRenderingContext
             where T : Delegate
         {
             var address = gl.GetProcAddress(name);
+            if (address == IntPtr.Zero)
+            {
+                address = TryGetNativeOpenGlExport(name);
+            }
+
             return address == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<T>(address);
+        }
+
+        private static IntPtr TryGetNativeOpenGlExport(string name)
+        {
+            var library = s_nativeOpenGl.Value;
+            return library != IntPtr.Zero && NativeLibrary.TryGetExport(library, name, out var address)
+                ? address
+                : IntPtr.Zero;
+        }
+
+        private static IntPtr LoadNativeOpenGlLibrary()
+        {
+            var names = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? new[]
+                {
+                    "/System/Library/Frameworks/OpenGL.framework/OpenGL",
+                    "/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL"
+                }
+                : RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                    ? new[] { "opengl32.dll" }
+                    : new[] { "libGL.so.1", "libGL.so" };
+
+            foreach (var name in names)
+            {
+                if (NativeLibrary.TryLoad(name, out var handle))
+                {
+                    return handle;
+                }
+            }
+
+            return IntPtr.Zero;
         }
 
         [UnmanagedFunctionPointer(CallingConvention.Winapi)]

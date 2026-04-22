@@ -748,9 +748,9 @@ try {
                 Engine.Invoke(cb, now);
                 ProcessPendingTasks();
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore callback errors
+                Console.Error.WriteLine($"requestAnimationFrame callback failed: {ex}");
             }
         }
 
