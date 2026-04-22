@@ -1,6 +1,6 @@
-const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/legacy/build/pdf.min.js';
-const PDFJS_WORKER_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/legacy/build/pdf.worker.min.js';
-const PDFJS_STANDARD_FONTS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/standard_fonts/';
+const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.10.377/legacy/build/pdf.min.js';
+const PDFJS_WORKER_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.10.377/legacy/build/pdf.worker.min.js';
+const PDFJS_STANDARD_FONTS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.10.377/standard_fonts/';
 const BUILT_IN_PDF_BASE64 = 'JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggMTkxID4+CnN0cmVhbQpCVAovRjEgMjggVGYKNzIgNzAwIFRkCihQREYuanMgaW4gSmF2YVNjcmlwdC5BdmFsb25pYSkgVGoKL0YxIDE0IFRmCjAgLTQwIFRkCihUaGlzIGJ1aWx0LWluIGRvY3VtZW50IGlzIHJlbmRlcmVkIGJ5IHBkZi5qcy4pIFRqCjAgLTI0IFRkCihVc2UgT3BlbiBQREYgdG8gcHJldmlldyBhbiBleHRlcm5hbCBkb2N1bWVudC4pIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNjQgMDAwMDAgbiAKMDAwMDAwMDEyMSAwMDAwMCBuIAowMDAwMDAwMjQ3IDAwMDAwIG4gCjAwMDAwMDAzMTcgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo1NTgKJSVFT0YK';
 
 const installPdfJsBrowserShims = () => {
@@ -13,32 +13,6 @@ const installPdfJsBrowserShims = () => {
     root.Blob = function Blob(parts, options) {
       this.parts = parts ?? [];
       this.type = options?.type ?? '';
-    };
-  }
-
-  if (typeof root.structuredClone === 'undefined') {
-    root.structuredClone = value => {
-      if (value == null || typeof value !== 'object') {
-        return value;
-      }
-
-      if (value instanceof ArrayBuffer) {
-        return value.slice(0);
-      }
-
-      if (ArrayBuffer.isView(value)) {
-        return new value.constructor(value);
-      }
-
-      if (Array.isArray(value)) {
-        return value.map(item => root.structuredClone(item));
-      }
-
-      const clone = {};
-      for (const key of Object.keys(value)) {
-        clone[key] = root.structuredClone(value[key]);
-      }
-      return clone;
     };
   }
 
@@ -182,7 +156,6 @@ const installPdfJsBrowserShims = () => {
   if (typeof window !== 'undefined') {
     window.location = root.location;
     window.Blob = root.Blob;
-    window.structuredClone = root.structuredClone;
     window.ReadableStream = root.ReadableStream;
     window.URL = root.URL;
   }
@@ -341,7 +314,6 @@ try {
 
 let currentDocument = null;
 let currentName = 'Built-in sample.pdf';
-let currentBytes = null;
 let currentPage = 1;
 let currentScale = 1;
 let renderSequence = 0;
@@ -357,13 +329,66 @@ const ensurePromisePump = () => {
   promisePumpId = window.setInterval(() => {}, 50);
 };
 
+const withTimeout = (promise, timeoutMs, onTimeout) => new Promise((resolve, reject) => {
+  let settled = false;
+  const timeoutId = setTimeout(() => {
+    if (settled) {
+      return;
+    }
+
+    settled = true;
+    try {
+      onTimeout?.();
+    } catch {
+    }
+
+    reject(new Error(`operation timed out after ${timeoutMs} ms`));
+  }, timeoutMs);
+
+  Promise.resolve(promise).then(
+    value => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeoutId);
+      resolve(value);
+    },
+    error => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeoutId);
+      reject(error);
+    });
+});
+
 const computeViewport = page => {
-  const unscaled = page.getViewport({ scale: 1 });
+  const view = Array.isArray(page.view) && page.view.length >= 4 ? page.view : [0, 0, 612, 792];
+  const xMin = Number(view[0]) || 0;
+  const yMin = Number(view[1]) || 0;
+  const xMax = Number(view[2]) || 612;
+  const yMax = Number(view[3]) || 792;
+  const pageWidth = Math.max(1, Math.abs(xMax - xMin));
+  const pageHeight = Math.max(1, Math.abs(yMax - yMin));
   const maxWidth = Math.max(120, (surface.offsetWidth || 640) - 36);
   const maxHeight = Math.max(120, (surface.offsetHeight || 460) - 36);
-  const fitScale = Math.min(maxWidth / unscaled.width, maxHeight / unscaled.height);
+  const fitScale = Math.min(maxWidth / pageWidth, maxHeight / pageHeight);
   const scale = Math.max(0.25, fitScale * currentScale);
-  return page.getViewport({ scale });
+
+  return {
+    viewBox: view,
+    scale,
+    rotation: page.rotate || 0,
+    offsetX: 0,
+    offsetY: 0,
+    width: pageWidth * scale,
+    height: pageHeight * scale,
+    transform: [scale, 0, 0, -scale, -xMin * scale, yMax * scale]
+  };
 };
 
 const drawPageShell = viewport => {
@@ -376,52 +401,6 @@ const drawPageShell = viewport => {
   context.lineWidth = 1;
   context.strokeRect(x, y, viewport.width, viewport.height);
   return { x, y };
-};
-
-const bytesToBinaryString = bytes => {
-  const chunks = [];
-  const chunkSize = 8192;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, Math.min(index + chunkSize, bytes.length));
-    chunks.push(String.fromCharCode.apply(null, Array.from(chunk)));
-  }
-  return chunks.join('');
-};
-
-const decodePdfLiteral = value => value
-  .replace(/\\([nrtbf()\\])/g, (_, code) => {
-    switch (code) {
-      case 'n':
-        return '\n';
-      case 'r':
-        return '\r';
-      case 't':
-        return '\t';
-      case 'b':
-        return '\b';
-      case 'f':
-        return '\f';
-      default:
-        return code;
-    }
-  })
-  .replace(/\\([0-7]{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
-
-const extractPdfTextLines = bytes => {
-  const binary = bytesToBinaryString(bytes ?? new Uint8Array());
-  const matches = binary.match(/\((?:\\.|[^\\)])*\)/g) ?? [];
-  const lines = [];
-  for (const match of matches) {
-    const decoded = decodePdfLiteral(match.slice(1, -1))
-      .replace(/[^\x09\x0a\x0d\x20-\x7e]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (decoded.length >= 3 && !decoded.startsWith('http')) {
-      lines.push(decoded);
-    }
-  }
-
-  return lines;
 };
 
 const drawWrappedLine = (text, x, y, maxWidth, lineHeight) => {
@@ -448,13 +427,12 @@ const drawWrappedLine = (text, x, y, maxWidth, lineHeight) => {
   return cursorY;
 };
 
-const renderRawPdfPreview = (name, data, reason) => {
+const drawUnavailablePreview = (name, reason) => {
   const viewport = {
     width: Math.max(240, (surface.offsetWidth || 640) - 44),
     height: Math.max(240, (surface.offsetHeight || 460) - 44)
   };
   const origin = drawPageShell(viewport);
-  const lines = extractPdfTextLines(data);
   const maxWidth = viewport.width - 48;
   let y = origin.y + 42;
 
@@ -464,112 +442,131 @@ const renderRawPdfPreview = (name, data, reason) => {
   y += 34;
   context.font = '13px Segoe UI';
   context.fillStyle = '#475569';
-  context.fillText(`Size: ${Math.round((data?.length ?? 0) / 1024)} KB`, origin.x + 24, y);
-  y += 34;
+  context.fillText(`PDF.js ${pdfjsLib.version ?? ''}`, origin.x + 24, y);
+  y += 38;
 
   context.font = '14px Segoe UI';
   context.fillStyle = '#111827';
-  if (lines.length) {
-    for (const line of lines.slice(0, 12)) {
-      y = drawWrappedLine(line, origin.x + 24, y, maxWidth, 20);
-      y += 4;
-      if (y > origin.y + viewport.height - 28) {
-        break;
-      }
-    }
-  } else {
-    drawWrappedLine('No uncompressed text was found in this PDF. The document was loaded, but the current JavaScript canvas environment cannot render this page through PDF.js yet.', origin.x + 24, y, maxWidth, 20);
-  }
+  y = drawWrappedLine(
+    'PDF.js could not render this page in the current JavaScript canvas runtime.',
+    origin.x + 24,
+    y,
+    maxWidth,
+    20);
+  y += 10;
+  context.fillStyle = '#64748b';
+  drawWrappedLine(String(reason?.message ?? reason ?? 'No renderer error was provided.'), origin.x + 24, y, maxWidth, 18);
 
-  updateInfo(`${name || 'PDF document'} - lightweight fallback preview`);
-  report(`PDF.js ${pdfjsLib.version ?? ''} loaded; using fallback preview because page rendering was unavailable: ${reason?.message ?? reason}`);
+  updateInfo(`${name || 'PDF document'} - render unavailable`);
+  report(`PDF.js ${pdfjsLib.version ?? ''} could not render the page: ${reason?.message ?? reason}`);
 };
 
-const renderTextPreview = async (page, viewport, origin, renderError) => {
-  const textContent = await page.getTextContent();
+const renderTextPreview = (page, viewport, origin, renderError) => page.getTextContent().then(textContent => {
   context.save();
-  context.translate(origin.x, origin.y);
-  context.fillStyle = '#0f172a';
-  context.textAlign = 'start';
-  context.textBaseline = 'alphabetic';
+  try {
+    context.translate(origin.x, origin.y);
+    context.fillStyle = '#0f172a';
+    context.textAlign = 'start';
+    context.textBaseline = 'alphabetic';
 
-  let drawn = 0;
-  for (const item of textContent.items ?? []) {
-    const text = String(item.str ?? '').trim();
-    if (!text) {
-      continue;
+    let drawn = 0;
+    for (const item of textContent.items ?? []) {
+      const text = String(item.str ?? '').trim();
+      if (!text) {
+        continue;
+      }
+
+      const transform = pdfjsLib.Util?.transform
+        ? pdfjsLib.Util.transform(viewport.transform, item.transform)
+        : item.transform;
+      const size = Math.max(7, Math.hypot(transform[2] ?? 0, transform[3] ?? 0) || item.height || 10);
+      const x = transform[4] ?? 0;
+      const y = transform[5] ?? 0;
+      context.font = `${size}px Segoe UI`;
+      context.fillText(text, x, y);
+      drawn += 1;
     }
 
-    const transform = pdfjsLib.Util?.transform
-      ? pdfjsLib.Util.transform(viewport.transform, item.transform)
-      : item.transform;
-    const size = Math.max(7, Math.hypot(transform[2] ?? 0, transform[3] ?? 0) || item.height || 10);
-    const x = transform[4] ?? 0;
-    const y = transform[5] ?? 0;
-    context.font = `${size}px Segoe UI`;
-    context.fillText(text, x, y);
-    drawn += 1;
+    const reason = renderError?.message ?? renderError ?? 'unsupported canvas operation';
+    if (drawn > 0) {
+      report(`PDF.js text preview for ${currentName}. Canvas render fallback: ${reason}`);
+    } else {
+      report(`Loaded ${currentName}, but this page has no extractable text. Canvas render fallback: ${reason}`);
+    }
+  } finally {
+    context.restore();
   }
+}, error => {
+  drawUnavailablePreview(currentName, error);
+});
 
-  context.restore();
-
-  const reason = renderError?.message ?? renderError ?? 'unsupported canvas operation';
-  if (drawn > 0) {
-    report(`PDF.js text preview for ${currentName}. Canvas render fallback: ${reason}`);
-  } else {
-    report(`Loaded ${currentName}, but this page has no extractable text. Canvas render fallback: ${reason}`);
-  }
-};
-
-const renderPage = async () => {
+const renderPage = () => {
   if (!currentDocument) {
     drawEmptyState('Load a PDF document to begin.');
-    return;
+    return Promise.resolve();
   }
 
   ensurePromisePump();
   const sequence = ++renderSequence;
   setDebugStage('get-page');
-  let page;
-  try {
-    page = await currentDocument.getPage(currentPage);
-  } catch (error) {
-    renderRawPdfPreview(currentName, currentBytes, error);
-    return;
-  }
 
-  if (sequence !== renderSequence) {
-    return;
-  }
-
-  setDebugStage('render-page');
-  const viewport = computeViewport(page);
-  const origin = drawPageShell(viewport);
-  updateInfo(`${currentName} - page ${currentPage} of ${currentDocument.numPages} - zoom ${Math.round(currentScale * 100)}%`);
-
-  try {
-    context.save();
-    context.translate(origin.x, origin.y);
-    const task = page.render({
-      canvasContext: context,
-      viewport,
-      canvasFactory: createCanvasFactory(),
-      background: '#ffffff'
-    });
-    await task.promise;
-    context.restore();
-    report(`PDF.js ${pdfjsLib.version ?? ''} rendered ${currentName}.`);
-  } catch (error) {
-    try {
-      context.restore();
-    } catch {
+  return currentDocument.getPage(currentPage).then(page => {
+    if (sequence !== renderSequence) {
+      return undefined;
     }
-    drawPageShell(viewport);
-    await renderTextPreview(page, viewport, origin, error);
-  }
+
+    setDebugStage('render-page');
+    const viewport = computeViewport(page);
+    setDebugStage('viewport-computed');
+    const origin = drawPageShell(viewport);
+    setDebugStage('page-shell-drawn');
+    updateInfo(`${currentName} - page ${currentPage} of ${currentDocument.numPages} - zoom ${Math.round(currentScale * 100)}%`);
+
+    let task;
+    try {
+      context.save();
+      context.translate(origin.x, origin.y);
+      task = page.render({
+        canvasContext: context,
+        viewport,
+        canvasFactory: createCanvasFactory(),
+        background: '#ffffff'
+      });
+      setDebugStage('render-task-created');
+    } catch (error) {
+      try {
+        context.restore();
+      } catch {
+      }
+
+      setDebugStage('render-page-fallback');
+      drawPageShell(viewport);
+      return renderTextPreview(page, viewport, origin, error);
+    }
+
+    return withTimeout(task.promise, 2500, () => {
+      setDebugStage('render-page-timeout');
+      task.cancel?.();
+    }).then(() => {
+      context.restore();
+      report(`PDF.js ${pdfjsLib.version ?? ''} rendered ${currentName}.`);
+    }, error => {
+      try {
+        context.restore();
+      } catch {
+      }
+
+      setDebugStage('render-page-fallback');
+      drawPageShell(viewport);
+      return renderTextPreview(page, viewport, origin, error);
+    });
+  }, error => {
+    drawUnavailablePreview(currentName, error);
+    return undefined;
+  });
 };
 
-const loadDocument = async (name, data) => {
+const loadDocument = (name, data) => {
   report(`Loading ${name}...`);
   updateInfo('');
   drawEmptyState('Loading PDF...');
@@ -582,22 +579,19 @@ const loadDocument = async (name, data) => {
   });
 
   setDebugStage('await-document');
-  try {
-    currentDocument = await loadingTask.promise;
-  } catch (error) {
+  return loadingTask.promise.then(document => {
+    currentDocument = document;
+    setDebugStage('document-loaded');
+    currentName = name || 'Untitled.pdf';
+    currentPage = 1;
+    currentScale = 1;
+    return renderPage();
+  }, error => {
     currentDocument = null;
     currentName = name || 'Untitled.pdf';
-    currentBytes = data;
-    renderRawPdfPreview(currentName, currentBytes, error);
-    return;
-  }
-
-  setDebugStage('document-loaded');
-  currentName = name || 'Untitled.pdf';
-  currentBytes = data;
-  currentPage = 1;
-  currentScale = 1;
-  await renderPage();
+    drawUnavailablePreview(currentName, error);
+    return undefined;
+  });
 };
 
 const loadBuiltIn = () => {

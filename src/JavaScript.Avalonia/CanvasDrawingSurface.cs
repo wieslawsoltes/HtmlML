@@ -387,6 +387,100 @@ internal sealed class FillTextCommand : CanvasDrawCommand
     }
 }
 
+internal sealed class StrokeTextCommand : CanvasDrawCommand
+{
+    private readonly string _text;
+    private readonly Point _origin;
+
+    public StrokeTextCommand(string text, Point origin, CanvasStateSnapshot state)
+        : base(state)
+    {
+        _text = text ?? string.Empty;
+        _origin = origin;
+    }
+
+    protected override void RenderCore(DrawingContext context)
+    {
+        if (string.IsNullOrEmpty(_text) || State.StrokeBrush is null)
+        {
+            return;
+        }
+
+        var formatted = new FormattedText(
+            _text,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            State.Typeface,
+            State.FontSize,
+            State.StrokeBrush);
+
+        formatted.SetForegroundBrush(State.StrokeBrush);
+        context.DrawText(formatted, AdjustOrigin(formatted));
+    }
+
+    private Point AdjustOrigin(FormattedText formatted)
+    {
+        var x = _origin.X;
+        var y = _origin.Y;
+
+        switch (State.TextAlign)
+        {
+            case CanvasTextAlign.Center:
+                x -= formatted.Width / 2;
+                break;
+            case CanvasTextAlign.Right:
+            case CanvasTextAlign.End:
+                x -= formatted.Width;
+                break;
+            case CanvasTextAlign.Left:
+            case CanvasTextAlign.Start:
+            default:
+                break;
+        }
+
+        switch (State.TextBaseline)
+        {
+            case CanvasTextBaseline.Top:
+                break;
+            case CanvasTextBaseline.Hanging:
+                y += formatted.Baseline * 0.2;
+                break;
+            case CanvasTextBaseline.Middle:
+                y -= formatted.Height / 2;
+                break;
+            case CanvasTextBaseline.Alphabetic:
+                y -= formatted.Baseline;
+                break;
+            case CanvasTextBaseline.Bottom:
+                y -= formatted.Height;
+                break;
+            case CanvasTextBaseline.Ideographic:
+                y -= formatted.Height * 0.9;
+                break;
+        }
+
+        return new Point(x, y);
+    }
+
+    public override Rect? GetBounds()
+    {
+        if (string.IsNullOrEmpty(_text))
+        {
+            return null;
+        }
+
+        var formatted = new FormattedText(
+            _text,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            State.Typeface,
+            State.FontSize,
+            State.StrokeBrush);
+
+        return new Rect(AdjustOrigin(formatted), new Size(formatted.Width, formatted.Height));
+    }
+}
+
 internal sealed class DrawImageCommand : CanvasDrawCommand
 {
     private readonly IImage _image;
@@ -461,6 +555,59 @@ internal sealed class CanvasTextMetrics
     }
 
     public double width { get; }
+}
+
+internal sealed class CanvasDomMatrix
+{
+    public CanvasDomMatrix(Matrix matrix)
+    {
+        a = matrix.M11;
+        b = matrix.M12;
+        c = matrix.M21;
+        d = matrix.M22;
+        e = matrix.M31;
+        f = matrix.M32;
+        m11 = a;
+        m12 = b;
+        m21 = c;
+        m22 = d;
+        m41 = e;
+        m42 = f;
+        is2D = true;
+        isIdentity = matrix.IsIdentity;
+    }
+
+    public double a { get; }
+
+    public double b { get; }
+
+    public double c { get; }
+
+    public double d { get; }
+
+    public double e { get; }
+
+    public double f { get; }
+
+    public double m11 { get; }
+
+    public double m12 { get; }
+
+    public double m21 { get; }
+
+    public double m22 { get; }
+
+    public double m41 { get; }
+
+    public double m42 { get; }
+
+    public bool is2D { get; }
+
+    public bool isIdentity { get; }
+
+    public double[] toFloat32Array() => new[] { a, b, 0, 0, c, d, 0, 0, 0, 0, 1, 0, e, f, 0, 1 };
+
+    public double[] toFloat64Array() => toFloat32Array();
 }
 
 internal sealed class CanvasImageData
@@ -580,6 +727,10 @@ internal sealed class CanvasRenderingContext2D
     public double shadowOffsetX { get; set; }
 
     public double shadowOffsetY { get; set; }
+
+    public double[] mozCurrentTransform => ToCanvasMatrix(_state.Transform);
+
+    public double[] mozCurrentTransformInverse => ToCanvasMatrix(InvertOrIdentity(_state.Transform));
 
     public void save()
     {
@@ -789,11 +940,35 @@ internal sealed class CanvasRenderingContext2D
         fillText(text, x, y);
     }
 
+    public void strokeText(string text, double x, double y)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        var origin = new Point(x, y);
+        _owner.AddCommand(new StrokeTextCommand(text, origin, _state.CreateSnapshot()));
+    }
+
+    public void strokeText(string text, double x, double y, double maxWidth)
+    {
+        strokeText(text, x, y);
+    }
+
+    public void strokeText(string text, double x, double y, object? maxWidth)
+    {
+        strokeText(text, x, y);
+    }
+
     public object measureText(string text)
     {
         var formatted = _owner.CreateFormattedText(text ?? string.Empty, _state.CreateSnapshot());
         return new CanvasTextMetrics(formatted.Width);
     }
+
+    public object getTransform()
+        => new CanvasDomMatrix(_state.Transform);
 
     public CanvasImageData createImageData(double sw, double sh)
         => new(Math.Max(0, (int)Math.Round(sw)), Math.Max(0, (int)Math.Round(sh)));
@@ -1107,6 +1282,32 @@ internal sealed class CanvasRenderingContext2D
         }
 
         return 0;
+    }
+
+    private static double[] ToCanvasMatrix(Matrix matrix)
+        => new[] { matrix.M11, matrix.M12, matrix.M21, matrix.M22, matrix.M31, matrix.M32 };
+
+    private static Matrix InvertOrIdentity(Matrix matrix)
+    {
+        var a = matrix.M11;
+        var b = matrix.M12;
+        var c = matrix.M21;
+        var d = matrix.M22;
+        var e = matrix.M31;
+        var f = matrix.M32;
+        var determinant = (a * d) - (b * c);
+        if (!double.IsFinite(determinant) || Math.Abs(determinant) < double.Epsilon)
+        {
+            return Matrix.Identity;
+        }
+
+        return new Matrix(
+            d / determinant,
+            -b / determinant,
+            -c / determinant,
+            a / determinant,
+            ((c * f) - (d * e)) / determinant,
+            ((b * e) - (a * f)) / determinant);
     }
 
     private static bool TryResolveImage(object image, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IImage? resolved, out Rect sourceRect)
