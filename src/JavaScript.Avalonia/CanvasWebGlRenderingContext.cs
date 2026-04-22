@@ -96,6 +96,8 @@ internal sealed partial class CanvasWebGlRenderingContext
     public int DrawCallCount { get; private set; }
     public int TriangleCount { get; private set; }
     public string LastDrawStatus { get; private set; } = "No draw call";
+    public string LastNativeDrawStatus { get; private set; } = "No native draw call";
+    public string NativeGlCapabilities { get; private set; } = string.Empty;
     public string RenderBackend => _openGlSurface?.RenderBackend ?? _openGlRenderBackend ?? _surface.LastWebGlRenderBackend;
     public bool IsOpenGlBacked => RenderBackend.StartsWith("Avalonia OpenGL", StringComparison.Ordinal);
     public bool IsSkiaGpuBacked => string.Equals(RenderBackend, "Skia GRContext", StringComparison.Ordinal);
@@ -1381,9 +1383,9 @@ internal sealed partial class CanvasWebGlRenderingContext
     public void drawArraysInstanced(int mode, int first, int count, int instanceCount)
         => drawArrays(mode, first, count);
 
-    public void flush() => RequestNativeRender();
+    public void flush() => SubmitNativeFrame(allowClearOnly: true);
 
-    public void finish() => RequestNativeRender();
+    public void finish() => SubmitNativeFrame(allowClearOnly: true);
 
     public bool isBuffer(WebGlBuffer? value) => value is not null;
     public bool isProgram(WebGlProgram? value) => value is not null;
@@ -1748,7 +1750,15 @@ internal sealed partial class CanvasWebGlRenderingContext
         }
 
         if (source is AvaloniaDomElement element &&
-            AvaloniaDomImageElement.TryGetRgbaPixels(element, out width, out height, out imagePixels))
+            CanvasContextBridge.TryGetSurface(element.Control, out var canvasSurface) &&
+            canvasSurface.Context.TryGetRgbaPixels(out width, out height, out var canvasPixels))
+        {
+            pixels = canvasPixels;
+            return true;
+        }
+
+        if (source is AvaloniaDomElement domElement &&
+            AvaloniaDomImageElement.TryGetRgbaPixels(domElement, out width, out height, out imagePixels))
         {
             pixels = imagePixels;
             return true;

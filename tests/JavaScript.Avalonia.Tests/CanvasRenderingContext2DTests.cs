@@ -58,6 +58,31 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void ImageData_RoundTripsPixelsForCanvasInterop()
+    {
+        var surface = new CanvasDrawingSurface();
+        var ctx = surface.Context;
+        var imageData = ctx.createImageData(2, 1);
+        imageData.data[0] = 10;
+        imageData.data[1] = 20;
+        imageData.data[2] = 30;
+        imageData.data[3] = 255;
+        imageData.data[4] = 40;
+        imageData.data[5] = 50;
+        imageData.data[6] = 60;
+        imageData.data[7] = 128;
+
+        ctx.putImageData(imageData, 0, 0);
+
+        var copy = ctx.getImageData(0, 0, 2, 1);
+        Assert.Equal(imageData.data, copy.data);
+        Assert.True(ctx.TryGetRgbaPixels(out var width, out var height, out var pixels));
+        Assert.Equal(2, width);
+        Assert.Equal(1, height);
+        Assert.Equal(imageData.data, pixels);
+    }
+
+    [AvaloniaFact]
     public void MeasureText_ReturnsWidth()
     {
         var surface = new CanvasDrawingSurface();

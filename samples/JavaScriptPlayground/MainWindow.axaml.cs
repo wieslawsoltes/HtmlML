@@ -37,12 +37,13 @@ public partial class MainWindow : Window
         _presets = CreatePresets();
         PresetCombo.ItemsSource = _presets;
         PresetCombo.SelectionChanged += PresetComboOnSelectionChanged;
-        PresetCombo.SelectedIndex = _presets.Count > 0 ? 0 : -1;
+        var presetIndex = ResolveStartupPresetIndex(_presets);
+        PresetCombo.SelectedIndex = presetIndex;
         AutoRunCheckBox.IsChecked = true;
 
-        if (_presets.Count > 0)
+        if (presetIndex >= 0)
         {
-            ApplyPreset(_presets[0]);
+            ApplyPreset(_presets[presetIndex]);
         }
         else
         {
@@ -2177,7 +2178,9 @@ renderScene = (delta = 0.01) => {
 
 const report = () => {
   if (status) {
-    status.textContent = `three.js ${THREE.REVISION} lava shader with BloomPass + OutputPass. Backend: ${gl.RenderBackend}; draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.`;
+    const native = gl.LastNativeDrawStatus ? ` native: ${gl.LastNativeDrawStatus}.` : '';
+    const caps = gl.NativeGlCapabilities ? ` ${gl.NativeGlCapabilities}.` : '';
+    status.textContent = `three.js ${THREE.REVISION} lava shader with BloomPass + OutputPass. Backend: ${gl.RenderBackend}; draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; ${gl.LastDrawStatus}.${native}${caps}`;
   }
 };
 
@@ -2195,6 +2198,10 @@ const render = timestamp => {
   }
 
   renderScene(0.01);
+  if (typeof gl.flush === 'function') {
+    gl.flush();
+  }
+
   report();
 
   if (running) {
@@ -3174,6 +3181,31 @@ refresh.addEventListener('click', () => updateTimeline());
 updateTimeline();
 """),
         };
+    }
+
+    private static int ResolveStartupPresetIndex(IReadOnlyList<Preset> presets)
+    {
+        if (presets.Count == 0)
+        {
+            return -1;
+        }
+
+        var requestedPreset = Environment.GetEnvironmentVariable("JAVASCRIPT_PLAYGROUND_PRESET");
+        if (string.IsNullOrWhiteSpace(requestedPreset))
+        {
+            return 0;
+        }
+
+        for (var i = 0; i < presets.Count; i++)
+        {
+            if (string.Equals(presets[i].Name, requestedPreset, StringComparison.OrdinalIgnoreCase) ||
+                presets[i].Name.Contains(requestedPreset, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return 0;
     }
 
     private sealed class Preset
