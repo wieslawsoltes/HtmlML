@@ -102,6 +102,80 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void PutImageData_RendersPixelData()
+    {
+        var surface = new CanvasDrawingSurface
+        {
+            Width = 4,
+            Height = 4
+        };
+        var window = new Window
+        {
+            Width = 4,
+            Height = 4,
+            Content = surface
+        };
+        var ctx = surface.Context;
+        var imageData = ctx.createImageData(1, 1);
+        imageData.data[0] = 255;
+        imageData.data[1] = 0;
+        imageData.data[2] = 0;
+        imageData.data[3] = 255;
+
+        ctx.putImageData(imageData, 1, 1);
+        window.Show();
+
+        using var frame = window.CaptureRenderedFrame();
+        Assert.NotNull(frame);
+
+        var rendered = ReadPixel(frame!, 1, 1);
+        Assert.True(rendered.R > 200, $"Expected putImageData to render a red pixel, but got {rendered}.");
+    }
+
+    [AvaloniaFact]
+    public void DrawImage_FromCanvasDoesNotDuplicatePixelAndSurfacePaths()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var sourceCanvas = HostTestUtilities.GetElement(host.Document.createElement("canvas"));
+        sourceCanvas.width = 4;
+        sourceCanvas.height = 4;
+        var sourceContext = Assert.IsType<CanvasRenderingContext2D>(sourceCanvas.getContext("2d"));
+        var imageData = sourceContext.createImageData(1, 1);
+        imageData.data[0] = 0;
+        imageData.data[1] = 255;
+        imageData.data[2] = 0;
+        imageData.data[3] = 255;
+        sourceContext.putImageData(imageData, 0, 0);
+
+        var target = new CanvasDrawingSurface();
+        var targetContext = target.Context;
+        targetContext.drawImage(sourceCanvas, 0, 0);
+
+        Assert.Single(target.Commands);
+        Assert.IsType<DrawCanvasSurfaceCommand>(target.Commands[0]);
+    }
+
+    [AvaloniaFact]
+    public void CanvasDimensionAssignment_ResetsContextStateAndCommands()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+        var canvas = HostTestUtilities.GetElement(host.Document.createElement("canvas"));
+        canvas.width = 4;
+        canvas.height = 4;
+        var context = Assert.IsType<CanvasRenderingContext2D>(canvas.getContext("2d"));
+        context.fillStyle = "#ff0000";
+        context.fillRect(0, 0, 4, 4);
+
+        canvas.width = 4;
+
+        Assert.Equal(0, context.CommandCount);
+        context.fillRect(0, 0, 1, 1);
+        Assert.True(CanvasContextBridge.TryGetSurface(canvas.Control, out var surface));
+        var command = Assert.IsType<FillRectCommand>(surface.Commands.Single());
+        Assert.Equal(Colors.Black, Assert.IsAssignableFrom<ISolidColorBrush>(command.Snapshot.FillBrush).Color);
+    }
+
+    [AvaloniaFact]
     public void MeasureText_ReturnsWidth()
     {
         var surface = new CanvasDrawingSurface();

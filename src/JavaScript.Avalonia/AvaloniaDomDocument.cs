@@ -1655,6 +1655,7 @@ public class AvaloniaDomElement
                 }
 
                 Control.Width = value;
+                CanvasContextBridge.Reset2D(Control);
             }
         }
     }
@@ -1681,6 +1682,7 @@ public class AvaloniaDomElement
                 }
 
                 Control.Height = value;
+                CanvasContextBridge.Reset2D(Control);
             }
         }
     }

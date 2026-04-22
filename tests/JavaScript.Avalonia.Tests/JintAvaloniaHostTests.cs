@@ -222,10 +222,17 @@ const matrix = new DOMMatrix([1, 2, 3, 4, 5, 6]).translateSelf(7, 8);
 const point = matrix.transformPoint(new DOMPoint(2, 3));
 const matrix3d = new DOMMatrix([1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 1, 0, 5, 6, 0, 1]);
 globalThis.domMatrixValues = [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f, point.x, point.y, matrix3d.e, matrix3d.f];
+const canvas = document.createElement('canvas');
+const context = canvas.getContext('2d');
+context.setTransform(new DOMMatrix([2, 3, 4, 5, 6, 7]));
+globalThis.contextMatrixValues = Array.from(context.mozCurrentTransform);
 """);
 
         var values = Assert.IsAssignableFrom<object[]>(host.Engine.GetValue("domMatrixValues").ToObject());
         Assert.Equal(new[] { 1d, 2d, 3d, 4d, 36d, 52d, 47d, 68d, 5d, 6d }, values.Select(Convert.ToDouble).ToArray());
+
+        var contextValues = Assert.IsAssignableFrom<object[]>(host.Engine.GetValue("contextMatrixValues").ToObject());
+        Assert.Equal(new[] { 2d, 3d, 4d, 5d, 6d, 7d }, contextValues.Select(Convert.ToDouble).ToArray());
     }
 
     [AvaloniaFact]
@@ -1578,6 +1585,8 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
             $"PDF.js sample did not finish loading. Stage: {host.Engine.GetValue("pdfDemoStage")}. Status: {status.Text}");
 
         Assert.Contains("PDF.js", status.Text);
+        Assert.Contains("rendered", status.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("fallback", status.Text, StringComparison.OrdinalIgnoreCase);
         var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("pdfSurface"));
         var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
         Assert.True(context.CommandCount > 0);

@@ -76,6 +76,11 @@ internal static class CanvasContextBridge
 
         public CanvasDrawingSurface Surface => _surface;
 
+        public void Reset2D()
+        {
+            _context.ResetForCanvasResize();
+        }
+
         private bool UsesNativeOpenGlTarget => ReferenceEquals(_openGlSurface, _target) || _target is CanvasOpenGlDrawingSurface;
 
         private static bool IsAttached(Visual visual) => visual.GetVisualRoot() is not null;
@@ -278,6 +283,14 @@ internal static class CanvasContextBridge
 
         surface = null;
         return false;
+    }
+
+    internal static void Reset2D(Control control)
+    {
+        if (control is not null && s_attachments.TryGetValue(control, out var attachment))
+        {
+            attachment.Reset2D();
+        }
     }
 
     private static bool TryFocus(Control control, NavigationMethod navigationMethod, KeyModifiers keyModifiers)

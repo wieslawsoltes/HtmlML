@@ -10,6 +10,10 @@ using Avalonia.Media;
 using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Jint;
+using Jint.Native;
+using Jint.Native.Object;
+using Jint.Runtime;
 
 namespace JavaScript.Avalonia;
 
@@ -21,6 +25,7 @@ internal sealed class CanvasDrawingSurface : Control
     private readonly List<CanvasDrawCommand> _commands = new();
     private CanvasRenderingContext2D? _context;
     private CanvasWebGlFrame? _webGlFrame;
+    private bool _visualInvalidated;
 
     internal IReadOnlyList<CanvasDrawCommand> Commands => _commands;
     internal string LastWebGlRenderBackend { get; private set; } = "not rendered";
@@ -43,7 +48,7 @@ internal sealed class CanvasDrawingSurface : Control
         }
 
         _commands.Add(command);
-        InvalidateVisual();
+        InvalidateCanvasVisual();
     }
 
     internal void ClearAll()
@@ -54,7 +59,7 @@ internal sealed class CanvasDrawingSurface : Control
         }
 
         _commands.Clear();
-        InvalidateVisual();
+        InvalidateCanvasVisual();
     }
 
     internal void ClearRect(Rect rect)
@@ -79,14 +84,14 @@ internal sealed class CanvasDrawingSurface : Control
 
         if (removed > 0)
         {
-            InvalidateVisual();
+            InvalidateCanvasVisual();
         }
     }
 
     internal void SetWebGlFrame(CanvasWebGlFrame? frame)
     {
         _webGlFrame = frame;
-        InvalidateVisual();
+        InvalidateCanvasVisual();
     }
 
     internal void SetWebGlRenderBackend(string backend)
@@ -97,6 +102,7 @@ internal sealed class CanvasDrawingSurface : Control
     public override void Render(DrawingContext context)
     {
         base.Render(context);
+        _visualInvalidated = false;
 
         var bounds = new Rect(Bounds.Size);
         if (bounds.Width <= 0 || bounds.Height <= 0)
@@ -123,6 +129,17 @@ internal sealed class CanvasDrawingSurface : Control
         {
             command.Render(context);
         }
+    }
+
+    internal void InvalidateCanvasVisual()
+    {
+        if (_visualInvalidated)
+        {
+            return;
+        }
+
+        _visualInvalidated = true;
+        InvalidateVisual();
     }
 
     internal FormattedText CreateFormattedText(string text, CanvasStateSnapshot state)
@@ -156,14 +173,14 @@ internal abstract class CanvasDrawCommand
 
         try
         {
-            if (!State.Transform.IsIdentity)
-            {
-                transform = context.PushTransform(State.Transform);
-            }
-
             if (State.ClipGeometry is not null)
             {
                 clip = context.PushGeometryClip(State.ClipGeometry);
+            }
+
+            if (!State.Transform.IsIdentity)
+            {
+                transform = context.PushTransform(State.Transform);
             }
 
             if (State.GlobalAlpha < 1.0)
@@ -176,8 +193,8 @@ internal abstract class CanvasDrawCommand
         finally
         {
             opacity?.Dispose();
-            clip?.Dispose();
             transform?.Dispose();
+            clip?.Dispose();
         }
     }
 
@@ -506,6 +523,33 @@ internal sealed class DrawImageCommand : CanvasDrawCommand
     public override Rect? GetBounds() => _destinationRect;
 }
 
+internal sealed class DrawRgbaPixelsCommand : CanvasDrawCommand
+{
+    private readonly WriteableBitmap _bitmap;
+    private readonly Rect _sourceRect;
+    private readonly Rect _destinationRect;
+
+    public DrawRgbaPixelsCommand(byte[] rgbaPixels, int width, int height, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot state)
+        : base(state)
+    {
+        _bitmap = CanvasBitmapFactory.CreateWriteableBitmap(width, height, rgbaPixels);
+        _sourceRect = sourceRect;
+        _destinationRect = destinationRect;
+    }
+
+    protected override void RenderCore(DrawingContext context)
+    {
+        if (_sourceRect.Width <= 0 || _sourceRect.Height <= 0 || _destinationRect.Width <= 0 || _destinationRect.Height <= 0)
+        {
+            return;
+        }
+
+        context.DrawImage(_bitmap, _sourceRect, _destinationRect);
+    }
+
+    public override Rect? GetBounds() => _destinationRect;
+}
+
 internal sealed class DrawCanvasSurfaceCommand : CanvasDrawCommand
 {
     private readonly IReadOnlyList<CanvasDrawCommand> _commands;
@@ -758,6 +802,24 @@ internal sealed class CanvasRenderingContext2D
         _state.Transform = new Matrix(a, b, c, d, e, f);
     }
 
+    public void setTransform(object? transform)
+    {
+        if (CanvasMatrixParser.TryReadMatrix(transform, out var matrix))
+        {
+            _state.Transform = matrix;
+        }
+    }
+
+    public void setTransform(JsValue transform)
+    {
+        setTransform((object?)transform);
+    }
+
+    public void setTransform(ObjectInstance transform)
+    {
+        setTransform((object?)transform);
+    }
+
     public void transform(double a, double b, double c, double d, double e, double f)
     {
         var m = new Matrix(a, b, c, d, e, f);
@@ -829,7 +891,15 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        _state.ClipGeometry = _path.BuildGeometry();
+        var geometry = _path.BuildGeometry();
+        if (!_state.Transform.IsIdentity)
+        {
+            geometry.Transform = new MatrixTransform(_state.Transform);
+        }
+
+        _state.ClipGeometry = _state.ClipGeometry is null
+            ? geometry
+            : new CombinedGeometry(GeometryCombineMode.Intersect, _state.ClipGeometry, geometry);
     }
 
     public void clip(string fillRule)
@@ -932,6 +1002,20 @@ internal sealed class CanvasRenderingContext2D
     public void clearRect(double x, double y, double width, double height)
     {
         var rect = new Rect(x, y, width, height);
+        if (rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        ClearRgbaPixels(rect);
+
+        var canvasRect = new Rect(0, 0, GetCanvasPixelWidth(0), GetCanvasPixelHeight(0));
+        if (rect.Contains(canvasRect))
+        {
+            _owner.ClearAll();
+            return;
+        }
+
         _owner.ClearRect(rect);
     }
 
@@ -1046,17 +1130,29 @@ internal sealed class CanvasRenderingContext2D
         return width > 0 && height > 0 && pixels.Length == width * height * 4;
     }
 
+    internal void ResetForCanvasResize()
+    {
+        _rgbaPixels = null;
+        _rgbaWidth = 0;
+        _rgbaHeight = 0;
+        _state = CanvasState.CreateDefault();
+        _stateStack.Clear();
+        _path.Clear();
+        _owner.ClearAll();
+    }
+
     public void drawImage(object image, double dx, double dy)
     {
-        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
-        {
-            var pixelSourceRect = new Rect(0, 0, pixelWidth, pixelHeight);
-            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, pixelSourceRect.Width, pixelSourceRect.Height));
-        }
-
         if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
         {
             DrawCanvasSurface(surface, canvasSourceRect, new Rect(dx, dy, canvasSourceRect.Width, canvasSourceRect.Height));
+            return;
+        }
+
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            var pixelSourceRect = new Rect(0, 0, pixelWidth, pixelHeight);
+            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, pixelSourceRect.Width, pixelSourceRect.Height), _state.CreateSnapshot());
             return;
         }
 
@@ -1081,14 +1177,15 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
-        {
-            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, new Rect(0, 0, pixelWidth, pixelHeight), new Rect(dx, dy, dWidth, dHeight));
-        }
-
         if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
         {
             DrawCanvasSurface(surface, canvasSourceRect, new Rect(dx, dy, dWidth, dHeight));
+            return;
+        }
+
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, new Rect(0, 0, pixelWidth, pixelHeight), new Rect(dx, dy, dWidth, dHeight), _state.CreateSnapshot());
             return;
         }
 
@@ -1108,15 +1205,6 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
-        {
-            var pixelSourceRect = new Rect(sx, sy, sWidth, sHeight).Intersect(new Rect(0, 0, pixelWidth, pixelHeight));
-            if (pixelSourceRect.Width > 0 && pixelSourceRect.Height > 0)
-            {
-                BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, dWidth, dHeight));
-            }
-        }
-
         if (TryResolveCanvasSurface(image, out var surface, out var canvasSourceRect))
         {
             var canvasCrop = new Rect(sx, sy, sWidth, sHeight);
@@ -1127,6 +1215,17 @@ internal sealed class CanvasRenderingContext2D
             }
 
             DrawCanvasSurface(surface, canvasBounded, new Rect(dx, dy, dWidth, dHeight));
+            return;
+        }
+
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            var pixelSourceRect = new Rect(sx, sy, sWidth, sHeight).Intersect(new Rect(0, 0, pixelWidth, pixelHeight));
+            if (pixelSourceRect.Width > 0 && pixelSourceRect.Height > 0)
+            {
+                BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, dWidth, dHeight), _state.CreateSnapshot());
+            }
+
             return;
         }
 
@@ -1162,10 +1261,16 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        BlitRgbaPixels(imageData.data, imageData.width, imageData.height, sourceRect, new Rect(dx, dy, sourceRect.Width, sourceRect.Height));
+        BlitRgbaPixels(
+            imageData.data,
+            imageData.width,
+            imageData.height,
+            sourceRect,
+            new Rect(dx, dy, sourceRect.Width, sourceRect.Height),
+            _state.CreateSnapshot(Matrix.Identity, ignoreClip: true, globalAlpha: 1.0));
     }
 
-    private void BlitRgbaPixels(byte[] sourcePixels, int sourceWidth, int sourceHeight, Rect sourceRect, Rect destinationRect)
+    private void BlitRgbaPixels(byte[] sourcePixels, int sourceWidth, int sourceHeight, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot drawState)
     {
         if (sourceWidth <= 0 || sourceHeight <= 0 || sourcePixels.Length < sourceWidth * sourceHeight * 4 || sourceRect.Width <= 0 || sourceRect.Height <= 0 || destinationRect.Width <= 0 || destinationRect.Height <= 0)
         {
@@ -1200,6 +1305,41 @@ internal sealed class CanvasRenderingContext2D
                 _rgbaPixels[target + 2] = sourcePixels[source + 2];
                 _rgbaPixels[target + 3] = sourcePixels[source + 3];
             }
+        }
+
+        _owner.AddCommand(new DrawRgbaPixelsCommand(sourcePixels, sourceWidth, sourceHeight, sourceRect, destinationRect, drawState));
+    }
+
+    private void ClearRgbaPixels(Rect rect)
+    {
+        if (_rgbaPixels is null || _rgbaWidth <= 0 || _rgbaHeight <= 0 || rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        var canvasRect = new Rect(0, 0, _rgbaWidth, _rgbaHeight);
+        if (rect.Contains(canvasRect))
+        {
+            _rgbaPixels = null;
+            _rgbaWidth = 0;
+            _rgbaHeight = 0;
+            return;
+        }
+
+        var clipped = rect.Intersect(canvasRect);
+        if (clipped.Width <= 0 || clipped.Height <= 0)
+        {
+            return;
+        }
+
+        var startX = Math.Max(0, (int)Math.Floor(clipped.X));
+        var startY = Math.Max(0, (int)Math.Floor(clipped.Y));
+        var endX = Math.Min(_rgbaWidth, (int)Math.Ceiling(clipped.Right));
+        var endY = Math.Min(_rgbaHeight, (int)Math.Ceiling(clipped.Bottom));
+        for (var y = startY; y < endY; y++)
+        {
+            var offset = ((y * _rgbaWidth) + startX) * 4;
+            Array.Clear(_rgbaPixels, offset, Math.Max(0, endX - startX) * 4);
         }
     }
 
@@ -1278,20 +1418,20 @@ internal sealed class CanvasRenderingContext2D
         out double width,
         out double height)
     {
-        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
-        {
-            source = CreateWriteableBitmap(pixelWidth, pixelHeight, pixelData);
-            width = pixelWidth;
-            height = pixelHeight;
-            return true;
-        }
-
         if (TryResolveCanvasSurface(image, out var surface, out var sourceRect))
         {
             source = RasterizeCanvasSurface(surface, sourceRect);
             width = sourceRect.Width;
             height = sourceRect.Height;
             return width > 0 && height > 0;
+        }
+
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            source = CanvasBitmapFactory.CreateWriteableBitmap(pixelWidth, pixelHeight, pixelData);
+            width = pixelWidth;
+            height = pixelHeight;
+            return true;
         }
 
         if (TryResolveImage(image, out var resolved, out var resolvedRect) &&
@@ -1318,50 +1458,18 @@ internal sealed class CanvasRenderingContext2D
 
         using (context.PushTransform(Matrix.CreateTranslation(-sourceRect.X, -sourceRect.Y)))
         {
-            surface.RenderCommands(context);
-        }
-
-        return bitmap;
-    }
-
-    private static WriteableBitmap CreateWriteableBitmap(int width, int height, byte[] rgbaPixels)
-    {
-        var bitmap = new WriteableBitmap(
-            new PixelSize(width, height),
-            new Vector(96, 96),
-            PixelFormat.Bgra8888,
-            AlphaFormat.Premul);
-
-        using var framebuffer = bitmap.Lock();
-        var bgraRow = new byte[width * 4];
-        for (var y = 0; y < height; y++)
-        {
-            var sourceOffset = y * width * 4;
-            for (var x = 0; x < width; x++)
+            if (surface.Commands.Count == 0 && surface.Context.TryGetRgbaPixels(out var pixelWidth, out var pixelHeight, out var pixels))
             {
-                var source = sourceOffset + x * 4;
-                var target = x * 4;
-                var alpha = rgbaPixels[source + 3];
-                bgraRow[target] = Premultiply(rgbaPixels[source + 2], alpha);
-                bgraRow[target + 1] = Premultiply(rgbaPixels[source + 1], alpha);
-                bgraRow[target + 2] = Premultiply(rgbaPixels[source], alpha);
-                bgraRow[target + 3] = alpha;
+                using var pixelBitmap = CanvasBitmapFactory.CreateWriteableBitmap(pixelWidth, pixelHeight, pixels);
+                context.DrawImage(pixelBitmap, new Rect(0, 0, pixelWidth, pixelHeight), new Rect(0, 0, pixelWidth, pixelHeight));
             }
-
-            Marshal.Copy(bgraRow, 0, IntPtr.Add(framebuffer.Address, y * framebuffer.RowBytes), bgraRow.Length);
+            else
+            {
+                surface.RenderCommands(context);
+            }
         }
 
         return bitmap;
-    }
-
-    private static byte Premultiply(byte channel, byte alpha)
-    {
-        if (alpha >= byte.MaxValue)
-        {
-            return channel;
-        }
-
-        return alpha == 0 ? (byte)0 : (byte)((channel * alpha + 127) / 255);
     }
 
     private static bool TryResolveCanvasSurface(object image, [NotNullWhen(true)] out CanvasDrawingSurface? surface, out Rect sourceRect)
@@ -1439,6 +1547,49 @@ internal sealed class CanvasRenderingContext2D
     }
 }
 
+internal static class CanvasBitmapFactory
+{
+    public static WriteableBitmap CreateWriteableBitmap(int width, int height, byte[] rgbaPixels)
+    {
+        var bitmap = new WriteableBitmap(
+            new PixelSize(width, height),
+            new Vector(96, 96),
+            PixelFormat.Bgra8888,
+            AlphaFormat.Premul);
+
+        using var framebuffer = bitmap.Lock();
+        var bgraRow = new byte[width * 4];
+        for (var y = 0; y < height; y++)
+        {
+            var sourceOffset = y * width * 4;
+            for (var x = 0; x < width; x++)
+            {
+                var source = sourceOffset + x * 4;
+                var target = x * 4;
+                var alpha = rgbaPixels[source + 3];
+                bgraRow[target] = Premultiply(rgbaPixels[source + 2], alpha);
+                bgraRow[target + 1] = Premultiply(rgbaPixels[source + 1], alpha);
+                bgraRow[target + 2] = Premultiply(rgbaPixels[source], alpha);
+                bgraRow[target + 3] = alpha;
+            }
+
+            Marshal.Copy(bgraRow, 0, IntPtr.Add(framebuffer.Address, y * framebuffer.RowBytes), bgraRow.Length);
+        }
+
+        return bitmap;
+    }
+
+    private static byte Premultiply(byte channel, byte alpha)
+    {
+        if (alpha >= byte.MaxValue)
+        {
+            return channel;
+        }
+
+        return alpha == 0 ? (byte)0 : (byte)((channel * alpha + 127) / 255);
+    }
+}
+
 internal sealed class CanvasState
 {
     public IImmutableBrush? FillBrush { get; set; } = new ImmutableSolidColorBrush(Colors.Black);
@@ -1504,6 +1655,10 @@ internal sealed class CanvasState
 
     public CanvasStateSnapshot CreateSnapshot() => new(this);
 
+    public CanvasStateSnapshot CreateSnapshot(Matrix transform) => new(this, transform);
+
+    public CanvasStateSnapshot CreateSnapshot(Matrix transform, bool ignoreClip, double globalAlpha) => new(this, transform, ignoreClip, globalAlpha);
+
     public void UpdateFont(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -1519,6 +1674,16 @@ internal sealed class CanvasState
 internal sealed class CanvasStateSnapshot
 {
     public CanvasStateSnapshot(CanvasState state)
+        : this(state, state.Transform)
+    {
+    }
+
+    public CanvasStateSnapshot(CanvasState state, Matrix transform)
+        : this(state, transform, false, state.GlobalAlpha)
+    {
+    }
+
+    public CanvasStateSnapshot(CanvasState state, Matrix transform, bool ignoreClip, double globalAlpha)
     {
         FillBrush = state.FillBrush;
         StrokeBrush = state.StrokeBrush;
@@ -1526,11 +1691,11 @@ internal sealed class CanvasStateSnapshot
         LineCap = state.LineCap;
         LineJoin = state.LineJoin;
         MiterLimit = state.MiterLimit;
-        GlobalAlpha = state.GlobalAlpha;
+        GlobalAlpha = Math.Clamp(globalAlpha, 0.0, 1.0);
         LineDash = state.LineDash.Length == 0 ? Array.Empty<double>() : (double[])state.LineDash.Clone();
         LineDashOffset = state.LineDashOffset;
-        Transform = state.Transform;
-        ClipGeometry = state.ClipGeometry;
+        Transform = transform;
+        ClipGeometry = ignoreClip ? null : state.ClipGeometry;
         Typeface = state.Typeface;
         FontSize = state.FontSize;
         TextAlign = state.TextAlign;
@@ -1839,7 +2004,7 @@ public sealed class CanvasPattern
 
     public void setTransform(object? transform)
     {
-        if (TryReadMatrix(transform, out var matrix))
+        if (CanvasMatrixParser.TryReadMatrix(transform, out var matrix))
         {
             _transform = matrix;
         }
@@ -1871,9 +2036,17 @@ public sealed class CanvasPattern
             "repeat-y" => TileMode.Tile,
             _ => TileMode.Tile
         };
+}
 
-    private static bool TryReadMatrix(object? value, out Matrix matrix)
+internal static class CanvasMatrixParser
+{
+    public static bool TryReadMatrix(object? value, out Matrix matrix)
     {
+        if (value is JsValue jsValue)
+        {
+            value = jsValue.IsObject() ? jsValue.AsObject() : jsValue.ToObject();
+        }
+
         if (value is CanvasDomMatrix domMatrix)
         {
             matrix = new Matrix(domMatrix.a, domMatrix.b, domMatrix.c, domMatrix.d, domMatrix.e, domMatrix.f);
@@ -1931,25 +2104,49 @@ public sealed class CanvasPattern
             return false;
         }
 
+        if (value is JsValue jsValue)
+        {
+            value = jsValue.IsObject() ? jsValue.AsObject() : jsValue.ToObject();
+        }
+
+        if (value is null)
+        {
+            return false;
+        }
+
+        if (value is ObjectInstance jsObject)
+        {
+            var property = jsObject.Get(name);
+            return !property.IsUndefined() && !property.IsNull() && TryConvertToDouble(property, out number);
+        }
+
         if (value is IDictionary dictionary && dictionary.Contains(name))
         {
             return TryConvertToDouble(dictionary[name], out number);
         }
 
-        var property = value.GetType().GetProperty(name);
-        return property is not null && TryConvertToDouble(property.GetValue(value), out number);
+        var propertyInfo = value.GetType().GetProperty(name);
+        return propertyInfo is not null && TryConvertToDouble(propertyInfo.GetValue(value), out number);
     }
 
     private static bool TryConvertToDouble(object? value, out double number)
     {
         switch (value)
         {
+            case JsValue jsValue:
+                if (jsValue.IsNumber())
+                {
+                    number = jsValue.AsNumber();
+                    return double.IsFinite(number);
+                }
+
+                return TryConvertToDouble(jsValue.ToObject(), out number);
             case double doubleValue:
                 number = doubleValue;
-                return true;
+                return double.IsFinite(number);
             case float floatValue:
                 number = floatValue;
-                return true;
+                return double.IsFinite(number);
             case int intValue:
                 number = intValue;
                 return true;
@@ -1958,12 +2155,12 @@ public sealed class CanvasPattern
                 return true;
             case decimal decimalValue:
                 number = (double)decimalValue;
-                return true;
+                return double.IsFinite(number);
             default:
                 try
                 {
                     number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
-                    return true;
+                    return double.IsFinite(number);
                 }
                 catch
                 {
