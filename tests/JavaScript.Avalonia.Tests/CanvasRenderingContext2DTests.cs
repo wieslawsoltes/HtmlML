@@ -96,6 +96,39 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void TransformAccessors_ReturnCanvasCompatibleMatrices()
+    {
+        var surface = new CanvasDrawingSurface();
+        var ctx = surface.Context;
+
+        ctx.setTransform(2, 3, 4, 5, 6, 7);
+
+        Assert.Equal(new[] { 2d, 3d, 4d, 5d, 6d, 7d }, ctx.mozCurrentTransform);
+        Assert.Equal(new[] { -2.5d, 1.5d, 2d, -1d, 1d, -2d }, ctx.mozCurrentTransformInverse);
+
+        var transform = Assert.IsType<CanvasDomMatrix>(ctx.getTransform());
+        Assert.Equal(2, transform.a);
+        Assert.Equal(3, transform.b);
+        Assert.Equal(4, transform.c);
+        Assert.Equal(5, transform.d);
+        Assert.Equal(6, transform.e);
+        Assert.Equal(7, transform.f);
+    }
+
+    [AvaloniaFact]
+    public void StrokeText_RecordsTextCommand()
+    {
+        var surface = new CanvasDrawingSurface();
+        var ctx = surface.Context;
+
+        ctx.strokeStyle = "#ff0000";
+        ctx.strokeText("PDF.js", 12, 24);
+
+        var command = Assert.IsType<StrokeTextCommand>(surface.Commands.Single());
+        Assert.Equal(Colors.Red, Assert.IsAssignableFrom<ISolidColorBrush>(command.Snapshot.StrokeBrush).Color);
+    }
+
+    [AvaloniaFact]
     public void Font_ParsesCssFamilyListAndStyle()
     {
         var surface = new CanvasDrawingSurface();

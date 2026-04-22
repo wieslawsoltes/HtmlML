@@ -1555,7 +1555,10 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
         var info = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("pdfInfo")).Control);
 
         Assert.True(
-            WaitFor(host, () => info.Text?.Contains("Built-in sample.pdf", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(20)),
+            WaitFor(host, () =>
+                info.Text?.Contains("Built-in sample.pdf", StringComparison.Ordinal) == true &&
+                status.Text?.Contains("PDF.js", StringComparison.Ordinal) == true,
+                TimeSpan.FromSeconds(20)),
             $"PDF.js sample did not finish loading. Stage: {host.Engine.GetValue("pdfDemoStage")}. Status: {status.Text}");
 
         Assert.Contains("PDF.js", status.Text);
