@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -67,11 +66,7 @@ internal sealed class PlaygroundFileBridge
                     await using var stream = await file.OpenReadAsync();
                     using var memory = new MemoryStream();
                     await stream.CopyToAsync(memory);
-                    var bytes = memory.ToArray();
-                    // PDF.js can parse some external PDFs but fail to render their pages in Jint's fake-worker path.
-                    // A host thumbnail keeps the playground preview useful instead of showing compressed PDF bytes.
-                    var previewImageBase64 = await TryCreatePdfPreviewImageBase64Async(file, bytes);
-                    result = PlaygroundPdfFileResult.Success(file.Name, Convert.ToBase64String(bytes), previewImageBase64);
+                    result = PlaygroundPdfFileResult.Success(file.Name, Convert.ToBase64String(memory.ToArray()));
                 }
             }
         }
@@ -94,92 +89,6 @@ internal sealed class PlaygroundFileBridge
             Console.Error.WriteLine($"PDF file callback failed: {ex}");
         }
     }
-
-    private static async Task<string> TryCreatePdfPreviewImageBase64Async(IStorageFile file, byte[] bytes)
-    {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return string.Empty;
-        }
-
-        var quickLookPath = "/usr/bin/qlmanage";
-        if (!File.Exists(quickLookPath))
-        {
-            return string.Empty;
-        }
-
-        var tempDirectory = Path.Combine(Path.GetTempPath(), "JavaScriptPlaygroundPdfPreview", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDirectory);
-
-        try
-        {
-            var sourcePath = file.TryGetLocalPath();
-            if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
-            {
-                sourcePath = Path.Combine(tempDirectory, "document.pdf");
-                await File.WriteAllBytesAsync(sourcePath, bytes);
-            }
-
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = quickLookPath,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
-
-            process.StartInfo.ArgumentList.Add("-t");
-            process.StartInfo.ArgumentList.Add("-s");
-            process.StartInfo.ArgumentList.Add("1400");
-            process.StartInfo.ArgumentList.Add("-o");
-            process.StartInfo.ArgumentList.Add(tempDirectory);
-            process.StartInfo.ArgumentList.Add(sourcePath);
-
-            if (!process.Start())
-            {
-                return string.Empty;
-            }
-
-            var waitForExit = process.WaitForExitAsync();
-            var completed = await Task.WhenAny(waitForExit, Task.Delay(TimeSpan.FromSeconds(8)));
-            if (completed != waitForExit)
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                }
-
-                return string.Empty;
-            }
-
-            if (process.ExitCode != 0)
-            {
-                return string.Empty;
-            }
-
-            var imagePath = Directory.EnumerateFiles(tempDirectory, "*.png").FirstOrDefault();
-            return imagePath is null ? string.Empty : Convert.ToBase64String(await File.ReadAllBytesAsync(imagePath));
-        }
-        catch
-        {
-            return string.Empty;
-        }
-        finally
-        {
-            try
-            {
-                Directory.Delete(tempDirectory, recursive: true);
-            }
-            catch
-            {
-            }
-        }
-    }
 }
 
 internal sealed class PlaygroundPdfFileResult
@@ -192,16 +101,13 @@ internal sealed class PlaygroundPdfFileResult
 
     public string dataBase64 { get; private init; } = string.Empty;
 
-    public string previewImageBase64 { get; private init; } = string.Empty;
-
     public string error { get; private init; } = string.Empty;
 
-    public static PlaygroundPdfFileResult Success(string name, string dataBase64, string? previewImageBase64 = null) => new()
+    public static PlaygroundPdfFileResult Success(string name, string dataBase64) => new()
     {
         success = true,
         name = name ?? string.Empty,
-        dataBase64 = dataBase64 ?? string.Empty,
-        previewImageBase64 = previewImageBase64 ?? string.Empty
+        dataBase64 = dataBase64 ?? string.Empty
     };
 
     public static PlaygroundPdfFileResult Cancelled() => new()

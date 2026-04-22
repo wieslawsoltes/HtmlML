@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -1566,68 +1565,6 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
     }
 
     [AvaloniaFact]
-    public void PdfJs_UsesHostPreviewWhenExternalPdfCannotRender()
-    {
-        var root = new Border
-        {
-            Background = Brushes.White,
-            Child = new StackPanel
-            {
-                Children =
-                {
-                    new Border { Name = "pdfSurface", Width = 640, Height = 460, Background = Brushes.White },
-                    new Button { Name = "pdfOpen" },
-                    new Button { Name = "pdfBuiltIn" },
-                    new Button { Name = "pdfPrev" },
-                    new Button { Name = "pdfNext" },
-                    new Button { Name = "pdfZoomIn" },
-                    new Button { Name = "pdfZoomOut" },
-                    new TextBlock { Name = "pdfInfo" },
-                    new TextBlock { Name = "pdfStatus" }
-                }
-            }
-        };
-        var window = new Window
-        {
-            Width = 760,
-            Height = 620,
-            Content = new VisualLayerManager { Child = root }
-        };
-
-        window.Show();
-        Dispatcher.UIThread.RunJobs();
-
-        var host = new JintAvaloniaHost(window);
-        host.ScriptBaseDirectory = Path.Combine(GetRepositoryRoot(), "samples", "JavaScriptPlayground");
-        host.Engine.SetValue(
-            "playgroundFiles",
-            new MockPdfBridge(
-                host,
-                "pid-legend.pdf",
-                Encoding.ASCII.GetBytes("%PDF-1.7\nbroken\n%%EOF\n"),
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAA1JREFUCJlj+M/A8B8ABQAB/6vONokAAAAASUVORK5CYII="));
-
-        host.Require("./Scripts/pdf-demo.js");
-        var status = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("pdfStatus")).Control);
-        var info = Assert.IsType<TextBlock>(HostTestUtilities.GetElement(host.Document.getElementById("pdfInfo")).Control);
-
-        Assert.True(
-            WaitFor(host, () => info.Text?.Contains("Built-in sample.pdf", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(20)),
-            $"PDF.js built-in sample did not finish loading. Stage: {host.Engine.GetValue("pdfDemoStage")}. Status: {status.Text}");
-
-        host.ExecuteScriptText("document.getElementById('pdfOpen').dispatchEvent('click');");
-
-        Assert.True(
-            WaitFor(host, () => info.Text?.Contains("pid-legend.pdf - host preview", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(20)),
-            $"PDF.js sample did not finish loading. Stage: {host.Engine.GetValue("pdfDemoStage")}. Status: {status.Text}");
-        Assert.Contains("host PDF preview", status.Text);
-
-        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("pdfSurface"));
-        var context = Assert.IsType<CanvasRenderingContext2D>(surfaceElement.getContext("2d"));
-        Assert.True(context.CommandCount > 0);
-    }
-
-    [AvaloniaFact]
     public void ImportScripts_ExecutesScript()
     {
         var (host, _) = HostTestUtilities.CreateHost();
@@ -1781,36 +1718,6 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
             var session = new MockHostShellSession(command, columns, rows);
             sessions.Add(session);
             return session;
-        }
-    }
-
-    private sealed class MockPdfBridge
-    {
-        private readonly JintAvaloniaHost _host;
-        private readonly string _name;
-        private readonly byte[] _data;
-        private readonly string _previewImageBase64;
-
-        public MockPdfBridge(JintAvaloniaHost host, string name, byte[] data, string previewImageBase64)
-        {
-            _host = host;
-            _name = name;
-            _data = data;
-            _previewImageBase64 = previewImageBase64;
-        }
-
-        public void openPdfDocument(JsValue callback)
-        {
-            var result = new
-            {
-                success = true,
-                cancelled = false,
-                name = _name,
-                dataBase64 = Convert.ToBase64String(_data),
-                previewImageBase64 = _previewImageBase64,
-                error = string.Empty
-            };
-            _host.Engine.Invoke(callback, result);
         }
     }
 
