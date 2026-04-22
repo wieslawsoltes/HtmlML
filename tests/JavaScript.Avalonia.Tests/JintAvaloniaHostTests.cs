@@ -1512,6 +1512,15 @@ const paperGlobal = typeof window !== 'undefined' ? window.paper : undefined;
 const paper = paperModule?.paper ?? paperModule?.default ?? paperGlobal ?? paperModule;
 
 paper.setup(paperCanvas);
+const wave = new paper.Path({
+  strokeColor: '#38bdf8',
+  strokeWidth: 2,
+  opacity: 0.75
+});
+wave.add(new paper.Point(0, 240));
+wave.add(new paper.Point(120, 220));
+wave.add(new paper.Point(240, 240));
+wave.smooth({ type: 'catmull-rom', factor: 0.5 });
 const circle = new paper.Path.Circle({
   center: [120, 90],
   radius: 48,

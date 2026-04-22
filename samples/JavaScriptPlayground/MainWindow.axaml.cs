@@ -2321,6 +2321,16 @@ const clearGrid = () => {
   }
 };
 
+const clearCanvasObjects = () => {
+  canvas.discardActiveObject?.();
+  canvas.getObjects().slice().forEach(object => canvas.remove(object));
+  canvas.backgroundImage = null;
+  canvas.overlayImage = null;
+  canvas.overlayColor = '';
+  canvas.clearContext?.(canvas.contextContainer);
+  canvas.clearContext?.(canvas.contextTop);
+};
+
 const createGrid = () => {
   clearGrid();
   const step = 60;
@@ -2371,7 +2381,7 @@ const toggleGrid = () => {
 const baseShapes = () => {
   clearGrid();
   gridVisible = false;
-  canvas.clear();
+  clearCanvasObjects();
   canvas.backgroundColor = '#f1f5f9';
 
   const gradientRect = new fabric.Rect({
@@ -2656,8 +2666,7 @@ ribbon.blendMode = 'soft-light';
 const wave = new paper.Path({
   strokeColor: '#38bdf8',
   strokeWidth: 2,
-  opacity: 0.75,
-  smooth: true
+  opacity: 0.75
 });
 wave.sendToBack();
 let waveBase = [];
