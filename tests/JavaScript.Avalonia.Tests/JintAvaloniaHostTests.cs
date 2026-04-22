@@ -213,6 +213,22 @@ globalThis.reflectNullPrototype = typeof Reflect !== 'undefined' ? Reflect.getPr
     }
 
     [AvaloniaFact]
+    public void DomMatrix_ProvidesCanvasCompatible2DMatrix()
+    {
+        var (host, _) = HostTestUtilities.CreateHost();
+
+        host.Engine.Execute("""
+const matrix = new DOMMatrix([1, 2, 3, 4, 5, 6]).translateSelf(7, 8);
+const point = matrix.transformPoint(new DOMPoint(2, 3));
+const matrix3d = new DOMMatrix([1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 1, 0, 5, 6, 0, 1]);
+globalThis.domMatrixValues = [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f, point.x, point.y, matrix3d.e, matrix3d.f];
+""");
+
+        var values = Assert.IsAssignableFrom<object[]>(host.Engine.GetValue("domMatrixValues").ToObject());
+        Assert.Equal(new[] { 1d, 2d, 3d, 4d, 36d, 52d, 47d, 68d, 5d, 6d }, values.Select(Convert.ToDouble).ToArray());
+    }
+
+    [AvaloniaFact]
     public async Task SetTimeout_InvokesCallback()
     {
         var (host, _) = HostTestUtilities.CreateHost();

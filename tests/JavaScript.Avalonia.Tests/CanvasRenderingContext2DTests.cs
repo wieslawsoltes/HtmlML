@@ -58,6 +58,25 @@ public class CanvasRenderingContext2DTests
     }
 
     [AvaloniaFact]
+    public void CreatePattern_UsesTiledImageBrush()
+    {
+        using var bitmap = new WriteableBitmap(new PixelSize(4, 4), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
+        var surface = new CanvasDrawingSurface();
+        var ctx = surface.Context;
+
+        var pattern = ctx.createPattern(bitmap, "repeat");
+
+        Assert.NotNull(pattern);
+        ctx.fillStyle = pattern;
+        ctx.fillRect(0, 0, 20, 20);
+
+        var command = Assert.IsType<FillRectCommand>(surface.Commands.Single());
+        var brush = Assert.IsAssignableFrom<ITileBrush>(command.Snapshot.FillBrush);
+        Assert.Equal(TileMode.Tile, brush.TileMode);
+        Assert.Equal(new RelativeRect(new Rect(0, 0, 4, 4), RelativeUnit.Absolute), brush.DestinationRect);
+    }
+
+    [AvaloniaFact]
     public void ImageData_RoundTripsPixelsForCanvasInterop()
     {
         var surface = new CanvasDrawingSurface();

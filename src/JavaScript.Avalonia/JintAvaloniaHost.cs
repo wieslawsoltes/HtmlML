@@ -375,6 +375,172 @@ var navigator = (__avaloniaGlobal && __avaloniaGlobal.navigator) || (window && w
     }
   }
 
+  function installDomMatrix() {
+    if (typeof globalThis !== 'undefined' && typeof globalThis.DOMMatrix === 'function') {
+      return;
+    }
+
+    function readMatrixValue(source, name, fallback) {
+      var value = source && source[name];
+      return typeof value === 'number' && isFinite(value) ? value : fallback;
+    }
+
+    function assignMatrix(target, a, b, c, d, e, f) {
+      target.a = a;
+      target.b = b;
+      target.c = c;
+      target.d = d;
+      target.e = e;
+      target.f = f;
+      target.m11 = a;
+      target.m12 = b;
+      target.m13 = 0;
+      target.m14 = 0;
+      target.m21 = c;
+      target.m22 = d;
+      target.m23 = 0;
+      target.m24 = 0;
+      target.m31 = 0;
+      target.m32 = 0;
+      target.m33 = 1;
+      target.m34 = 0;
+      target.m41 = e;
+      target.m42 = f;
+      target.m43 = 0;
+      target.m44 = 1;
+      target.is2D = true;
+      target.isIdentity = a === 1 && b === 0 && c === 0 && d === 1 && e === 0 && f === 0;
+      return target;
+    }
+
+    function multiply(left, right) {
+      return [
+        left.a * right.a + left.c * right.b,
+        left.b * right.a + left.d * right.b,
+        left.a * right.c + left.c * right.d,
+        left.b * right.c + left.d * right.d,
+        left.a * right.e + left.c * right.f + left.e,
+        left.b * right.e + left.d * right.f + left.f
+      ];
+    }
+
+    function DOMMatrix(init) {
+      if (Array.isArray(init) || (init && typeof init.length === 'number')) {
+        if (init.length >= 16) {
+          assignMatrix(this, Number(init[0]) || 0, Number(init[1]) || 0, Number(init[4]) || 0, Number(init[5]) || 0, Number(init[12]) || 0, Number(init[13]) || 0);
+          return;
+        }
+
+        if (init.length >= 6) {
+          assignMatrix(this, Number(init[0]) || 0, Number(init[1]) || 0, Number(init[2]) || 0, Number(init[3]) || 0, Number(init[4]) || 0, Number(init[5]) || 0);
+          return;
+        }
+      }
+
+      if (init && typeof init === 'object') {
+        assignMatrix(
+          this,
+          readMatrixValue(init, 'a', readMatrixValue(init, 'm11', 1)),
+          readMatrixValue(init, 'b', readMatrixValue(init, 'm12', 0)),
+          readMatrixValue(init, 'c', readMatrixValue(init, 'm21', 0)),
+          readMatrixValue(init, 'd', readMatrixValue(init, 'm22', 1)),
+          readMatrixValue(init, 'e', readMatrixValue(init, 'm41', 0)),
+          readMatrixValue(init, 'f', readMatrixValue(init, 'm42', 0)));
+        return;
+      }
+
+      assignMatrix(this, 1, 0, 0, 1, 0, 0);
+    }
+
+    DOMMatrix.fromMatrix = function(source) {
+      return new DOMMatrix(source);
+    };
+    DOMMatrix.fromFloat32Array = function(source) {
+      return new DOMMatrix(source);
+    };
+    DOMMatrix.fromFloat64Array = function(source) {
+      return new DOMMatrix(source);
+    };
+
+    DOMMatrix.prototype.multiplySelf = function(other) {
+      var result = multiply(this, new DOMMatrix(other));
+      return assignMatrix(this, result[0], result[1], result[2], result[3], result[4], result[5]);
+    };
+    DOMMatrix.prototype.preMultiplySelf = function(other) {
+      var result = multiply(new DOMMatrix(other), this);
+      return assignMatrix(this, result[0], result[1], result[2], result[3], result[4], result[5]);
+    };
+    DOMMatrix.prototype.multiply = function(other) {
+      return new DOMMatrix(this).multiplySelf(other);
+    };
+    DOMMatrix.prototype.translateSelf = function(tx, ty) {
+      return this.multiplySelf([1, 0, 0, 1, Number(tx) || 0, Number(ty) || 0]);
+    };
+    DOMMatrix.prototype.scaleSelf = function(scaleX, scaleY) {
+      var sx = typeof scaleX === 'number' ? scaleX : 1;
+      var sy = typeof scaleY === 'number' ? scaleY : sx;
+      return this.multiplySelf([sx, 0, 0, sy, 0, 0]);
+    };
+    DOMMatrix.prototype.rotateSelf = function(angle) {
+      var radians = (Number(angle) || 0) * Math.PI / 180;
+      var cos = Math.cos(radians);
+      var sin = Math.sin(radians);
+      return this.multiplySelf([cos, sin, -sin, cos, 0, 0]);
+    };
+    DOMMatrix.prototype.inverse = function() {
+      return new DOMMatrix(this).invertSelf();
+    };
+    DOMMatrix.prototype.invertSelf = function() {
+      var determinant = this.a * this.d - this.b * this.c;
+      if (!determinant || !isFinite(determinant)) {
+        return assignMatrix(this, NaN, NaN, NaN, NaN, NaN, NaN);
+      }
+
+      return assignMatrix(
+        this,
+        this.d / determinant,
+        -this.b / determinant,
+        -this.c / determinant,
+        this.a / determinant,
+        (this.c * this.f - this.d * this.e) / determinant,
+        (this.b * this.e - this.a * this.f) / determinant);
+    };
+    DOMMatrix.prototype.transformPoint = function(point) {
+      var x = readMatrixValue(point, 'x', 0);
+      var y = readMatrixValue(point, 'y', 0);
+      return {
+        x: this.a * x + this.c * y + this.e,
+        y: this.b * x + this.d * y + this.f,
+        z: readMatrixValue(point, 'z', 0),
+        w: readMatrixValue(point, 'w', 1)
+      };
+    };
+    DOMMatrix.prototype.toFloat32Array = function() {
+      return [this.a, this.b, 0, 0, this.c, this.d, 0, 0, 0, 0, 1, 0, this.e, this.f, 0, 1];
+    };
+    DOMMatrix.prototype.toFloat64Array = DOMMatrix.prototype.toFloat32Array;
+
+    function DOMPoint(x, y, z, w) {
+      this.x = Number(x) || 0;
+      this.y = Number(y) || 0;
+      this.z = Number(z) || 0;
+      this.w = typeof w === 'number' ? w : 1;
+    }
+    DOMPoint.fromPoint = function(point) {
+      return new DOMPoint(readMatrixValue(point, 'x', 0), readMatrixValue(point, 'y', 0), readMatrixValue(point, 'z', 0), readMatrixValue(point, 'w', 1));
+    };
+    DOMPoint.prototype.matrixTransform = function(matrix) {
+      return new DOMMatrix(matrix).transformPoint(this);
+    };
+
+    defineGlobal('DOMMatrix', DOMMatrix);
+    defineGlobal('DOMMatrixReadOnly', DOMMatrix);
+    defineGlobal('DOMPoint', DOMPoint);
+    defineGlobal('DOMPointReadOnly', DOMPoint);
+  }
+
+  installDomMatrix();
+
   function defineDomCtor(name, predicate) {
     var ctor = function() {};
     try {

@@ -3,10 +3,13 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 
 namespace JavaScript.Avalonia;
 
@@ -864,6 +867,19 @@ internal sealed class CanvasRenderingContext2D
         return new CanvasRadialGradient(x0, y0, r0, x1, y1, r1);
     }
 
+    public CanvasPattern? createPattern(object image, string repetition)
+    {
+        if (!TryCreatePatternSource(image, out var source, out var width, out var height))
+        {
+            return null;
+        }
+
+        return new CanvasPattern(source, width, height, repetition);
+    }
+
+    public CanvasPattern? createPattern(object image, object? repetition)
+        => createPattern(image, Convert.ToString(repetition, CultureInfo.InvariantCulture) ?? "repeat");
+
     public void stroke()
     {
         if (_path.IsEmpty)
@@ -1254,6 +1270,98 @@ internal sealed class CanvasRenderingContext2D
         height = 0;
         pixels = Array.Empty<byte>();
         return false;
+    }
+
+    private static bool TryCreatePatternSource(
+        object image,
+        [NotNullWhen(true)] out IImageBrushSource? source,
+        out double width,
+        out double height)
+    {
+        if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
+        {
+            source = CreateWriteableBitmap(pixelWidth, pixelHeight, pixelData);
+            width = pixelWidth;
+            height = pixelHeight;
+            return true;
+        }
+
+        if (TryResolveCanvasSurface(image, out var surface, out var sourceRect))
+        {
+            source = RasterizeCanvasSurface(surface, sourceRect);
+            width = sourceRect.Width;
+            height = sourceRect.Height;
+            return width > 0 && height > 0;
+        }
+
+        if (TryResolveImage(image, out var resolved, out var resolvedRect) &&
+            resolved is IImageBrushSource imageBrushSource)
+        {
+            source = imageBrushSource;
+            width = resolvedRect.Width;
+            height = resolvedRect.Height;
+            return width > 0 && height > 0;
+        }
+
+        source = null;
+        width = 0;
+        height = 0;
+        return false;
+    }
+
+    private static RenderTargetBitmap RasterizeCanvasSurface(CanvasDrawingSurface surface, Rect sourceRect)
+    {
+        var width = Math.Max(1, (int)Math.Ceiling(sourceRect.Width));
+        var height = Math.Max(1, (int)Math.Ceiling(sourceRect.Height));
+        var bitmap = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
+        using var context = bitmap.CreateDrawingContext(clear: true);
+
+        using (context.PushTransform(Matrix.CreateTranslation(-sourceRect.X, -sourceRect.Y)))
+        {
+            surface.RenderCommands(context);
+        }
+
+        return bitmap;
+    }
+
+    private static WriteableBitmap CreateWriteableBitmap(int width, int height, byte[] rgbaPixels)
+    {
+        var bitmap = new WriteableBitmap(
+            new PixelSize(width, height),
+            new Vector(96, 96),
+            PixelFormat.Bgra8888,
+            AlphaFormat.Premul);
+
+        using var framebuffer = bitmap.Lock();
+        var bgraRow = new byte[width * 4];
+        for (var y = 0; y < height; y++)
+        {
+            var sourceOffset = y * width * 4;
+            for (var x = 0; x < width; x++)
+            {
+                var source = sourceOffset + x * 4;
+                var target = x * 4;
+                var alpha = rgbaPixels[source + 3];
+                bgraRow[target] = Premultiply(rgbaPixels[source + 2], alpha);
+                bgraRow[target + 1] = Premultiply(rgbaPixels[source + 1], alpha);
+                bgraRow[target + 2] = Premultiply(rgbaPixels[source], alpha);
+                bgraRow[target + 3] = alpha;
+            }
+
+            Marshal.Copy(bgraRow, 0, IntPtr.Add(framebuffer.Address, y * framebuffer.RowBytes), bgraRow.Length);
+        }
+
+        return bitmap;
+    }
+
+    private static byte Premultiply(byte channel, byte alpha)
+    {
+        if (alpha >= byte.MaxValue)
+        {
+            return channel;
+        }
+
+        return alpha == 0 ? (byte)0 : (byte)((channel * alpha + 127) / 255);
     }
 
     private static bool TryResolveCanvasSurface(object image, [NotNullWhen(true)] out CanvasDrawingSurface? surface, out Rect sourceRect)
@@ -1685,6 +1793,10 @@ internal static class CanvasPaintParser
                 brush = gradient.ToImmutableBrush();
                 stored = gradient;
                 return true;
+            case CanvasPattern pattern:
+                brush = pattern.ToImmutableBrush();
+                stored = pattern;
+                return brush is not null;
             case IImmutableBrush immutable:
                 brush = immutable;
                 stored = immutable;
@@ -1705,6 +1817,159 @@ internal static class CanvasPaintParser
                 brush = currentBrush;
                 stored = currentBrush;
                 return false;
+        }
+    }
+}
+
+public sealed class CanvasPattern
+{
+    private readonly IImageBrushSource _source;
+    private readonly double _width;
+    private readonly double _height;
+    private readonly string _repetition;
+    private Matrix _transform = Matrix.Identity;
+
+    internal CanvasPattern(IImageBrushSource source, double width, double height, string? repetition)
+    {
+        _source = source ?? throw new ArgumentNullException(nameof(source));
+        _width = Math.Max(1, width);
+        _height = Math.Max(1, height);
+        _repetition = string.IsNullOrWhiteSpace(repetition) ? "repeat" : repetition.Trim().ToLowerInvariant();
+    }
+
+    public void setTransform(object? transform)
+    {
+        if (TryReadMatrix(transform, out var matrix))
+        {
+            _transform = matrix;
+        }
+    }
+
+    internal IImmutableBrush ToImmutableBrush()
+    {
+        var brush = new ImageBrush(_source)
+        {
+            Stretch = Stretch.None,
+            TileMode = GetTileMode(_repetition),
+            SourceRect = new RelativeRect(new Rect(0, 0, 1, 1), RelativeUnit.Relative),
+            DestinationRect = new RelativeRect(new Rect(0, 0, _width, _height), RelativeUnit.Absolute)
+        };
+
+        if (!_transform.IsIdentity)
+        {
+            brush.Transform = new MatrixTransform(_transform);
+        }
+
+        return brush.ToImmutable();
+    }
+
+    private static TileMode GetTileMode(string repetition)
+        => repetition switch
+        {
+            "no-repeat" => TileMode.None,
+            "repeat-x" => TileMode.Tile,
+            "repeat-y" => TileMode.Tile,
+            _ => TileMode.Tile
+        };
+
+    private static bool TryReadMatrix(object? value, out Matrix matrix)
+    {
+        if (value is CanvasDomMatrix domMatrix)
+        {
+            matrix = new Matrix(domMatrix.a, domMatrix.b, domMatrix.c, domMatrix.d, domMatrix.e, domMatrix.f);
+            return true;
+        }
+
+        if (value is not null && value is not string && value is IEnumerable enumerable)
+        {
+            var values = new List<double>(6);
+            foreach (var item in enumerable)
+            {
+                if (TryConvertToDouble(item, out var number))
+                {
+                    values.Add(number);
+                    if (values.Count == 6)
+                    {
+                        matrix = new Matrix(values[0], values[1], values[2], values[3], values[4], values[5]);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if (TryReadProperty(value, "a", out var a) &&
+            TryReadProperty(value, "b", out var b) &&
+            TryReadProperty(value, "c", out var c) &&
+            TryReadProperty(value, "d", out var d) &&
+            TryReadProperty(value, "e", out var e) &&
+            TryReadProperty(value, "f", out var f))
+        {
+            matrix = new Matrix(a, b, c, d, e, f);
+            return true;
+        }
+
+        if (TryReadProperty(value, "m11", out var m11) &&
+            TryReadProperty(value, "m12", out var m12) &&
+            TryReadProperty(value, "m21", out var m21) &&
+            TryReadProperty(value, "m22", out var m22) &&
+            TryReadProperty(value, "m41", out var m41) &&
+            TryReadProperty(value, "m42", out var m42))
+        {
+            matrix = new Matrix(m11, m12, m21, m22, m41, m42);
+            return true;
+        }
+
+        matrix = Matrix.Identity;
+        return false;
+    }
+
+    private static bool TryReadProperty(object? value, string name, out double number)
+    {
+        number = 0;
+        if (value is null)
+        {
+            return false;
+        }
+
+        if (value is IDictionary dictionary && dictionary.Contains(name))
+        {
+            return TryConvertToDouble(dictionary[name], out number);
+        }
+
+        var property = value.GetType().GetProperty(name);
+        return property is not null && TryConvertToDouble(property.GetValue(value), out number);
+    }
+
+    private static bool TryConvertToDouble(object? value, out double number)
+    {
+        switch (value)
+        {
+            case double doubleValue:
+                number = doubleValue;
+                return true;
+            case float floatValue:
+                number = floatValue;
+                return true;
+            case int intValue:
+                number = intValue;
+                return true;
+            case long longValue:
+                number = longValue;
+                return true;
+            case decimal decimalValue:
+                number = (double)decimalValue;
+                return true;
+            default:
+                try
+                {
+                    number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                    return true;
+                }
+                catch
+                {
+                    number = 0;
+                    return false;
+                }
         }
     }
 }
