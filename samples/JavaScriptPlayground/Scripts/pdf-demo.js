@@ -342,7 +342,6 @@ try {
 let currentDocument = null;
 let currentName = 'Built-in sample.pdf';
 let currentBytes = null;
-let currentPreviewImageBase64 = '';
 let currentPage = 1;
 let currentScale = 1;
 let renderSequence = 0;
@@ -379,6 +378,52 @@ const drawPageShell = viewport => {
   return { x, y };
 };
 
+const bytesToBinaryString = bytes => {
+  const chunks = [];
+  const chunkSize = 8192;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, Math.min(index + chunkSize, bytes.length));
+    chunks.push(String.fromCharCode.apply(null, Array.from(chunk)));
+  }
+  return chunks.join('');
+};
+
+const decodePdfLiteral = value => value
+  .replace(/\\([nrtbf()\\])/g, (_, code) => {
+    switch (code) {
+      case 'n':
+        return '\n';
+      case 'r':
+        return '\r';
+      case 't':
+        return '\t';
+      case 'b':
+        return '\b';
+      case 'f':
+        return '\f';
+      default:
+        return code;
+    }
+  })
+  .replace(/\\([0-7]{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
+
+const extractPdfTextLines = bytes => {
+  const binary = bytesToBinaryString(bytes ?? new Uint8Array());
+  const matches = binary.match(/\((?:\\.|[^\\)])*\)/g) ?? [];
+  const lines = [];
+  for (const match of matches) {
+    const decoded = decodePdfLiteral(match.slice(1, -1))
+      .replace(/[^\x09\x0a\x0d\x20-\x7e]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (decoded.length >= 3 && !decoded.startsWith('http')) {
+      lines.push(decoded);
+    }
+  }
+
+  return lines;
+};
+
 const drawWrappedLine = (text, x, y, maxWidth, lineHeight) => {
   const words = String(text ?? '').split(/\s+/).filter(Boolean);
   let line = '';
@@ -403,43 +448,13 @@ const drawWrappedLine = (text, x, y, maxWidth, lineHeight) => {
   return cursorY;
 };
 
-const renderHostPreview = (name, previewImageBase64, reason) => {
-  if (!previewImageBase64) {
-    return false;
-  }
-
-  try {
-    const image = new Image();
-    image.src = `data:image/png;base64,${previewImageBase64}`;
-    if (!image.complete || !image.naturalWidth || !image.naturalHeight) {
-      return false;
-    }
-
-    const maxWidth = Math.max(120, (surface.offsetWidth || 640) - 48);
-    const maxHeight = Math.max(120, (surface.offsetHeight || 460) - 48);
-    const scale = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
-    const width = image.naturalWidth * scale;
-    const height = image.naturalHeight * scale;
-    const origin = drawPageShell({ width, height });
-    context.drawImage(image, origin.x, origin.y, width, height);
-    updateInfo(`${name || 'PDF document'} - host preview`);
-    report(`PDF.js ${pdfjsLib.version ?? ''} could not render the page; showing host PDF preview: ${reason?.message ?? reason}`);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const renderFallbackPreview = (name, data, reason) => {
-  if (renderHostPreview(name, currentPreviewImageBase64, reason)) {
-    return;
-  }
-
+const renderRawPdfPreview = (name, data, reason) => {
   const viewport = {
     width: Math.max(240, (surface.offsetWidth || 640) - 44),
     height: Math.max(240, (surface.offsetHeight || 460) - 44)
   };
   const origin = drawPageShell(viewport);
+  const lines = extractPdfTextLines(data);
   const maxWidth = viewport.width - 48;
   let y = origin.y + 42;
 
@@ -454,15 +469,20 @@ const renderFallbackPreview = (name, data, reason) => {
 
   context.font = '14px Segoe UI';
   context.fillStyle = '#111827';
-  drawWrappedLine(
-    'The document was loaded, but PDF.js could not render this page in the current Jint canvas environment. Raw compressed PDF bytes are intentionally not shown as text.',
-    origin.x + 24,
-    y,
-    maxWidth,
-    20);
+  if (lines.length) {
+    for (const line of lines.slice(0, 12)) {
+      y = drawWrappedLine(line, origin.x + 24, y, maxWidth, 20);
+      y += 4;
+      if (y > origin.y + viewport.height - 28) {
+        break;
+      }
+    }
+  } else {
+    drawWrappedLine('No uncompressed text was found in this PDF. The document was loaded, but the current JavaScript canvas environment cannot render this page through PDF.js yet.', origin.x + 24, y, maxWidth, 20);
+  }
 
-  updateInfo(`${name || 'PDF document'} - render unavailable`);
-  report(`PDF.js ${pdfjsLib.version ?? ''} loaded; page rendering was unavailable: ${reason?.message ?? reason}`);
+  updateInfo(`${name || 'PDF document'} - lightweight fallback preview`);
+  report(`PDF.js ${pdfjsLib.version ?? ''} loaded; using fallback preview because page rendering was unavailable: ${reason?.message ?? reason}`);
 };
 
 const renderTextPreview = async (page, viewport, origin, renderError) => {
@@ -514,7 +534,7 @@ const renderPage = async () => {
   try {
     page = await currentDocument.getPage(currentPage);
   } catch (error) {
-    renderFallbackPreview(currentName, currentBytes, error);
+    renderRawPdfPreview(currentName, currentBytes, error);
     return;
   }
 
@@ -549,7 +569,7 @@ const renderPage = async () => {
   }
 };
 
-const loadDocument = async (name, data, previewImageBase64 = '') => {
+const loadDocument = async (name, data) => {
   report(`Loading ${name}...`);
   updateInfo('');
   drawEmptyState('Loading PDF...');
@@ -562,18 +582,19 @@ const loadDocument = async (name, data, previewImageBase64 = '') => {
   });
 
   setDebugStage('await-document');
-  currentName = name || 'Untitled.pdf';
-  currentBytes = data;
-  currentPreviewImageBase64 = previewImageBase64 || '';
   try {
     currentDocument = await loadingTask.promise;
   } catch (error) {
     currentDocument = null;
-    renderFallbackPreview(currentName, currentBytes, error);
+    currentName = name || 'Untitled.pdf';
+    currentBytes = data;
+    renderRawPdfPreview(currentName, currentBytes, error);
     return;
   }
 
   setDebugStage('document-loaded');
+  currentName = name || 'Untitled.pdf';
+  currentBytes = data;
   currentPage = 1;
   currentScale = 1;
   await renderPage();
@@ -605,7 +626,7 @@ openBtn.addEventListener('click', () => {
       return;
     }
 
-    loadDocument(result.name || 'External document.pdf', base64ToBytes(result.dataBase64), result.previewImageBase64 || '').catch(error => {
+    loadDocument(result.name || 'External document.pdf', base64ToBytes(result.dataBase64)).catch(error => {
       report(`Failed to load ${result.name}: ${error}`);
       drawEmptyState('PDF load failed.');
     });
