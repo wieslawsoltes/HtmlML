@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -1358,6 +1359,48 @@ globalThis.framebufferCleared = gl.getParameter(gl.FRAMEBUFFER_BINDING) === null
         Assert.True(Convert.ToBoolean(host.Engine.GetValue("framebufferBound").ToObject()));
         Assert.True(Convert.ToBoolean(host.Engine.GetValue("renderbufferBound").ToObject()));
         Assert.True(Convert.ToBoolean(host.Engine.GetValue("framebufferCleared").ToObject()));
+    }
+
+    [AvaloniaFact]
+    public void WebGl_ExposesSrgbTextureExtension()
+    {
+        var root = new Border
+        {
+            Name = "webglSurface",
+            Width = 64,
+            Height = 64,
+            Background = Brushes.White
+        };
+        var window = new Window
+        {
+            Width = 100,
+            Height = 100,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.Engine.Execute("""
+const surface = document.getElementById('webglSurface');
+const gl = surface.getContext('webgl');
+const ext = gl.getExtension('EXT_sRGB');
+globalThis.hasSrgbExtension = gl.getSupportedExtensions().indexOf('EXT_sRGB') >= 0;
+globalThis.srgbAlpha = ext && ext.SRGB_ALPHA_EXT;
+globalThis.srgb8Alpha8 = ext && ext.SRGB8_ALPHA8_EXT;
+const texture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, texture);
+gl.texImage2D(gl.TEXTURE_2D, 0, ext.SRGB_ALPHA_EXT, 1, 1, 0, ext.SRGB_ALPHA_EXT, gl.UNSIGNED_BYTE, new Uint8Array([255, 128, 0, 255]));
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+globalThis.srgbUploadQueued = true;
+""");
+
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("hasSrgbExtension").ToObject()));
+        Assert.Equal(0x8C42, Convert.ToInt32(host.Engine.GetValue("srgbAlpha").ToObject(), CultureInfo.InvariantCulture));
+        Assert.Equal(0x8C43, Convert.ToInt32(host.Engine.GetValue("srgb8Alpha8").ToObject(), CultureInfo.InvariantCulture));
+        Assert.True(Convert.ToBoolean(host.Engine.GetValue("srgbUploadQueued").ToObject()));
     }
 
     [AvaloniaFact]

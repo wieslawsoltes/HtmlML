@@ -339,8 +339,13 @@ internal sealed partial class CanvasWebGlRenderingContext
     public int RGBA16F => 0x881A;
     public int RGB16F => 0x881B;
     public int RGBA32F => 0x8814;
+    public int SRGB_EXT => 0x8C40;
+    public int SRGB8_EXT => 0x8C41;
+    public int SRGB_ALPHA_EXT => 0x8C42;
+    public int SRGB8_ALPHA8_EXT => 0x8C43;
     public int RGBA16F_EXT => 0x881A;
     public int RGB16F_EXT => 0x881B;
+    public int FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING_EXT => 0x8210;
     public int FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE_EXT => 0x8211;
     public int UNSIGNED_NORMALIZED_EXT => 0x8C17;
     public int DEPTH_COMPONENT16 => 0x81A5;
@@ -401,6 +406,13 @@ internal sealed partial class CanvasWebGlRenderingContext
             "EXT_frag_depth" => new { },
             "EXT_shader_texture_lod" => new { },
             "EXT_color_buffer_float" => new { },
+            "EXT_sRGB" => new
+            {
+                SRGB_EXT,
+                SRGB_ALPHA_EXT,
+                SRGB8_ALPHA8_EXT,
+                FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING_EXT
+            },
             "EXT_color_buffer_half_float" => new
             {
                 RGBA16F_EXT,
@@ -426,6 +438,7 @@ internal sealed partial class CanvasWebGlRenderingContext
             "EXT_color_buffer_float",
             "EXT_color_buffer_half_float",
             "EXT_frag_depth",
+            "EXT_sRGB",
             "EXT_shader_texture_lod",
             "OES_element_index_uint",
             "OES_standard_derivatives",
