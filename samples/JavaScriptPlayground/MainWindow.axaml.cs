@@ -2052,7 +2052,10 @@ const bloomTargetY = new THREE.WebGLRenderTarget(renderWidth, renderHeight, targ
 
 const quadScene = new THREE.Scene();
 const quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+const quadGeometry = new THREE.BufferGeometry();
+quadGeometry.setAttribute('position', new THREE.Float32BufferAttribute([-1, 3, 0, -1, -1, 0, 3, -1, 0], 3));
+quadGeometry.setAttribute('uv', new THREE.Float32BufferAttribute([0, 2, 0, 0, 2, 0], 2));
+const quad = new THREE.Mesh(quadGeometry, null);
 quadScene.add(quad);
 
 const outputMaterial = new THREE.ShaderMaterial({
@@ -2086,7 +2089,10 @@ void main() {
   texel.rgb = linearToneMapping(texel.rgb);
   texel.rgb = sRGBTransferOETF(texel.rgb);
   gl_FragColor = texel;
-}`
+}`,
+  blending: THREE.NoBlending,
+  depthTest: false,
+  depthWrite: false
 });
 
 const combineMaterial = new THREE.ShaderMaterial({
@@ -2109,7 +2115,8 @@ void main() {
   gl_FragColor = strength * texel;
 }`,
   blending: THREE.AdditiveBlending,
-  transparent: true
+  depthTest: false,
+  depthWrite: false
 });
 
 const convolutionMaterial = new THREE.ShaderMaterial({
@@ -2142,7 +2149,10 @@ void main() {
     imageCoord += uImageIncrement;
   }
   gl_FragColor = sum;
-}`
+}`,
+  blending: THREE.NoBlending,
+  depthTest: false,
+  depthWrite: false
 });
 
 const renderQuad = (material, target, clearTarget) => {
