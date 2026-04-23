@@ -1286,26 +1286,27 @@ internal sealed partial class CanvasWebGlRenderingContext
 
             _api.PixelStorei(_context.UNPACK_ALIGNMENT, texture.UnpackAlignment);
             var nativeInternalFormat = GetNativeTextureInternalFormat(texture);
+            var nativeFormat = GetNativeTextureFormat(texture.Format);
             var nativeType = GetNativeTextureType(texture.Type);
             var bytes = ToBytes(texture.Pixels, texture.Type, elementBuffer: false);
-            if (texture.UnpackFlipY && texture.Format == _context.RGBA && texture.Type == _context.UNSIGNED_BYTE)
+            if (texture.UnpackFlipY && nativeFormat == _context.RGBA && texture.Type == _context.UNSIGNED_BYTE)
             {
                 bytes = FlipRgbaRows(bytes, texture.Width, texture.Height);
             }
 
             if (bytes.Length == 0)
             {
-                gl.TexImage2D(texture.Target, texture.Level, nativeInternalFormat, texture.Width, texture.Height, texture.Border, texture.Format, nativeType, IntPtr.Zero);
+                gl.TexImage2D(texture.Target, texture.Level, nativeInternalFormat, texture.Width, texture.Height, texture.Border, nativeFormat, nativeType, IntPtr.Zero);
             }
             else
             {
-                WithPinned(bytes, ptr => gl.TexImage2D(texture.Target, texture.Level, nativeInternalFormat, texture.Width, texture.Height, texture.Border, texture.Format, nativeType, ptr));
+                WithPinned(bytes, ptr => gl.TexImage2D(texture.Target, texture.Level, nativeInternalFormat, texture.Width, texture.Height, texture.Border, nativeFormat, nativeType, ptr));
             }
 
             var imageError = gl.GetError();
             if (imageError != _context.NO_ERROR)
             {
-                _context.LastDrawStatus = $"WebGL texture upload failed target 0x{texture.Target:X}, internal 0x{nativeInternalFormat:X}, size {texture.Width}x{texture.Height}, format 0x{texture.Format:X}, type 0x{nativeType:X} with error 0x{imageError:X}";
+                _context.LastDrawStatus = $"WebGL texture upload failed target 0x{texture.Target:X}, internal 0x{nativeInternalFormat:X}, size {texture.Width}x{texture.Height}, format 0x{nativeFormat:X}, type 0x{nativeType:X} with error 0x{imageError:X}";
                 return false;
             }
 
@@ -1326,6 +1327,16 @@ internal sealed partial class CanvasWebGlRenderingContext
 
         private int GetNativeTextureInternalFormat(WebGlTexture texture)
         {
+            if (texture.InternalFormat == _context.SRGB_ALPHA_EXT || texture.InternalFormat == _context.SRGB8_ALPHA8_EXT)
+            {
+                return _context.SRGB8_ALPHA8_EXT;
+            }
+
+            if (texture.InternalFormat == _context.SRGB_EXT || texture.InternalFormat == _context.SRGB8_EXT)
+            {
+                return _context.SRGB8_EXT;
+            }
+
             if (texture.InternalFormat is 0x881A or 0x881B or 0x8814)
             {
                 return texture.InternalFormat;
@@ -1342,6 +1353,21 @@ internal sealed partial class CanvasWebGlRenderingContext
             }
 
             return texture.InternalFormat;
+        }
+
+        private int GetNativeTextureFormat(int format)
+        {
+            if (format == _context.SRGB_ALPHA_EXT || format == _context.SRGB8_ALPHA8_EXT)
+            {
+                return _context.RGBA;
+            }
+
+            if (format == _context.SRGB_EXT || format == _context.SRGB8_EXT)
+            {
+                return _context.RGB;
+            }
+
+            return format;
         }
 
         private int GetNativeTextureType(int type)

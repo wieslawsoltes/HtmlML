@@ -2115,6 +2115,7 @@ void main() {
   gl_FragColor = strength * texel;
 }`,
   blending: THREE.AdditiveBlending,
+  transparent: true,
   depthTest: false,
   depthWrite: false
 });
