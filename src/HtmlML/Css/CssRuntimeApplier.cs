@@ -280,7 +280,10 @@ internal static class CssRuntimeApplier
     // Inline matching/styling
     private static IEnumerable<Avalonia.Controls.Documents.TextElement> TraverseInlines(TextBlock tb)
     {
-        foreach (var inline in tb.Inlines)
+        if (tb.Inlines is not { } inlines)
+            yield break;
+
+        foreach (var inline in inlines)
         {
             foreach (var te in TraverseInlineRecursive(inline))
                 yield return te;

@@ -42,7 +42,7 @@ public class h6 : TextBlock
     }
 
     [Content]
-    public InlineCollection content => Inlines;
+    public InlineCollection content => Inlines!;
 
     public string? @class
     {

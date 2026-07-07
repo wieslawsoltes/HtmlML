@@ -83,7 +83,7 @@ internal static class CanvasContextBridge
 
         private bool UsesNativeOpenGlTarget => ReferenceEquals(_openGlSurface, _target) || _target is CanvasOpenGlDrawingSurface;
 
-        private static bool IsAttached(Visual visual) => visual.GetVisualRoot() is not null;
+        private static bool IsAttached(Visual visual) => visual.IsAttachedToVisualTree();
 
         private void EnsureInteractiveTarget()
         {
@@ -300,7 +300,7 @@ internal static class CanvasContextBridge
             return true;
         }
 
-        var focusManager = (control.GetVisualRoot() as TopLevel)?.FocusManager;
+        var focusManager = TopLevel.GetTopLevel(control)?.FocusManager;
         var focusMethod = focusManager?.GetType().GetMethod(
             "Focus",
             new[] { typeof(IInputElement), typeof(NavigationMethod), typeof(KeyModifiers) });
