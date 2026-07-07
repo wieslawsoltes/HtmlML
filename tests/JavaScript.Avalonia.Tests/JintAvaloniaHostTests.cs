@@ -1298,7 +1298,12 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
                     webGlSurface,
                     new Button { Name = "tradingViewStream" },
                     new Button { Name = "tradingViewShuffle" },
+                    new Button { Name = "tradingViewZoom" },
+                    new Button { Name = "tradingViewIndicators" },
+                    new Button { Name = "tradingViewTheme" },
                     new Button { Name = "tradingViewReset" },
+                    new TextBlock { Name = "tradingViewQuote" },
+                    new TextBlock { Name = "tradingViewIndicatorStatus" },
                     status,
                     webGlStatus
                 }
@@ -1335,6 +1340,23 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
         Assert.True(ReadGlobalInt(host, "tradingViewCanvasLayerCount") > 0);
         Assert.Contains("from", ReadGlobalString(host, "tradingViewVisibleRange"));
         Assert.True(ReadGlobalBool(host, "tradingViewWebGlNativeSurface"));
+        Assert.True(ReadGlobalBool(host, "tradingViewIndicatorsVisible"));
+        Assert.Equal(5, ReadGlobalInt(host, "tradingViewIndicatorSeriesCount"));
+        Assert.Equal("dark", ReadGlobalString(host, "tradingViewTheme"));
+        Assert.Contains("SMA12", ReadGlobalString(host, "tradingViewIndicatorSummary"));
+
+        host.ExecuteScriptText("""
+const indicators = document.getElementById('tradingViewIndicators');
+const theme = document.getElementById('tradingViewTheme');
+const zoom = document.getElementById('tradingViewZoom');
+indicators.dispatchEvent('click');
+theme.dispatchEvent('click');
+zoom.dispatchEvent('click');
+""");
+
+        Assert.False(ReadGlobalBool(host, "tradingViewIndicatorsVisible"));
+        Assert.Equal("light", ReadGlobalString(host, "tradingViewTheme"));
+        Assert.Contains("zoomed", status.Text ?? string.Empty);
 
         var chartContext = Assert.IsType<CanvasRenderingContext2D>(chartHostElement.getContext("2d"));
         Assert.True(chartContext.CommandCount > 0, $"Expected host chart fallback to draw. Status: {status.Text}");
@@ -1345,6 +1367,226 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
         Assert.True(context.TriangleCount > 0, context.LastDrawStatus);
         Assert.True(context.drawingBufferWidth >= 720);
         Assert.True(context.drawingBufferHeight >= 180);
+    }
+
+    [AvaloniaFact]
+    public void TradingViewProfessionalSample_CanRenderMultiPanelChartAndInteractions()
+    {
+        var status = new TextBlock { Name = "professionalStatus" };
+        var priceHost = new Canvas
+        {
+            Name = "professionalPriceChartHost",
+            Width = 450,
+            Height = 270,
+            Background = Brushes.White,
+            ClipToBounds = true
+        };
+        var aaplHost = new Canvas
+        {
+            Name = "professionalChartAaplHost",
+            Width = 450,
+            Height = 270,
+            Background = Brushes.White,
+            ClipToBounds = true
+        };
+        var btcHost = new Canvas
+        {
+            Name = "professionalChartBtcHost",
+            Width = 450,
+            Height = 270,
+            Background = Brushes.White,
+            ClipToBounds = true
+        };
+        var tslaHost = new Canvas
+        {
+            Name = "professionalChartTslaHost",
+            Width = 450,
+            Height = 270,
+            Background = Brushes.White,
+            ClipToBounds = true
+        };
+        var root = new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBox { Name = "professionalSymbolInput" },
+                    new Button { Name = "professionalSymbolApply" },
+                    new Button { Name = "professionalIndicatorToggle" },
+                    new Button { Name = "professionalAlert" },
+                    new Button { Name = "professionalReplay" },
+                    new Button { Name = "professionalRisk" },
+                    new Button { Name = "professionalUndo" },
+                    new Button { Name = "professionalTf1H" },
+                    new Button { Name = "professionalTf1D" },
+                    new Button { Name = "professionalTf5D" },
+                    new Button { Name = "professionalTf1M" },
+                    new Button { Name = "professionalTf6M" },
+                    new Button { Name = "professionalTfYtd" },
+                    new Button { Name = "professionalTfAll" },
+                    new Button { Name = "professionalToolCross" },
+                    new Button { Name = "professionalToolTrend" },
+                    new Button { Name = "professionalToolFib" },
+                    new Button { Name = "professionalToolBrush" },
+                    new Button { Name = "professionalToolText" },
+                    new Button { Name = "professionalToolMeasure" },
+                    new Button { Name = "professionalToolMagnet" },
+                    new Button { Name = "professionalToolTrash" },
+                    new Button { Name = "professionalCandleMode" },
+                    new Button { Name = "professionalLayout" },
+                    new Button { Name = "professionalScreenshot" },
+                    new Button { Name = "professionalTrade" },
+                    new Button { Name = "professionalPublish" },
+                    new Button { Name = "professionalWatchAapl" },
+                    new Button { Name = "professionalWatchNflx" },
+                    new Button { Name = "professionalWatchTsla" },
+                    new Button { Name = "professionalWatchMsft" },
+                    new Button { Name = "professionalWatchNvda" },
+                    new Button { Name = "professionalWatchBtc" },
+                    new TextBlock { Name = "professionalPanelAaplTitle" },
+                    new TextBlock { Name = "professionalPanelMainTitle" },
+                    new TextBlock { Name = "professionalPanelBtcTitle" },
+                    new TextBlock { Name = "professionalPanelTslaTitle" },
+                    aaplHost,
+                    priceHost,
+                    btcHost,
+                    tslaHost,
+                    new TextBlock { Name = "professionalQuote" },
+                    new TextBlock { Name = "professionalOrderBook" },
+                    new TextBlock { Name = "professionalExecution" },
+                    status,
+                    new TextBlock { Name = "professionalRiskStatus" },
+                    new TextBlock { Name = "professionalClock" }
+                }
+            }
+        };
+        var window = new Window
+        {
+            Width = 1080,
+            Height = 760,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.ScriptBaseDirectory = Path.Combine(GetRepositoryRoot(), "samples", "JavaScriptPlayground");
+        var priceHostElement = HostTestUtilities.GetElement(host.Document.getElementById("professionalPriceChartHost"));
+        var aaplHostElement = HostTestUtilities.GetElement(host.Document.getElementById("professionalChartAaplHost"));
+
+        host.Require("./Scripts/tradingview-professional-demo.js");
+
+        var rendered = WaitFor(host, () =>
+                ReadGlobalInt(host, "professionalTradingViewChartLayerCount") > 0 &&
+                ReadGlobalString(host, "professionalTradingViewVisibleRange").Contains("from", StringComparison.Ordinal) &&
+                ReadGlobalInt(host, "professionalTradingViewFallbackCommandCount") > 0 &&
+                status.Text?.Contains("TradingView Lightweight Charts workspace", StringComparison.Ordinal) == true,
+                TimeSpan.FromSeconds(20));
+        Assert.True(
+            rendered,
+            $"Professional TradingView sample did not finish rendering. Status: {status.Text}; " +
+            $"layers: {ReadGlobalInt(host, "professionalTradingViewChartLayerCount")}; " +
+            $"range: {ReadGlobalString(host, "professionalTradingViewVisibleRange")}; " +
+            $"fallback: {ReadGlobalInt(host, "professionalTradingViewFallbackCommandCount")}.");
+
+        Assert.Equal("NFLX", ReadGlobalString(host, "professionalTradingViewSelectedSymbol"));
+        Assert.True(ReadGlobalBool(host, "professionalTradingViewRiskOverlayVisible"));
+        Assert.Equal(4, ReadGlobalInt(host, "professionalTradingViewChartCount"));
+        Assert.True(ReadGlobalInt(host, "professionalTradingViewSeriesCount") >= 20);
+        Assert.Contains("from", ReadGlobalString(host, "professionalTradingViewVisibleRange"));
+        Assert.Contains("lightweight-charts", ReadGlobalString(host, "professionalTradingViewLibraryUrl"));
+
+        host.ExecuteScriptText("""
+const input = document.getElementById('professionalSymbolInput');
+input.value = 'MSFT';
+document.getElementById('professionalSymbolApply').dispatchEvent('click');
+document.getElementById('professionalWatchTsla').dispatchEvent('click');
+document.getElementById('professionalReplay').dispatchEvent('click');
+document.getElementById('professionalRisk').dispatchEvent('click');
+document.getElementById('professionalTf5D').dispatchEvent('click');
+document.getElementById('professionalIndicatorToggle').dispatchEvent('click');
+document.getElementById('professionalToolTrend').dispatchEvent('click');
+""");
+
+        using var clickPointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        priceHost.RaiseEvent(new PointerPressedEventArgs(
+            priceHost,
+            clickPointer,
+            priceHost,
+            new Point(220, 130),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None));
+        priceHost.RaiseEvent(new PointerReleasedEventArgs(
+            priceHost,
+            clickPointer,
+            priceHost,
+            new Point(220, 130),
+            0,
+            new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased),
+            KeyModifiers.None,
+            MouseButton.Left));
+
+        using var dragPointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        priceHost.RaiseEvent(new PointerPressedEventArgs(
+            priceHost,
+            dragPointer,
+            priceHost,
+            new Point(220, 130),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None));
+        priceHost.RaiseEvent(new PointerEventArgs(
+            InputElement.PointerMovedEvent,
+            priceHost,
+            dragPointer,
+            priceHost,
+            new Point(150, 130),
+            0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.Other),
+            KeyModifiers.None));
+        priceHost.RaiseEvent(new PointerReleasedEventArgs(
+            priceHost,
+            dragPointer,
+            priceHost,
+            new Point(150, 130),
+            0,
+            new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased),
+            KeyModifiers.None,
+            MouseButton.Left));
+
+        using var wheelPointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+        priceHost.RaiseEvent(new PointerWheelEventArgs(
+            priceHost,
+            wheelPointer,
+            priceHost,
+            new Point(210, 130),
+            0,
+            new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.Other),
+            KeyModifiers.None,
+            new Vector(0, 1)));
+
+        Assert.Equal("TSLA", ReadGlobalString(host, "professionalTradingViewSelectedSymbol"));
+        Assert.Equal(1, ReadGlobalInt(host, "professionalTradingViewReplayStep"));
+        Assert.False(ReadGlobalBool(host, "professionalTradingViewRiskOverlayVisible"));
+        Assert.Equal("5D", ReadGlobalString(host, "professionalTradingViewTimeframe"));
+        Assert.Equal("core", ReadGlobalString(host, "professionalTradingViewIndicatorMode"));
+        Assert.Equal("trend", ReadGlobalString(host, "professionalTradingViewActiveTool"));
+        Assert.Equal(1, ReadGlobalInt(host, "professionalTradingViewDrawingCount"));
+        Assert.True(ReadGlobalInt(host, "professionalTradingViewPanCount") > 0);
+        Assert.True(ReadGlobalInt(host, "professionalTradingViewZoomCount") > 0);
+        Assert.True(ReadGlobalBool(host, "professionalTradingViewInputHandled"));
+
+        var priceContext = Assert.IsType<CanvasRenderingContext2D>(priceHostElement.getContext("2d"));
+        var aaplContext = Assert.IsType<CanvasRenderingContext2D>(aaplHostElement.getContext("2d"));
+        Assert.True(
+            ReadGlobalInt(host, "professionalTradingViewCanvasCommandCount") > 0 ||
+            priceContext.CommandCount > 0 ||
+            aaplContext.CommandCount > 0,
+            $"Expected professional chart canvases to draw. Status: {status.Text}");
     }
 
     [AvaloniaFact]
