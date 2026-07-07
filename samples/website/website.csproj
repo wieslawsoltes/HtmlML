@@ -17,7 +17,7 @@
   <ItemGroup>
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
-    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" />
+    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="AvaloniaUI.DiagnosticsSupport" />
     <PackageReference Include="Avalonia.Desktop" />
     <!-- Ensure consistent CSS dependencies to avoid downgrade warnings -->
     <PackageReference Include="AngleSharp" />

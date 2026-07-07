@@ -13,7 +13,7 @@
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
-    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" />
+    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="AvaloniaUI.DiagnosticsSupport" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\JavaScript.Avalonia\JavaScript.Avalonia.csproj" />
