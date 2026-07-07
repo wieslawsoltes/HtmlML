@@ -1533,6 +1533,8 @@ try {
 
         public double devicePixelRatio => Math.Max(1.0, _host.TopLevel.RenderScaling);
 
+        public MediaQueryListJs matchMedia(string query) => new(query);
+
         public int setTimeout(JsValue callback) => setTimeout(callback, 0);
 
         public int setTimeout(JsValue callback, int ms)
@@ -1676,6 +1678,26 @@ try {
 
             return null;
         }
+    }
+
+    public sealed class MediaQueryListJs
+    {
+        public MediaQueryListJs(string query)
+        {
+            media = query ?? string.Empty;
+        }
+
+        public bool matches { get; } = false;
+        public string media { get; }
+        public object? onchange { get; set; }
+
+        public void addListener(JsValue listener) { }
+        public void removeListener(JsValue listener) { }
+        public void addEventListener(string type, JsValue listener) { }
+        public void addEventListener(string type, JsValue listener, JsValue options) { }
+        public void removeEventListener(string type, JsValue listener) { }
+        public void removeEventListener(string type, JsValue listener, JsValue options) { }
+        public bool dispatchEvent(object? evt) => false;
     }
 
     public sealed class NavigatorJs

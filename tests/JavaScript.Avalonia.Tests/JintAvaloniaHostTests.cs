@@ -16,6 +16,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Jint;
 using Jint.Native;
 using Xunit;
 
@@ -1269,6 +1270,84 @@ status.textContent = gl.CommandCount > 0 ? `Three.js ${THREE.REVISION} rendered`
     }
 
     [AvaloniaFact]
+    public void TradingViewWebGlSample_CanRenderChartAndNativeWebGlPanel()
+    {
+        var webGlSurface = new CanvasOpenGlDrawingSurface
+        {
+            Name = "tradingViewWebGlSurface",
+            Width = 720,
+            Height = 180
+        };
+        var status = new TextBlock { Name = "tradingViewStatus" };
+        var webGlStatus = new TextBlock { Name = "tradingViewWebGlStatus" };
+        var root = new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Canvas
+                    {
+                        Name = "tradingViewChartHost",
+                        Width = 720,
+                        Height = 360,
+                        Background = Brushes.White,
+                        ClipToBounds = true
+                    },
+                    webGlSurface,
+                    new Button { Name = "tradingViewStream" },
+                    new Button { Name = "tradingViewShuffle" },
+                    new Button { Name = "tradingViewReset" },
+                    status,
+                    webGlStatus
+                }
+            }
+        };
+        var window = new Window
+        {
+            Width = 820,
+            Height = 700,
+            Content = new VisualLayerManager { Child = root }
+        };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var host = new JintAvaloniaHost(window);
+        host.ScriptBaseDirectory = Path.Combine(GetRepositoryRoot(), "samples", "JavaScriptPlayground");
+        var chartHostElement = HostTestUtilities.GetElement(host.Document.getElementById("tradingViewChartHost"));
+        var surfaceElement = HostTestUtilities.GetElement(host.Document.getElementById("tradingViewWebGlSurface"));
+
+        host.Require("./Scripts/tradingview-webgl-demo.js");
+
+        Assert.True(
+            WaitFor(host, () =>
+                ReadGlobalInt(host, "tradingViewCanvasLayerCount") > 0 &&
+                ReadGlobalString(host, "tradingViewVisibleRange").Contains("from", StringComparison.Ordinal) &&
+                ReadGlobalInt(host, "tradingViewWebGlDrawCallCount") > 0 &&
+                ReadGlobalInt(host, "tradingViewWebGlTriangleCount") > 0 &&
+                webGlStatus.Text?.Contains("WebGL rendered", StringComparison.Ordinal) == true,
+                TimeSpan.FromSeconds(20)),
+            $"TradingView/WebGL sample did not finish rendering. Status: {status.Text}; WebGL: {webGlStatus.Text}");
+
+        Assert.Contains("TradingView Lightweight Charts", status.Text);
+        Assert.True(ReadGlobalInt(host, "tradingViewCanvasLayerCount") > 0);
+        Assert.Contains("from", ReadGlobalString(host, "tradingViewVisibleRange"));
+        Assert.True(ReadGlobalBool(host, "tradingViewWebGlNativeSurface"));
+
+        var chartContext = Assert.IsType<CanvasRenderingContext2D>(chartHostElement.getContext("2d"));
+        Assert.True(chartContext.CommandCount > 0, $"Expected host chart fallback to draw. Status: {status.Text}");
+
+        var context = Assert.IsType<CanvasWebGlRenderingContext>(surfaceElement.getContext("webgl"));
+        Assert.True(context.IsOpenGlBacked, context.RenderBackend);
+        Assert.True(context.DrawCallCount > 0, context.LastDrawStatus);
+        Assert.True(context.TriangleCount > 0, context.LastDrawStatus);
+        Assert.True(context.drawingBufferWidth >= 720);
+        Assert.True(context.drawingBufferHeight >= 180);
+    }
+
+    [AvaloniaFact]
     public void NativeWebGlCanvas_WidthHeightSetDrawingBufferNotLayout()
     {
         var surface = new CanvasOpenGlDrawingSurface
@@ -1757,6 +1836,26 @@ status.textContent = circle ? 'Paper.js scene ready' : 'Paper.js scene missing';
         Dispatcher.UIThread.RunJobs();
         host?.ProcessPendingTasks();
         return condition();
+    }
+
+    private static int ReadGlobalInt(JintAvaloniaHost host, string name)
+    {
+        var value = host.Engine.GetValue(name);
+        return value.IsUndefined() || value.IsNull()
+            ? 0
+            : Convert.ToInt32(value.ToObject(), CultureInfo.InvariantCulture);
+    }
+
+    private static bool ReadGlobalBool(JintAvaloniaHost host, string name)
+    {
+        var value = host.Engine.GetValue(name);
+        return !value.IsUndefined() && !value.IsNull() && Convert.ToBoolean(value.ToObject(), CultureInfo.InvariantCulture);
+    }
+
+    private static string ReadGlobalString(JintAvaloniaHost host, string name)
+    {
+        var value = host.Engine.GetValue(name);
+        return value.IsUndefined() || value.IsNull() ? string.Empty : Convert.ToString(value.ToObject(), CultureInfo.InvariantCulture) ?? string.Empty;
     }
 
     private sealed class MockHostShellBridge
