@@ -879,6 +879,11 @@ internal sealed class CanvasRenderingContext2D
         _path.Arc(x, y, radius, startAngle, endAngle, counterclockwise);
     }
 
+    public void arcTo(double x1, double y1, double x2, double y2, double radius)
+    {
+        _path.ArcTo(x1, y1, x2, y2, radius);
+    }
+
     public void rect(double x, double y, double width, double height)
     {
         _path.Rect(x, y, width, height);
@@ -2526,6 +2531,9 @@ internal sealed class CanvasPathBuilder
     public void Arc(double x, double y, double radius, double startAngle, double endAngle, bool counterClockwise)
         => _segments.Add(new ArcSegment(new Point(x, y), radius, startAngle, endAngle, counterClockwise));
 
+    public void ArcTo(double x1, double y1, double x2, double y2, double radius)
+        => _segments.Add(new ArcToSegment(new Point(x1, y1), new Point(x2, y2), radius));
+
     public void Rect(double x, double y, double width, double height)
         => _segments.Add(new RectSegment(new Rect(x, y, width, height)));
 
@@ -2643,6 +2651,69 @@ internal sealed class QuadraticBezierSegment : ICanvasPathSegment
         LineToSegment.EnsureFigure(context, ref currentPoint, ref figureStart, ref figureOpen);
         context.QuadraticBezierTo(_control, _point);
         currentPoint = _point;
+    }
+}
+
+internal sealed class ArcToSegment : ICanvasPathSegment
+{
+    private readonly Point _corner;
+    private readonly Point _target;
+    private readonly double _radius;
+
+    public ArcToSegment(Point corner, Point target, double radius)
+    {
+        _corner = corner;
+        _target = target;
+        _radius = Math.Max(0, radius);
+    }
+
+    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
+    {
+        LineToSegment.EnsureFigure(context, ref currentPoint, ref figureStart, ref figureOpen);
+
+        var v1X = currentPoint.X - _corner.X;
+        var v1Y = currentPoint.Y - _corner.Y;
+        var v2X = _target.X - _corner.X;
+        var v2Y = _target.Y - _corner.Y;
+        var len1 = Math.Sqrt(v1X * v1X + v1Y * v1Y);
+        var len2 = Math.Sqrt(v2X * v2X + v2Y * v2Y);
+
+        if (_radius <= 0 || len1 <= double.Epsilon || len2 <= double.Epsilon)
+        {
+            context.LineTo(_corner);
+            currentPoint = _corner;
+            return;
+        }
+
+        var dot = ((v1X * v2X) + (v1Y * v2Y)) / (len1 * len2);
+        dot = Math.Clamp(dot, -1, 1);
+        var angle = Math.Acos(dot);
+        if (angle <= double.Epsilon || Math.Abs(Math.PI - angle) <= double.Epsilon)
+        {
+            context.LineTo(_corner);
+            currentPoint = _corner;
+            return;
+        }
+
+        var tangentDistance = _radius / Math.Tan(angle / 2);
+        if (!double.IsFinite(tangentDistance) || tangentDistance <= 0)
+        {
+            context.LineTo(_corner);
+            currentPoint = _corner;
+            return;
+        }
+
+        tangentDistance = Math.Min(tangentDistance, Math.Min(len1, len2));
+        var tangent1 = new Point(
+            _corner.X + (v1X / len1 * tangentDistance),
+            _corner.Y + (v1Y / len1 * tangentDistance));
+        var tangent2 = new Point(
+            _corner.X + (v2X / len2 * tangentDistance),
+            _corner.Y + (v2Y / len2 * tangentDistance));
+
+        context.LineTo(tangent1);
+        context.QuadraticBezierTo(_corner, tangent2);
+        currentPoint = tangent2;
     }
 }
 
