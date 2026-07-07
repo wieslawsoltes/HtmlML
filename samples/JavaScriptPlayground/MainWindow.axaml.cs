@@ -2244,6 +2244,41 @@ frameHandle = window.requestAnimationFrame(render);
 """
             ),
             new Preset(
+                "TradingView + Native WebGL",
+                """
+<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=JavaScript.Avalonia" Padding="16" Background="#0b1120" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
+  <StackPanel Spacing="12">
+    <TextBlock Text="TradingView Lightweight Charts + native WebGL" FontWeight="SemiBold" Foreground="#f8fafc" />
+    <TextBlock Text="TradingView renders the candlestick chart while JavaScript.Avalonia renders a synchronized WebGL volume panel on an OpenGL-backed canvas." TextWrapping="Wrap" Foreground="#cbd5e1" />
+    <Border Background="#101827" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+      <Canvas Name="tradingViewChartHost" Width="720" Height="360" Background="#101827" ClipToBounds="True" />
+    </Border>
+    <Border Background="#050816" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+      <js:CanvasOpenGlDrawingSurface Name="tradingViewWebGlSurface" Width="720" Height="180" />
+    </Border>
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Name="tradingViewStream" Content="Stream tick" />
+      <Button Name="tradingViewShuffle" Content="Shuffle data" />
+      <Button Name="tradingViewReset" Content="Reset" />
+    </StackPanel>
+    <TextBlock Name="tradingViewStatus" Foreground="#d1d5db" TextWrapping="Wrap" />
+    <TextBlock Name="tradingViewWebGlStatus" Foreground="#93c5fd" TextWrapping="Wrap" />
+  </StackPanel>
+</Border>
+""",
+                """
+try {
+  require('./Scripts/tradingview-webgl-demo.js');
+} catch (error) {
+  const status = document.getElementById('tradingViewStatus');
+  if (status) {
+    status.textContent = `Failed to load TradingView WebGL demo: ${error}`;
+  }
+  throw error;
+}
+"""
+            ),
+            new Preset(
                 "Canvas 2D + Fabric.js",
                 """
 <Border xmlns="https://github.com/avaloniaui" Padding="16" Background="#ffffff" BorderBrush="#d1d5db" BorderThickness="1" CornerRadius="8">
