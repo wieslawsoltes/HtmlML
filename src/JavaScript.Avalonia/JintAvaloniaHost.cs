@@ -1752,7 +1752,7 @@ try {
             try
             {
                 var clipboard = _host.TopLevel.Clipboard;
-                var text = clipboard is null ? null : clipboard.GetTextAsync().GetAwaiter().GetResult();
+                var text = clipboard is null ? null : clipboard.TryGetTextAsync().GetAwaiter().GetResult();
                 if (text is not null)
                 {
                     _lastText = text;

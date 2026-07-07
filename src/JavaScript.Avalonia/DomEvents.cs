@@ -208,16 +208,16 @@ public sealed class DomPointerEvent : DomEvent
 
     public bool isPrimary => _args.Pointer?.IsPrimary ?? false;
 
-    private Point GetClientPosition()
+    private Point GetClientPosition() => _args.GetPosition(null);
+
+    private Point GetOffsetPosition()
     {
-        var offset = GetOffsetPosition();
+        var client = GetClientPosition();
         var origin = _relativeTo.TranslatePoint(new Point(0, 0), _viewport);
         return origin.HasValue
-            ? new Point(origin.Value.X + offset.X, origin.Value.Y + offset.Y)
-            : offset;
+            ? new Point(client.X - origin.Value.X, client.Y - origin.Value.Y)
+            : client;
     }
-
-    private Point GetOffsetPosition() => _args.GetPosition(_relativeTo);
 
     private static int ToButton(PointerUpdateKind kind) => kind switch
     {

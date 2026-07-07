@@ -421,7 +421,7 @@ public class AvaloniaDomDocument
     {
         if (clearActualFocus)
         {
-            Host.TopLevel.FocusManager?.ClearFocus();
+            Host.TopLevel.FocusManager?.Focus(null);
         }
 
         var previousVirtual = _virtualActiveElement;
@@ -449,7 +449,7 @@ public class AvaloniaDomDocument
 
         if (clearActualFocus)
         {
-            Host.TopLevel.FocusManager?.ClearFocus();
+            Host.TopLevel.FocusManager?.Focus(null);
         }
 
         if (dispatchBlurEvent)
@@ -992,7 +992,7 @@ public class AvaloniaDomDocument
     private Control? GetDocumentViewport()
     {
         var content = Host.TopLevel.Content as Control;
-        if (content?.GetVisualRoot() is not null)
+        if (content?.IsAttachedToVisualTree() == true)
         {
             return content;
         }
@@ -1552,7 +1552,7 @@ public class AvaloniaDomElement
 
     public AvaloniaDomElement? parentNode => parentElement;
 
-    public virtual bool isConnected => Control.GetVisualRoot() is not null;
+    public virtual bool isConnected => TopLevel.GetTopLevel(Control) is not null;
 
     public DomTokenList classList => _classList ??= new DomTokenList(this);
 
@@ -2497,7 +2497,7 @@ public class AvaloniaDomElement
         Host.Document.DispatchRoutedEvent(this, "click", e, bubbles: true, cancelable: true);
     }
 
-    private void OnGotFocus(object? sender, GotFocusEventArgs e)
+    private void OnGotFocus(object? sender, FocusChangedEventArgs e)
     {
         if (!ReferenceEquals(e.Source, Control))
         {
@@ -2508,7 +2508,7 @@ public class AvaloniaDomElement
         Host.Document.DispatchRoutedEvent(this, "focus", e, bubbles: false, cancelable: false);
     }
 
-    private void OnLostFocus(object? sender, RoutedEventArgs e)
+    private void OnLostFocus(object? sender, FocusChangedEventArgs e)
     {
         if (!ReferenceEquals(e.Source, Control))
         {
@@ -4871,8 +4871,9 @@ public sealed class AvaloniaDomImageElement : AvaloniaDomElement
                 stride,
                 new Vector(96, 96),
                 PixelFormats.Rgba8888,
+                AlphaFormat.Unpremul,
                 null);
-            bitmap.CopyPixels(framebuffer, AlphaFormat.Unpremul);
+            bitmap.CopyPixels(framebuffer);
         }
         finally
         {
