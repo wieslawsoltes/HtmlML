@@ -692,6 +692,16 @@ public class AvaloniaDomDocument
             case "header":
             case "footer":
             case "nav":
+            case "table":
+            case "tbody":
+            case "thead":
+            case "tfoot":
+            case "tr":
+            case "td":
+            case "th":
+            case "col":
+            case "colgroup":
+            case "style":
                 return new Canvas { Background = Brushes.Transparent };
             case "span":
             case "label":
@@ -1616,6 +1626,8 @@ public class AvaloniaDomElement
     public string tagName => nodeName;
 
     public virtual DomRect getBoundingClientRect() => new(GetElementBounds());
+
+    public virtual DomRect[] getClientRects() => new[] { getBoundingClientRect() };
 
     public virtual double clientWidth => GetClientSize().Width;
 
