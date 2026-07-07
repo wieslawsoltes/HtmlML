@@ -197,6 +197,33 @@
     return patchElement(element);
   }
 
+  function getOptionalElement(id) {
+    return patchElement(document.getElementById(id));
+  }
+
+  function setElementText(element, text) {
+    if (element) {
+      element.textContent = text;
+    }
+  }
+
+  function formatPrice(value) {
+    return Number(value || 0).toFixed(2);
+  }
+
+  function formatCompactNumber(value) {
+    const number = Math.abs(Number(value || 0));
+    if (number >= 1000000) {
+      return `${(value / 1000000).toFixed(2)}M`;
+    }
+
+    if (number >= 1000) {
+      return `${(value / 1000).toFixed(1)}K`;
+    }
+
+    return String(Math.round(value || 0));
+  }
+
   function removeChildren(element) {
     const children = Array.from(element.children || []);
     children.forEach(child => {
@@ -321,6 +348,78 @@
     }
 
     return result;
+  }
+
+  function exponentialMovingAverage(rows, length) {
+    const result = [];
+    const smoothing = 2 / (length + 1);
+    let previous;
+
+    rows.forEach((row, index) => {
+      previous = index === 0 || typeof previous !== 'number'
+        ? row.close
+        : row.close * smoothing + previous * (1 - smoothing);
+
+      if (index + 1 >= length) {
+        result.push({
+          time: row.time,
+          value: Number(previous.toFixed(2))
+        });
+      }
+    });
+
+    return result;
+  }
+
+  function bollingerBands(rows, length, multiplier) {
+    const upper = [];
+    const lower = [];
+
+    for (let index = length - 1; index < rows.length; index++) {
+      const windowRows = rows.slice(index - length + 1, index + 1);
+      const mean = windowRows.reduce((sum, row) => sum + row.close, 0) / length;
+      const variance = windowRows.reduce((sum, row) => sum + Math.pow(row.close - mean, 2), 0) / length;
+      const deviation = Math.sqrt(variance);
+
+      upper.push({
+        time: rows[index].time,
+        value: Number((mean + deviation * multiplier).toFixed(2))
+      });
+      lower.push({
+        time: rows[index].time,
+        value: Number((mean - deviation * multiplier).toFixed(2))
+      });
+    }
+
+    return { upper, lower };
+  }
+
+  function createSignalMarkers(rows) {
+    const markers = [];
+    for (let index = 18; index < rows.length; index += 24) {
+      const row = rows[index];
+      const previous = rows[index - 1];
+      const rising = row.close >= previous.close;
+      markers.push({
+        time: toSeriesTime(row),
+        position: rising ? 'belowBar' : 'aboveBar',
+        color: rising ? '#22c55e' : '#ef4444',
+        shape: rising ? 'arrowUp' : 'arrowDown',
+        text: rising ? 'Breakout' : 'Distribution'
+      });
+    }
+
+    return markers;
+  }
+
+  function createVolumeSeriesData(rows) {
+    return rows.map(row => ({
+      time: toSeriesTime(row),
+      value: row.volume,
+      color: row.close >= row.open
+        ? 'rgba(16, 185, 129, 0.34)'
+        : 'rgba(239, 68, 68, 0.32)'
+    }));
   }
 
   function toSeriesTime(row) {
@@ -498,11 +597,41 @@ void main() {
     const candleWidth = Math.max(3, xStep * 0.58);
     const priceY = value => padTop + (maxPrice - value) / priceSpan * plotHeight;
 
+    const dark = typeof darkTheme === 'undefined' ? true : darkTheme;
+    const background = dark ? '#101827' : '#f8fafc';
+    const gridColor = dark ? 'rgba(148, 163, 184, 0.18)' : 'rgba(100, 116, 139, 0.20)';
+    const labelColor = dark ? '#d1d5db' : '#334155';
+
+    const drawLine = (points, color, lineWidth) => {
+      if (!points || points.length < 2) {
+        return;
+      }
+
+      context.strokeStyle = color;
+      context.lineWidth = lineWidth;
+      context.beginPath();
+      points.forEach((point, index) => {
+        const sourceIndex = visible.findIndex(row => row.time === point.time);
+        if (sourceIndex < 0) {
+          return;
+        }
+
+        const x = padLeft + sourceIndex * xStep + xStep / 2;
+        const y = priceY(point.value);
+        if (index === 0) {
+          context.moveTo(x, y);
+        } else {
+          context.lineTo(x, y);
+        }
+      });
+      context.stroke();
+    };
+
     context.clearRect(0, 0, width, height);
-    context.fillStyle = '#101827';
+    context.fillStyle = background;
     context.fillRect(0, 0, width, height);
 
-    context.strokeStyle = 'rgba(148, 163, 184, 0.18)';
+    context.strokeStyle = gridColor;
     context.lineWidth = 1;
     for (let index = 0; index <= 4; index++) {
       const y = padTop + plotHeight * index / 4;
@@ -534,24 +663,16 @@ void main() {
     });
 
     const average = movingAverage(visible, 12);
-    if (average.length > 1) {
-      context.strokeStyle = '#38bdf8';
-      context.lineWidth = 2;
-      context.beginPath();
-      average.forEach((point, index) => {
-        const sourceIndex = visible.findIndex(row => row.time === point.time);
-        const x = padLeft + sourceIndex * xStep + xStep / 2;
-        const y = priceY(point.value);
-        if (index === 0) {
-          context.moveTo(x, y);
-        } else {
-          context.lineTo(x, y);
-        }
-      });
-      context.stroke();
+    const slowAverage = exponentialMovingAverage(visible, 26);
+    const bands = bollingerBands(visible, 20, 2);
+    if (indicatorsVisible) {
+      drawLine(bands.upper, '#a78bfa', 1.5);
+      drawLine(bands.lower, '#a78bfa', 1.5);
+      drawLine(average, '#38bdf8', 2);
+      drawLine(slowAverage, '#f59e0b', 2);
     }
 
-    context.fillStyle = '#d1d5db';
+    context.fillStyle = labelColor;
     context.font = '13px Segoe UI';
     context.fillText(`TradingView Lightweight Charts data: ${visible[0].time} to ${visible[visible.length - 1].time}`, padLeft, height - 12);
     context.fillText(maxPrice.toFixed(2), 4, padTop + 4);
@@ -572,6 +693,11 @@ void main() {
   const resetButton = getRequiredElement('tradingViewReset');
   const status = getRequiredElement('tradingViewStatus');
   const webglStatus = getRequiredElement('tradingViewWebGlStatus');
+  const zoomButton = getOptionalElement('tradingViewZoom');
+  const indicatorsButton = getOptionalElement('tradingViewIndicators');
+  const themeButton = getOptionalElement('tradingViewTheme');
+  const quoteText = getOptionalElement('tradingViewQuote');
+  const indicatorText = getOptionalElement('tradingViewIndicatorStatus');
   const LightweightCharts = loadLightweightCharts(status);
   const chartSize = readElementSize(chartHost, 720, 360);
 
@@ -593,6 +719,17 @@ void main() {
     },
     crosshair: {
       mode: LightweightCharts.CrosshairMode?.Normal ?? 0
+    },
+    handleScroll: {
+      mouseWheel: true,
+      pressedMouseMove: true,
+      horzTouchDrag: true,
+      vertTouchDrag: false
+    },
+    handleScale: {
+      axisPressedMouseMove: true,
+      mouseWheel: true,
+      pinch: true
     },
     rightPriceScale: {
       borderColor: '#334155',
@@ -626,9 +763,125 @@ void main() {
     ? chart.addLineSeries(averageOptions)
     : chart.addSeries(LightweightCharts.LineSeries, averageOptions);
 
+  const slowAverageOptions = {
+    color: '#f59e0b',
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false
+  };
+  const slowAverageSeries = typeof chart.addLineSeries === 'function'
+    ? chart.addLineSeries(slowAverageOptions)
+    : chart.addSeries(LightweightCharts.LineSeries, slowAverageOptions);
+
+  const bandOptions = color => ({
+    color,
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle?.Dashed ?? 2,
+    priceLineVisible: false,
+    lastValueVisible: false
+  });
+  const upperBandSeries = typeof chart.addLineSeries === 'function'
+    ? chart.addLineSeries(bandOptions('#a78bfa'))
+    : chart.addSeries(LightweightCharts.LineSeries, bandOptions('#a78bfa'));
+  const lowerBandSeries = typeof chart.addLineSeries === 'function'
+    ? chart.addLineSeries(bandOptions('#a78bfa'))
+    : chart.addSeries(LightweightCharts.LineSeries, bandOptions('#a78bfa'));
+
+  const volumeOptions = {
+    priceScaleId: '',
+    priceFormat: { type: 'volume' },
+    lastValueVisible: false,
+    priceLineVisible: false,
+    scaleMargins: { top: 0.78, bottom: 0 }
+  };
+  const volumeSeries = typeof chart.addHistogramSeries === 'function'
+    ? chart.addHistogramSeries(volumeOptions)
+    : chart.addSeries(LightweightCharts.HistogramSeries, volumeOptions);
+  try {
+    chart.priceScale('').applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+  } catch (error) {
+  }
+
   const webglRenderer = createWebGlRenderer(webglSurface);
   let rows = createMarketData();
   let streamIndex = 0;
+  let indicatorsVisible = true;
+  let darkTheme = true;
+  let lastGeometry = null;
+  let lastFallbackCommandCount = 0;
+
+  function applyIndicatorVisibility() {
+    const options = { visible: indicatorsVisible };
+    averageSeries.applyOptions?.(options);
+    slowAverageSeries.applyOptions?.(options);
+    upperBandSeries.applyOptions?.(options);
+    lowerBandSeries.applyOptions?.(options);
+    volumeSeries.applyOptions?.(options);
+    if (indicatorsButton) {
+      indicatorsButton.textContent = indicatorsVisible ? 'Hide indicators' : 'Show indicators';
+    }
+  }
+
+  function applyTheme() {
+    const palette = darkTheme
+      ? {
+          background: '#101827',
+          text: '#d1d5db',
+          grid: 'rgba(148, 163, 184, 0.14)',
+          border: '#334155'
+        }
+      : {
+          background: '#f8fafc',
+          text: '#334155',
+          grid: 'rgba(100, 116, 139, 0.18)',
+          border: '#cbd5e1'
+        };
+
+    chart.applyOptions?.({
+      layout: {
+        background: { type: 'solid', color: palette.background },
+        textColor: palette.text,
+        fontFamily: 'Segoe UI',
+        attributionLogo: false
+      },
+      grid: {
+        vertLines: { color: palette.grid },
+        horzLines: { color: palette.grid }
+      },
+      rightPriceScale: {
+        borderColor: palette.border,
+        scaleMargins: { top: 0.08, bottom: 0.18 }
+      },
+      timeScale: {
+        borderColor: palette.border,
+        timeVisible: false,
+        secondsVisible: false
+      }
+    });
+
+    if (themeButton) {
+      themeButton.textContent = darkTheme ? 'Light theme' : 'Dark theme';
+    }
+  }
+
+  function updateSupplementalText(reason) {
+    const last = rows[rows.length - 1];
+    const previous = rows[rows.length - 2] ?? last;
+    const change = last.close - previous.close;
+    const changePercent = previous.close ? change / previous.close * 100 : 0;
+    const smaFast = movingAverage(rows, 12).slice(-1)[0]?.value ?? last.close;
+    const emaSlow = exponentialMovingAverage(rows, 26).slice(-1)[0]?.value ?? last.close;
+    const bands = bollingerBands(rows, 20, 2);
+    const bandHigh = bands.upper.slice(-1)[0]?.value ?? last.high;
+    const bandLow = bands.lower.slice(-1)[0]?.value ?? last.low;
+    const quote = `Last ${formatPrice(last.close)} (${change >= 0 ? '+' : ''}${formatPrice(change)}, ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%). Volume ${formatCompactNumber(last.volume)}. Range ${formatPrice(last.low)}-${formatPrice(last.high)}.`;
+    const indicatorSummary = `SMA12 ${formatPrice(smaFast)} | EMA26 ${formatPrice(emaSlow)} | Bollinger ${formatPrice(bandLow)}-${formatPrice(bandHigh)} | ${rows.length} bars | ${reason}.`;
+
+    setElementText(quoteText, quote);
+    setElementText(indicatorText, indicatorSummary);
+    root.tradingViewQuoteSummary = quote;
+    root.tradingViewIndicatorSummary = indicatorSummary;
+  }
 
   function publishDiagnostics(reason, geometry, fallbackCommandCount) {
     const chartStats = getChartCanvasStats(chartHost);
@@ -655,15 +908,20 @@ void main() {
     root.tradingViewWebGlDrawCallCount = gl.DrawCallCount;
     root.tradingViewWebGlTriangleCount = gl.TriangleCount;
     root.tradingViewWebGlNativeSurface = String(gl.RenderBackend || '').indexOf('Avalonia OpenGL') === 0;
+    root.tradingViewIndicatorsVisible = indicatorsVisible;
+    root.tradingViewIndicatorSeriesCount = indicatorsVisible ? 5 : 0;
+    root.tradingViewTheme = darkTheme ? 'dark' : 'light';
+    root.tradingViewLastClose = rows[rows.length - 1]?.close ?? 0;
 
     const version = typeof LightweightCharts.version === 'function'
       ? LightweightCharts.version()
       : LightweightCharts.version || LightweightCharts.VERSION || '4.2.3';
-    status.textContent = `TradingView Lightweight Charts ${version} ${reason}. API range: ${root.tradingViewVisibleRange}; library canvases: ${chartStats.canvasCount}; host chart: ${root.tradingViewFallbackRendered ? 'rendered' : 'missing'}.`;
+    updateSupplementalText(reason);
+    status.textContent = `TradingView Lightweight Charts ${version} ${reason}. API range: ${root.tradingViewVisibleRange}; indicators: ${indicatorsVisible ? 'visible' : 'hidden'}; library canvases: ${chartStats.canvasCount}; host chart: ${root.tradingViewFallbackRendered ? 'rendered' : 'missing'}.`;
     webglStatus.textContent = `WebGL ${rendered ? 'rendered' : 'queued'} ${geometry?.barCount ?? 0} volume bars. Backend: ${gl.RenderBackend}; draw calls: ${gl.DrawCallCount}; triangles: ${gl.TriangleCount}; buffer: ${gl.drawingBufferWidth}x${gl.drawingBufferHeight}; ${gl.LastDrawStatus}.`;
   }
 
-  function renderAll(reason) {
+  function renderAll(reason, fitContent = true) {
     candleSeries.setData(rows.map(row => ({
       time: toSeriesTime(row),
       open: row.open,
@@ -675,16 +933,36 @@ void main() {
       time: toSeriesTime(row),
       value: row.value
     })));
+    slowAverageSeries.setData(exponentialMovingAverage(rows, 26).map(row => ({
+      time: toSeriesTime(row),
+      value: row.value
+    })));
+    const bands = bollingerBands(rows, 20, 2);
+    upperBandSeries.setData(bands.upper.map(row => ({
+      time: toSeriesTime(row),
+      value: row.value
+    })));
+    lowerBandSeries.setData(bands.lower.map(row => ({
+      time: toSeriesTime(row),
+      value: row.value
+    })));
+    volumeSeries.setData(createVolumeSeriesData(rows));
+    if (typeof candleSeries.setMarkers === 'function') {
+      candleSeries.setMarkers(createSignalMarkers(rows));
+    }
+    applyIndicatorVisibility();
     // Lightweight Charts skips same-size repaints; nudge once to paint in this hosted DOM.
     if (chartSize.height > 1) {
       chart.resize(chartSize.width, chartSize.height - 1, true);
     }
     chart.resize(chartSize.width, chartSize.height, true);
-    chart.timeScale().fitContent();
-    const fallbackCommandCount = renderFallbackChart(rows);
-    const geometry = webglRenderer.render(rows);
-    publishDiagnostics(reason, geometry, fallbackCommandCount);
-    win.requestAnimationFrame(() => publishDiagnostics(reason, geometry, fallbackCommandCount));
+    if (fitContent) {
+      chart.timeScale().fitContent();
+    }
+    lastFallbackCommandCount = renderFallbackChart(rows);
+    lastGeometry = webglRenderer.render(rows);
+    publishDiagnostics(reason, lastGeometry, lastFallbackCommandCount);
+    win.requestAnimationFrame(() => publishDiagnostics(reason, lastGeometry, lastFallbackCommandCount));
   }
 
   function mutateLastBar() {
@@ -725,7 +1003,7 @@ void main() {
       mutateLastBar();
     }
 
-    renderAll('stream tick rendered');
+    renderAll('stream tick rendered', false);
   });
 
   shuffleButton.addEventListener('click', () => {
@@ -741,7 +1019,7 @@ void main() {
       };
     });
     streamIndex++;
-    renderAll('dataset shuffled');
+    renderAll('dataset shuffled', false);
   });
 
   resetButton.addEventListener('click', () => {
@@ -749,6 +1027,31 @@ void main() {
     streamIndex = 0;
     renderAll('sample reset');
   });
+
+  if (zoomButton) {
+    zoomButton.addEventListener('click', () => {
+      const from = Math.max(0, rows.length - 42);
+      chart.timeScale().setVisibleLogicalRange?.({ from, to: rows.length + 3 });
+      lastFallbackCommandCount = renderFallbackChart(rows);
+      lastGeometry = webglRenderer.render(rows);
+      publishDiagnostics('zoomed to recent bars', lastGeometry, lastFallbackCommandCount);
+    });
+  }
+
+  if (indicatorsButton) {
+    indicatorsButton.addEventListener('click', () => {
+      indicatorsVisible = !indicatorsVisible;
+      renderAll(indicatorsVisible ? 'indicators enabled' : 'indicators hidden', false);
+    });
+  }
+
+  if (themeButton) {
+    themeButton.addEventListener('click', () => {
+      darkTheme = !darkTheme;
+      applyTheme();
+      renderAll(`${darkTheme ? 'dark' : 'light'} theme applied`, false);
+    });
+  }
 
   if (typeof chart.subscribeCrosshairMove === 'function') {
     chart.subscribeCrosshairMove(param => {
@@ -761,9 +1064,13 @@ void main() {
         return;
       }
 
-      status.textContent = `TradingView crosshair ${row.time}: O ${row.open} H ${row.high} L ${row.low} C ${row.close}`;
+      const message = `TradingView crosshair ${row.time}: O ${row.open} H ${row.high} L ${row.low} C ${row.close}`;
+      status.textContent = message;
+      setElementText(quoteText, `${message}; V ${formatCompactNumber(row.volume)}`);
+      root.tradingViewCrosshairSummary = message;
     });
   }
 
+  applyTheme();
   renderAll('rendered');
 })();

@@ -2259,8 +2259,13 @@ frameHandle = window.requestAnimationFrame(render);
     <StackPanel Orientation="Horizontal" Spacing="8">
       <Button Name="tradingViewStream" Content="Stream tick" />
       <Button Name="tradingViewShuffle" Content="Shuffle data" />
+      <Button Name="tradingViewZoom" Content="Zoom recent" />
+      <Button Name="tradingViewIndicators" Content="Hide indicators" />
+      <Button Name="tradingViewTheme" Content="Light theme" />
       <Button Name="tradingViewReset" Content="Reset" />
     </StackPanel>
+    <TextBlock Name="tradingViewQuote" Foreground="#f8fafc" FontWeight="SemiBold" TextWrapping="Wrap" />
+    <TextBlock Name="tradingViewIndicatorStatus" Foreground="#a7f3d0" TextWrapping="Wrap" />
     <TextBlock Name="tradingViewStatus" Foreground="#d1d5db" TextWrapping="Wrap" />
     <TextBlock Name="tradingViewWebGlStatus" Foreground="#93c5fd" TextWrapping="Wrap" />
   </StackPanel>
@@ -2273,6 +2278,143 @@ try {
   const status = document.getElementById('tradingViewStatus');
   if (status) {
     status.textContent = `Failed to load TradingView WebGL demo: ${error}`;
+  }
+  throw error;
+}
+"""
+            ),
+            new Preset(
+                "TradingView Professional Charting",
+                """
+<Border xmlns="https://github.com/avaloniaui" Width="1316" Height="676" Background="#050506" BorderBrush="#2563eb" BorderThickness="2" CornerRadius="8" ClipToBounds="True">
+  <Grid RowDefinitions="44,600,32" ColumnDefinitions="44,900,330,42">
+    <Border Grid.Row="0" Grid.ColumnSpan="4" Background="#0a0a0b" BorderBrush="#22252a" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="*,Auto" Margin="8,5">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Border Width="30" Height="30" Background="#111318" BorderBrush="#2b3038" BorderThickness="1" CornerRadius="15">
+            <TextBlock Text="TV" Foreground="#f8fafc" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBox Name="professionalSymbolInput" Text="NFLX" Width="138" Height="30" Background="#24262b" Foreground="#f8fafc" BorderBrush="#383d45" Padding="12,4" />
+          <Button Name="professionalSymbolApply" Content="+" Width="32" Height="30" />
+          <Button Name="professionalTf1H" Content="1h" Width="42" Height="30" />
+          <Button Name="professionalCandleMode" Content="Candles" Width="78" Height="30" />
+          <Button Name="professionalIndicatorToggle" Content="Indicators" Width="92" Height="30" />
+          <Button Name="professionalAlert" Content="Alert" Width="64" Height="30" />
+          <Button Name="professionalReplay" Content="Replay" Width="70" Height="30" />
+          <Button Name="professionalUndo" Content="Undo" Width="54" Height="30" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+          <Button Name="professionalLayout" Content="Supercharts" Width="110" Height="30" />
+          <Button Name="professionalScreenshot" Content="Shot" Width="54" Height="30" />
+          <Button Name="professionalTrade" Content="Trade" Width="64" Height="30" />
+          <Button Name="professionalPublish" Content="Publish" Width="76" Height="30" Background="#f8fafc" Foreground="#020617" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1" Grid.Column="0" Background="#0a0a0c" BorderBrush="#242833" BorderThickness="0,0,1,0">
+      <StackPanel Margin="5,8" Spacing="8">
+        <Button Name="professionalToolCross" Content="+" Width="32" Height="32" />
+        <Button Name="professionalToolTrend" Content="/" Width="32" Height="32" />
+        <Button Name="professionalToolFib" Content="Fib" Width="32" Height="32" />
+        <Button Name="professionalToolBrush" Content="Br" Width="32" Height="32" />
+        <Button Name="professionalToolText" Content="T" Width="32" Height="32" />
+        <Button Name="professionalToolMeasure" Content="M" Width="32" Height="32" />
+        <Button Name="professionalToolMagnet" Content="Mag" Width="32" Height="32" />
+        <Button Name="professionalRisk" Content="Risk" Width="32" Height="32" />
+        <Button Name="professionalToolTrash" Content="Del" Width="32" Height="32" />
+      </StackPanel>
+    </Border>
+
+    <Grid Grid.Row="1" Grid.Column="1" RowDefinitions="300,300" ColumnDefinitions="450,450" Background="#050506">
+      <Border Grid.Row="0" Grid.Column="0" Background="#08090b" BorderBrush="#2a2d33" BorderThickness="0,0,1,1">
+        <Grid RowDefinitions="30,*">
+          <TextBlock Name="professionalPanelAaplTitle" Text="Apple Inc. - 30 - NASDAQ - TPO" Foreground="#e5e7eb" Margin="10,7,0,0" />
+          <Canvas Grid.Row="1" Name="professionalChartAaplHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
+        </Grid>
+      </Border>
+      <Border Grid.Row="0" Grid.Column="1" Background="#08090b" BorderBrush="#2a2d33" BorderThickness="0,0,0,1">
+        <Grid RowDefinitions="30,*">
+          <TextBlock Name="professionalPanelMainTitle" Text="Netflix, Inc. - 1h - NASDAQ" Foreground="#e5e7eb" Margin="10,7,0,0" />
+          <Canvas Grid.Row="1" Name="professionalPriceChartHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
+        </Grid>
+      </Border>
+      <Border Grid.Row="1" Grid.Column="0" Background="#08090b" BorderBrush="#2a2d33" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="30,*">
+          <TextBlock Name="professionalPanelBtcTitle" Text="Bitcoin / U.S. Dollar - 15 - Coinbase" Foreground="#e5e7eb" Margin="10,7,0,0" />
+          <Canvas Grid.Row="1" Name="professionalChartBtcHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
+        </Grid>
+      </Border>
+      <Border Grid.Row="1" Grid.Column="1" Background="#08090b">
+        <Grid RowDefinitions="30,*">
+          <TextBlock Name="professionalPanelTslaTitle" Text="Tesla, Inc. - 1 - NASDAQ" Foreground="#e5e7eb" Margin="10,7,0,0" />
+          <Canvas Grid.Row="1" Name="professionalChartTslaHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
+        </Grid>
+      </Border>
+    </Grid>
+
+    <Border Grid.Row="1" Grid.Column="2" Background="#0a0a0b" BorderBrush="#242833" BorderThickness="1,0,1,0">
+      <Grid RowDefinitions="260,*">
+        <StackPanel Margin="12,10,12,0" Spacing="6">
+          <Grid ColumnDefinitions="*,70,70,70">
+            <TextBlock Text="Main Watchlist" Foreground="#f8fafc" FontWeight="SemiBold" />
+            <TextBlock Grid.Column="1" Text="Last" Foreground="#9ca3af" HorizontalAlignment="Right" />
+            <TextBlock Grid.Column="2" Text="Chg" Foreground="#9ca3af" HorizontalAlignment="Right" />
+            <TextBlock Grid.Column="3" Text="Chg%" Foreground="#9ca3af" HorizontalAlignment="Right" />
+          </Grid>
+          <Button Name="professionalWatchAapl" Content="AAPL      264.18    -8.77    -3.21%" HorizontalContentAlignment="Stretch" />
+          <Button Name="professionalWatchNflx" Content="NFLX       96.24    11.65    13.77%" HorizontalContentAlignment="Stretch" />
+          <Button Name="professionalWatchTsla" Content="TSLA      402.51    -6.07    -1.49%" HorizontalContentAlignment="Stretch" />
+          <Button Name="professionalWatchMsft" Content="MSFT      392.74    -8.98    -2.24%" HorizontalContentAlignment="Stretch" />
+          <Button Name="professionalWatchNvda" Content="NVDA      177.19    -7.70    -4.16%" HorizontalContentAlignment="Stretch" />
+          <Button Name="professionalWatchBtc" Content="BTCUSD  66042.10   428.50     0.65%" HorizontalContentAlignment="Stretch" />
+        </StackPanel>
+        <Border Grid.Row="1" Margin="12" Padding="12" Background="#101114" BorderBrush="#262b35" BorderThickness="1" CornerRadius="6">
+          <StackPanel Spacing="10">
+            <TextBlock Name="professionalQuote" Foreground="#f8fafc" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock Name="professionalExecution" Foreground="#9ca3af" TextWrapping="Wrap" />
+            <TextBlock Name="professionalRiskStatus" Foreground="#fde68a" TextWrapping="Wrap" />
+            <TextBlock Text="Order book" Foreground="#e2e8f0" FontWeight="SemiBold" />
+            <TextBlock Name="professionalOrderBook" Foreground="#bae6fd" FontFamily="Consolas" TextWrapping="Wrap" />
+            <TextBlock Name="professionalStatus" Foreground="#dbeafe" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1" Grid.Column="3" Background="#0a0a0c">
+      <StackPanel Margin="5,8" Spacing="8">
+        <Button Name="professionalRightWatch" Content="WL" Width="32" Height="32" />
+        <Button Name="professionalRightClock" Content="Clk" Width="32" Height="32" />
+        <Button Name="professionalRightNews" Content="News" Width="32" Height="32" />
+        <Button Name="professionalRightCalendar" Content="Cal" Width="32" Height="32" />
+        <Button Name="professionalRightMore" Content="..." Width="32" Height="32" />
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Row="2" Grid.ColumnSpan="4" Background="#09090b" BorderBrush="#242833" BorderThickness="0,1,0,0">
+      <Grid ColumnDefinitions="*,Auto" Margin="58,3,12,3">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button Name="professionalTf1D" Content="1D" Width="42" Height="26" />
+          <Button Name="professionalTf5D" Content="5D" Width="42" Height="26" />
+          <Button Name="professionalTf1M" Content="1M" Width="42" Height="26" />
+          <Button Name="professionalTf6M" Content="6M" Width="42" Height="26" />
+          <Button Name="professionalTfYtd" Content="YTD" Width="50" Height="26" />
+          <Button Name="professionalTfAll" Content="All" Width="42" Height="26" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" Name="professionalClock" Text="08:54:35 UTC   RTH   ADJ" Foreground="#d1d5db" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+  </Grid>
+</Border>
+""",
+                """
+try {
+  require('./Scripts/tradingview-professional-demo.js');
+} catch (error) {
+  const status = document.getElementById('professionalStatus');
+  if (status) {
+    status.textContent = `Failed to load professional TradingView demo: ${error}`;
   }
   throw error;
 }
