@@ -26,6 +26,8 @@ Together they enable you to describe user interfaces with familiar HTML semantic
 | Path | Description |
 | --- | --- |
 | `src/HtmlML.Core` | UI-framework-neutral values and host/backend contracts. |
+| `src/HtmlML.Backend.Abstractions` | Backend manifests, validation, and capability negotiation. |
+| `src/HtmlML.Backend.Avalonia` | Current Avalonia presentation implementation. |
 | `src/HtmlML` | HtmlML markup library and HTML element implementations. |
 | `src/JavaScript.Avalonia` | Engine-neutral browser/DOM services for Avalonia. |
 | `src/JavaScript.Avalonia.ClearScript` | ClearScript/V8 execution adapter and shared compilation cache. |
@@ -37,6 +39,7 @@ Together they enable you to describe user interfaces with familiar HTML semantic
 | `samples/hosts/Avalonia` | Runnable `.csproj` hosts: the R5 catalog and three standalone product shapes. |
 | `third-party/clearscript` | ClearScript 7.5.1 source submodule on the HtmlML native patch branch. |
 | `third-party/v8` | V8 14.7.173.23 source submodule on ClearScript's compatibility patch branch. |
+| `packaging/HtmlML.NativeEngine.Runtime` | RID-specific native V8/DOM/CSS/scene runtime package definition. |
 | `samples/website` | HtmlML showcase demonstrating markup, styling, and canvas scripting. |
 | `samples/JavaScriptPlayground` | Interactive playground with editable XAML, live preview, and JavaScript console for `JavaScript.Avalonia`. |
 
@@ -239,6 +242,13 @@ HtmlML.Backend.Avalonia + HtmlML.Sdk.Avalonia
 R0 through R5 are complete: the semantic cores are portable, Avalonia is the reference
 backend package, and the React/TypeScript SDK is packaged and template-tested. R6 is
 the direct ProGPU backend proof using the same component assets and profile contracts.
+
+HtmlML supports a managed ClearScript/Avalonia mode and an opt-in native V8 mode that
+publishes immutable scene diffs. See [Managed and native backends](docs/backends.md) for
+selection guidance, runtime packages, release automation, and the precise status of
+Uno, WPF, and direct GPU backend extensibility. The portable contracts are ready for
+backend authoring, but the shared coordinators and native scene-reader SDK still need
+extraction before those backends are turnkey integrations.
 
 ## Roadmap
 

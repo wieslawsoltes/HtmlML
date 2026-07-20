@@ -20,3 +20,7 @@ architecture changes.
 Active investigations:
 
 - [Native V8 + immutable scene engine](native-v8-scene-engine.md)
+
+Implementation guides:
+
+- [Managed and native backends, packaging, and extension status](../backends.md)
