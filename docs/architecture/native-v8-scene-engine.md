@@ -135,3 +135,8 @@ Native mode is production-ready per capability group, not as an all-or-nothing b
 7. RID package matrix, signing, notarization and crash-symbol delivery.
 
 The managed mode remains supported while native capability groups are promoted.
+
+The initial automated package matrix builds and exercises macOS ARM64, Linux x64, and
+Windows x64. Relocatable runtime packaging and required conformance execution are in
+place; code signing, macOS notarization, crash-symbol publication, and the additional
+modeled RIDs remain release gates.
