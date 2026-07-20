@@ -13,6 +13,7 @@
 *.userprefs
 
 # Build results
+/third-party/jint/
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
@@ -289,3 +290,4 @@ tools/**
 
 # macOS
 .DS_Store
+BenchmarkDotNet.Artifacts/

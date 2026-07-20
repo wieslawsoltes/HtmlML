@@ -1,0 +1,187 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Responsive release list keeps dates aligned and descriptions wrapping</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .release-list-fixture {
+    color: #dcdcdc;
+    font-family: Arial, sans-serif;
+  }
+  .release-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 64px;
+  }
+  .release-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .release-version {
+    min-width: 48px;
+    font-size: 14px;
+    line-height: 21px;
+  }
+  .release-title-date {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+  .release-title {
+    margin: 0;
+    font-size: 14px;
+    line-height: 21px;
+  }
+  .release-date {
+    font-size: 12px;
+    line-height: 24px;
+  }
+  .release-summary ul {
+    margin: 0;
+    padding-left: 0;
+  }
+  .release-description {
+    width: auto;
+    padding: 0 0 4px 56px;
+    font-size: 12px;
+    line-height: 24px;
+    list-style-type: none;
+  }
+  .release-nowrap-probe {
+    width: 120px;
+    white-space: nowrap;
+    font-size: 12px;
+    line-height: 24px;
+  }
+</style>
+<body>
+<main id="release-list-fixture" class="release-list-fixture">
+  <article class="release-entry">
+    <div class="release-title-row">
+      <div class="release-version">2.1.1</div>
+      <div class="release-title-date">
+        <h2 class="release-title">Less Toast, More Trading</h2>
+        <div class="release-date">July 15, 2026</div>
+      </div>
+    </div>
+    <div class="release-summary">
+      <ul>
+        <li class="release-description">Disable toast notifications for older desktop systems to prevent an application crash</li>
+      </ul>
+    </div>
+  </article>
+  <div class="release-nowrap-probe">This control label must stay on one line</div>
+</main>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+  const root = document.getElementById("release-list-fixture");
+  const date = root.querySelector(".release-date");
+  const titleRow = root.querySelector(".release-title-row");
+  const description = root.querySelector(".release-description");
+  const entry = root.querySelector(".release-entry");
+  const nowrapProbe = root.querySelector(".release-nowrap-probe");
+
+  function capture(width) {
+    root.style.width = width + "px";
+    const rowRect = titleRow.getBoundingClientRect();
+    const dateRect = date.getBoundingClientRect();
+    const descriptionRect = description.getBoundingClientRect();
+    const entryRect = entry.getBoundingClientRect();
+    return {
+      rowRight: rowRect.right,
+      dateRight: dateRect.right,
+      descriptionWidth: descriptionRect.width,
+      descriptionHeight: descriptionRect.height,
+      entryHeight: entryRect.height,
+      nowrapHeight: nowrapProbe.getBoundingClientRect().height,
+      whiteSpace: getComputedStyle(description).whiteSpace,
+      lineHeight: getComputedStyle(description).lineHeight
+    };
+  }
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function pass() {
+    state.results.push({
+      name: "release list stays aligned and wraps text across repeated resize layout",
+      status: "PASS",
+      message: null,
+      stack: null
+    });
+    state.harness = { status: 0, message: null, stack: null };
+    state.complete = true;
+  }
+
+  function fail(error) {
+    state.results.push({
+      name: "release list stays aligned and wraps text across repeated resize layout",
+      status: "FAIL",
+      message: String(error && error.message || error),
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = {
+      status: 1,
+      message: state.results[0].message,
+      stack: state.results[0].stack
+    };
+    state.complete = true;
+  }
+
+  root.style.width = "653px";
+  setTimeout(() => {
+    try {
+      const wide = capture(653);
+      assert(Math.abs(wide.dateRight - wide.rowRight) <= 1,
+        "wide date is not right aligned: " + JSON.stringify(wide));
+      assert(wide.descriptionHeight <= 29,
+        "wide description unexpectedly wrapped: " + wide.descriptionHeight);
+      assert(wide.nowrapHeight <= 25,
+        "explicit nowrap control label wrapped at wide width: " + wide.nowrapHeight);
+
+      root.style.width = "373px";
+      setTimeout(() => {
+        try {
+          const narrow = capture(373);
+          assert(Math.abs(narrow.dateRight - narrow.rowRight) <= 1,
+            "narrow date is not right aligned: " + JSON.stringify(narrow));
+          assert(narrow.descriptionHeight >= 48,
+            "narrow description did not wrap: " + JSON.stringify({ wide, narrow }));
+          assert(narrow.entryHeight >= wide.entryHeight + 20,
+            "entry did not grow to contain wrapped text");
+          assert(narrow.nowrapHeight <= 25,
+            "explicit nowrap control label wrapped at narrow width: " + narrow.nowrapHeight);
+
+          root.style.width = "653px";
+          setTimeout(() => {
+            try {
+              const restored = capture(653);
+              assert(Math.abs(restored.dateRight - restored.rowRight) <= 1,
+                "restored date is not right aligned: " + JSON.stringify(restored));
+              assert(Math.abs(restored.descriptionHeight - wide.descriptionHeight) <= 1,
+                "description did not return to one line after widening");
+              pass();
+            } catch (error) {
+              fail(error);
+            }
+          }, 0);
+        } catch (error) {
+          fail(error);
+        }
+      }, 0);
+    } catch (error) {
+      fail(error);
+    }
+  }, 0);
+</script>
+</body>

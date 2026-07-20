@@ -1,0 +1,283 @@
+{
+  "schemaVersion": "1.0",
+  "profileVersion": "1.0",
+  "backend": "HtmlML.Backend.Avalonia",
+  "samples": [
+    {
+      "id": "ComponentHost.Basic",
+      "purpose": "Run a JavaScript component without a browser",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- ComponentHost.Basic",
+      "expectedInteractions": "mount, click, pixel, disposal",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "Hybrid.ReactIslands",
+      "purpose": "Native shell with two React islands",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- Hybrid.ReactIslands",
+      "expectedInteractions": "state isolation and native/JS round trip",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "TypeScriptDesktop",
+      "purpose": "Primarily TypeScript desktop application",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- TypeScriptDesktop",
+      "expectedInteractions": "template build, package, forms and dialog",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "ReactDashboard",
+      "purpose": "Responsive React dashboard",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- ReactDashboard",
+      "expectedInteractions": "narrow/wide/DPI and async data",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "PluginWorkbench",
+      "purpose": "Trusted JavaScript UI plugins",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- PluginWorkbench",
+      "expectedInteractions": "capability denial and unload/reload",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "MultiInstanceWorkstation",
+      "purpose": "Multi-instance component workstation",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- MultiInstanceWorkstation",
+      "expectedInteractions": "shared cache, isolated state and peer disposal",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "WebToNativeMigration",
+      "purpose": "Incremental web-to-native migration",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- WebToNativeMigration",
+      "expectedInteractions": "shared business state and focus transfer",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "OfflineKiosk",
+      "purpose": "Packaged offline appliance",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- OfflineKiosk",
+      "expectedInteractions": "network-disabled launch and asset audit",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "HeadlessComponentTests",
+      "purpose": "Deterministic component test fixture",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- HeadlessComponentTests",
+      "expectedInteractions": "DOM, input and reference rendering",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "HostBridge.Services",
+      "purpose": "Explicit .NET host integration",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- HostBridge.Services",
+      "expectedInteractions": "grant, deny, cancellation and exception translation",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "AccessibilityGallery",
+      "purpose": "Semantic accessibility gallery",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- AccessibilityGallery",
+      "expectedInteractions": "automation metadata and keyboard order",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    },
+    {
+      "id": "CanvasWorkbench.Advanced",
+      "purpose": "Advanced interactive Canvas workload",
+      "nonGoals": [
+        "General website compatibility",
+        "Untrusted-code sandboxing"
+      ],
+      "requiredProfileVersion": "1.0",
+      "backendSupport": {
+        "Avalonia": "supported"
+      },
+      "offlineAssets": true,
+      "launchCommand": "dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog -- CanvasWorkbench.Advanced",
+      "expectedInteractions": "canvas drawing, menus, overlays, and input lifecycle",
+      "diagnostics": [
+        "component lifecycle",
+        "compatibility",
+        "cache",
+        "host bridge"
+      ],
+      "testCommand": "dotnet run --project tests/HtmlML.Sdk.SampleSmoke",
+      "packagingNotes": "Assets are local and declared by htmlml-component.json."
+    }
+  ]
+}

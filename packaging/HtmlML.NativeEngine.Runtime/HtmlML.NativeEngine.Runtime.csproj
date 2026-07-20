@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <PackageId Condition="'$(HtmlMlNativeEngineRid)' != ''">HtmlML.NativeEngine.Runtime.$(HtmlMlNativeEngineRid)</PackageId>
+    <PackageId Condition="'$(PackageId)' == ''">HtmlML.NativeEngine.Runtime.Template</PackageId>
+    <Description>RID-specific native V8 DOM, CSS, layout and immutable-scene engine for HtmlML.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <RepositoryUrl>https://github.com/wieslawsoltes/HtmlML</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>htmlml;dom;css;v8;native;runtime</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <HtmlMlNativeEngineAbiVersion>1</HtmlMlNativeEngineAbiVersion>
+    <HtmlMlNativeEngineV8Revision>14.7.173.23</HtmlMlNativeEngineV8Revision>
+    <HtmlMlNativeEngineSupportedRids>osx-arm64;osx-x64;linux-arm64;linux-x64;win-arm64;win-x64</HtmlMlNativeEngineSupportedRids>
+    <HtmlMlNativeEngineExpectedFileName Condition="$([System.String]::Copy('$(HtmlMlNativeEngineRid)').StartsWith('osx-'))">libhtmlml_native_engine.dylib</HtmlMlNativeEngineExpectedFileName>
+    <HtmlMlNativeEngineExpectedFileName Condition="$([System.String]::Copy('$(HtmlMlNativeEngineRid)').StartsWith('linux-'))">libhtmlml_native_engine.so</HtmlMlNativeEngineExpectedFileName>
+    <HtmlMlNativeEngineExpectedFileName Condition="$([System.String]::Copy('$(HtmlMlNativeEngineRid)').StartsWith('win-'))">htmlml_native_engine.dll</HtmlMlNativeEngineExpectedFileName>
+    <HtmlMlNativeEngineActualFileName Condition="'$(HtmlMlNativeEnginePath)' != ''">$([System.IO.Path]::GetFileName('$(HtmlMlNativeEnginePath)'))</HtmlMlNativeEngineActualFileName>
+    <HtmlMlNativePackageMetadataDir>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/native-package/</HtmlMlNativePackageMetadataDir>
+    <HtmlMlNativeManifestPath>$(HtmlMlNativePackageMetadataDir)htmlml-native-runtime.json</HtmlMlNativeManifestPath>
+    <HtmlMlNativePropsPath>$(HtmlMlNativePackageMetadataDir)HtmlML.NativeEngine.Runtime.props</HtmlMlNativePropsPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="HtmlML.NativeEngine.Runtime.targets"
+          Pack="true"
+          PackagePath="buildTransitive\$(PackageId).targets" />
+    <None Include="$(HtmlMlNativeEnginePath)"
+          Pack="true"
+          PackagePath="runtimes\$(HtmlMlNativeEngineRid)\native\$(HtmlMlNativeEngineExpectedFileName)"
+          Condition="'$(HtmlMlNativeEnginePath)' != ''" />
+    <None Include="$(HtmlMlNativeManifestPath)"
+          Pack="true"
+          PackagePath="runtimes\$(HtmlMlNativeEngineRid)\native\htmlml-native-runtime.json" />
+    <None Include="$(HtmlMlNativePropsPath)"
+          Pack="true"
+          PackagePath="buildTransitive\$(PackageId).props" />
+  </ItemGroup>
+
+  <Target Name="ValidateHtmlMlNativeEnginePackage" BeforeTargets="GenerateNuspec">
+    <Error Condition="'$(HtmlMlNativeEngineRid)' == '' or '$(HtmlMlNativeEnginePath)' == ''"
+           Text="Packing the native HtmlML runtime requires HtmlMlNativeEngineRid and HtmlMlNativeEnginePath." />
+    <Error Condition="!$([System.String]::Copy(';$(HtmlMlNativeEngineSupportedRids);').Contains(';$(HtmlMlNativeEngineRid);'))"
+           Text="Unsupported HtmlML native engine RID '$(HtmlMlNativeEngineRid)'. Supported RIDs: $(HtmlMlNativeEngineSupportedRids)." />
+    <Error Condition="!Exists('$(HtmlMlNativeEnginePath)')"
+           Text="The configured HtmlML native engine does not exist: $(HtmlMlNativeEnginePath)" />
+    <Error Condition="'$(HtmlMlNativeEngineActualFileName)' != '$(HtmlMlNativeEngineExpectedFileName)'"
+           Text="Native engine file '$(HtmlMlNativeEngineActualFileName)' does not match RID '$(HtmlMlNativeEngineRid)'; expected '$(HtmlMlNativeEngineExpectedFileName)'." />
+  </Target>
+
+  <Target Name="PrepareHtmlMlNativeEnginePackage"
+          BeforeTargets="GenerateNuspec"
+          DependsOnTargets="ValidateHtmlMlNativeEnginePackage">
+    <MakeDir Directories="$(HtmlMlNativePackageMetadataDir)" />
+    <GetFileHash Files="$(HtmlMlNativeEnginePath)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_HtmlMlNativeEngineHash" />
+    </GetFileHash>
+    <WriteLinesToFile File="$(HtmlMlNativeManifestPath)"
+                      Lines="{&quot;schemaVersion&quot;:1,&quot;packageVersion&quot;:&quot;$(PackageVersion)&quot;,&quot;runtimeIdentifier&quot;:&quot;$(HtmlMlNativeEngineRid)&quot;,&quot;fileName&quot;:&quot;$(HtmlMlNativeEngineExpectedFileName)&quot;,&quot;sha256&quot;:&quot;%(_HtmlMlNativeEngineHash.FileHash)&quot;,&quot;abiVersion&quot;:$(HtmlMlNativeEngineAbiVersion),&quot;v8Revision&quot;:&quot;$(HtmlMlNativeEngineV8Revision)&quot;,&quot;configuration&quot;:&quot;$(Configuration)&quot;}"
+                      Overwrite="true" />
+    <WriteLinesToFile File="$(HtmlMlNativePropsPath)"
+                      Lines="&lt;Project&gt;&lt;PropertyGroup&gt;&lt;HtmlMlNativeEnginePackagedRid&gt;$(HtmlMlNativeEngineRid)&lt;/HtmlMlNativeEnginePackagedRid&gt;&lt;HtmlMlNativeEnginePackagedFileName&gt;$(HtmlMlNativeEngineExpectedFileName)&lt;/HtmlMlNativeEnginePackagedFileName&gt;&lt;HtmlMlNativeEnginePackagedAbi&gt;$(HtmlMlNativeEngineAbiVersion)&lt;/HtmlMlNativeEnginePackagedAbi&gt;&lt;/PropertyGroup&gt;&lt;/Project&gt;"
+                      Overwrite="true" />
+  </Target>
+</Project>

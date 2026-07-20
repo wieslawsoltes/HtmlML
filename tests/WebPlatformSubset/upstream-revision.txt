@@ -1,0 +1,5 @@
+Repository: https://github.com/web-platform-tests/wpt
+Revision: 2c705104a295c48053eeddf7fe0170d790a4e853
+Commit date: 2026-07-14T05:45:05-07:00
+Commit subject: Remove web platform tests for Attribution Reporting API
+License: upstream/LICENSE.md (BSD-3-Clause)

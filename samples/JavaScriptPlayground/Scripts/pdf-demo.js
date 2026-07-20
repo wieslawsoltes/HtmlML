@@ -324,7 +324,7 @@ const ensurePromisePump = () => {
     return;
   }
 
-  // PDF.js resolves through chained promises. A lightweight timer keeps Jint's
+  // PDF.js resolves through chained promises. A lightweight timer keeps the
   // event loop moving while the fake worker and render task settle.
   promisePumpId = window.setInterval(() => {}, 50);
 };

@@ -1,17 +1,27 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using JavaScript.Avalonia;
-using Jint.Native;
 using Avalonia.Interactivity;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.TextMate;
 using TextMateSharp.Grammars;
+using System.Linq;
+using Avalonia.VisualTree;
+#if HTMLML_CLEARSCRIPT_V8
+using JavaScript.Avalonia.ClearScript;
+#endif
 
 namespace JavaScriptPlayground;
 
@@ -19,7 +29,20 @@ public partial class MainWindow : Window
 {
     private readonly List<Preset> _presets;
     private readonly PlaygroundShellBridge _shellBridge = new();
-    private JintAvaloniaHost? _host;
+    private readonly List<AvaloniaBrowserHost> _hosts = new();
+    private readonly List<Control> _documentRoots = new();
+    private Preset? _activePreset;
+#if HTMLML_CLEARSCRIPT_V8
+    private readonly List<ClearScriptV8Runtime> _v8Runtimes = new();
+    private readonly ClearScriptV8SharedCache _v8SharedCache = CreatePlaygroundV8Cache();
+    private CancellationTokenSource? _v8PreparationCancellation;
+    private Task<V8PreparationSummary>? _v8PreparationTask;
+    private DispatcherTimer? _v8PreparationIndicator;
+    private int _v8PreparationIndicatorFrame;
+    private int _v8PreparationUiHeartbeats;
+    private long _v8PreparationLastHeartbeat;
+    private long _v8PreparationMaximumHeartbeatGap;
+#endif
     private readonly TextDocument _xamlDocument = new();
     private readonly TextDocument _scriptDocument = new();
     private readonly RegistryOptions _registryOptions = new(ThemeName.LightPlus);
@@ -61,8 +84,14 @@ public partial class MainWindow : Window
 
     private void ApplyPreset(Preset preset)
     {
+        _activePreset = preset;
         _xamlDocument.Text = preset.Xaml;
         _scriptDocument.Text = preset.Script;
+        if (preset.InstanceCount > 1)
+        {
+            Width = Math.Max(Width, 1800);
+            Height = Math.Max(Height, 1100);
+        }
         LoadXaml(AutoRunCheckBox.IsChecked == true);
     }
 
@@ -79,38 +108,350 @@ public partial class MainWindow : Window
         LoadXaml(AutoRunCheckBox.IsChecked == true);
     }
 
-    private void OnRunScriptClick(object? sender, RoutedEventArgs e)
+    private async void OnRunScriptClick(object? sender, RoutedEventArgs e)
     {
+#if HTMLML_CLEARSCRIPT_V8
+        if (_v8PreparationTask is { IsCompleted: false } preparation)
+        {
+            SetStatus("Waiting for background V8 compilation...", false);
+            try
+            {
+                await preparation;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+#endif
         RunScript(resetHost: true);
     }
 
     private void LoadXaml(bool runScript)
     {
         var loadVersion = ++_xamlLoadVersion;
-
         try
         {
             var xaml = _xamlDocument.Text ?? string.Empty;
-            var loaded = AvaloniaRuntimeXamlLoader.Load(xaml);
-            if (loaded is not Control control)
-            {
-                throw new InvalidOperationException("Root element must derive from Control.");
-            }
+            var control = CreatePreviewContent(xaml, _activePreset?.InstanceCount ?? 1);
 
             PreviewHost.Child = control;
             SetStatus("XAML loaded", false);
-            ResetHost();
-            if (runScript)
-            {
-                ScheduleAutoRun(loadVersion);
-            }
+
+            // Establish the containing block before the DOM script creates its descendants.
+            PreviewHost.InvalidateMeasure();
+            PreviewHost.InvalidateArrange();
+            Dispatcher.UIThread.RunJobs();
+
+#if HTMLML_CLEARSCRIPT_V8
+            DisposeSessions();
+            SetDomLoadingOverlay(true, "Compiling JavaScript");
+            SetStatus("⠋ Compiling JavaScript off the UI thread...", false);
+            CompilationProgress.IsVisible = true;
+            Dispatcher.UIThread.Post(
+                () =>
+                {
+                    if (loadVersion == _xamlLoadVersion)
+                    {
+                        BeginV8Preparation(loadVersion, runScript);
+                    }
+                },
+                DispatcherPriority.Loaded);
+#else
+            throw new InvalidOperationException("The Playground requires the ClearScript V8 runtime.");
+#endif
         }
         catch (Exception ex)
         {
+            Console.Error.WriteLine($"[JavaScript Playground] XAML/load failure: {ex}");
             PreviewHost.Child = null;
             SetStatus($"XAML error: {ex.Message}", true);
         }
     }
+
+#if HTMLML_CLEARSCRIPT_V8
+    private void BeginV8Preparation(int loadVersion, bool runScript)
+    {
+        _v8PreparationCancellation?.Cancel();
+        _v8PreparationCancellation?.Dispose();
+        _v8PreparationCancellation = new CancellationTokenSource();
+        var cancellationToken = _v8PreparationCancellation.Token;
+        var script = _scriptDocument.Text ?? string.Empty;
+        SetStatus("⠋ Compiling JavaScript off the UI thread...", false);
+        StartV8PreparationIndicator();
+        _v8PreparationTask = PrepareV8ScriptsAsync(
+            script,
+            cancellationToken);
+        _ = CompleteV8PreparationAsync(
+            _v8PreparationTask,
+            loadVersion,
+            runScript,
+            cancellationToken);
+    }
+
+    private async Task CompleteV8PreparationAsync(
+        Task<V8PreparationSummary> preparationTask,
+        int loadVersion,
+        bool runScript,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var summary = await preparationTask.ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(
+                () =>
+                {
+                    if (cancellationToken.IsCancellationRequested
+                        || loadVersion != _xamlLoadVersion)
+                    {
+                        return;
+                    }
+
+                    StopV8PreparationIndicator();
+                    SetDomLoadingOverlay(false);
+                    ResetHost();
+                    var maximumGapMilliseconds = _v8PreparationMaximumHeartbeatGap * 1000d
+                                                 / Stopwatch.Frequency;
+                    SetStatus(
+                        $"V8 prepared {summary.Requested} units in {summary.Elapsed.TotalMilliseconds:F0} ms " +
+                        $"({summary.Compiled} compiled, {summary.Reused} reused, " +
+                        $"{summary.Workers} workers; UI heartbeat {_v8PreparationUiHeartbeats}, " +
+                        $"max gap {maximumGapMilliseconds:F0} ms)",
+                        false);
+                    Console.WriteLine(
+                        $"[JavaScript Playground] V8 preparation: requested={summary.Requested}, " +
+                        $"compiled={summary.Compiled}, reused={summary.Reused}, " +
+                        $"workers={summary.Workers}, elapsed={summary.Elapsed.TotalMilliseconds:F1} ms, " +
+                        $"ui-heartbeats={_v8PreparationUiHeartbeats}, " +
+                        $"max-ui-gap={maximumGapMilliseconds:F1} ms, " +
+                        $"persistent='{_v8SharedCache.PersistentDirectory}'.");
+                    if (runScript)
+                    {
+                        ScheduleAutoRun(loadVersion);
+                    }
+                },
+                DispatcherPriority.Background);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[JavaScript Playground] V8 preparation failure: {ex}");
+            await Dispatcher.UIThread.InvokeAsync(
+                () =>
+                {
+                    if (loadVersion == _xamlLoadVersion)
+                    {
+                        StopV8PreparationIndicator();
+                        SetDomLoadingOverlay(false);
+                        SetStatus($"V8 preparation error: {ex.Message}", true);
+                    }
+                });
+        }
+    }
+
+    private void StartV8PreparationIndicator()
+    {
+        StopV8PreparationIndicator();
+        _v8PreparationIndicatorFrame = 0;
+        _v8PreparationUiHeartbeats = 0;
+        _v8PreparationMaximumHeartbeatGap = 0;
+        _v8PreparationLastHeartbeat = Stopwatch.GetTimestamp();
+        var frames = new[] { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+        var timer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(80)
+        };
+        timer.Tick += (_, _) =>
+        {
+            var now = Stopwatch.GetTimestamp();
+            var gap = now - _v8PreparationLastHeartbeat;
+            _v8PreparationLastHeartbeat = now;
+            _v8PreparationMaximumHeartbeatGap = Math.Max(
+                _v8PreparationMaximumHeartbeatGap,
+                gap);
+            _v8PreparationUiHeartbeats++;
+            SetStatus(
+                $"{frames[_v8PreparationIndicatorFrame++ % frames.Length]} Compiling JavaScript " +
+                $"off the UI thread... UI heartbeat {_v8PreparationUiHeartbeats}",
+                false);
+        };
+        _v8PreparationIndicator = timer;
+        CompilationProgress.IsVisible = true;
+        timer.Start();
+    }
+
+    private void StopV8PreparationIndicator()
+    {
+        _v8PreparationIndicator?.Stop();
+        _v8PreparationIndicator = null;
+        CompilationProgress.IsVisible = false;
+    }
+
+    private void SetDomLoadingOverlay(bool visible, string? text = null)
+    {
+        foreach (var root in _documentRoots)
+        {
+            var surfaces = root.GetVisualDescendants()
+                .OfType<CssLayoutPanel>()
+                .Where(static panel => string.Equals(
+                    panel.Name,
+                    "chart_container",
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (root is CssLayoutPanel rootPanel
+                && string.Equals(rootPanel.Name, "chart_container", StringComparison.Ordinal))
+            {
+                surfaces = [rootPanel, .. surfaces];
+            }
+
+            foreach (var surface in surfaces.Distinct())
+            {
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    surface.LoadingOverlayText = text;
+                }
+                surface.IsLoadingOverlayVisible = visible;
+            }
+        }
+    }
+
+    private async Task<V8PreparationSummary> PrepareV8ScriptsAsync(
+        string editorScript,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var sources = await Task.Run(
+            () => BuildV8CompilationSources(
+                editorScript,
+                cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        var workerCount = Math.Min(4, Math.Max(1, sources.Count));
+        var partitions = Enumerable.Range(0, workerCount)
+            .Select(index => sources
+                .Where((_, sourceIndex) => sourceIndex % workerCount == index)
+                .ToArray())
+            .Where(static partition => partition.Length > 0)
+            .ToArray();
+        var results = await Task.WhenAll(
+            partitions.Select((partition, index) =>
+                ClearScriptV8Runtime.PrecompileAsync(
+                    _v8SharedCache,
+                    partition,
+                    includeRuntimeBootstrap: index == 0,
+                    cancellationToken: cancellationToken))).ConfigureAwait(false);
+        stopwatch.Stop();
+        return new V8PreparationSummary(
+            results.Sum(static result => result.Requested),
+            results.Sum(static result => result.Compiled),
+            results.Sum(static result => result.Reused),
+            results.Select(static result => result.WorkerThreadId).Distinct().Count(),
+            stopwatch.Elapsed);
+    }
+
+    private static List<V8CompilationSource> BuildV8CompilationSources(
+        string editorScript,
+        CancellationToken cancellationToken)
+    {
+        var sources = new List<V8CompilationSource>();
+        if (!string.IsNullOrWhiteSpace(editorScript))
+        {
+            sources.Add(new V8CompilationSource("playground-editor.js", editorScript));
+        }
+        return sources;
+    }
+
+    private static ClearScriptV8SharedCache CreatePlaygroundV8Cache()
+    {
+        var configuredDirectory = Environment.GetEnvironmentVariable(
+            "HTMLML_PLAYGROUND_V8_CACHE_DIRECTORY");
+        var directory = string.IsNullOrWhiteSpace(configuredDirectory)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "HtmlML",
+                "JavaScriptPlayground",
+                "v8-cache")
+            : configuredDirectory;
+        return new ClearScriptV8SharedCache(new ClearScriptV8SharedCacheOptions
+        {
+            PersistentDirectory = directory,
+            CompatibilityTag = CreateNativeCompatibilityTag(),
+            MaxPersistentEntries = 4096,
+            MaxPersistentBytes = 768L * 1024 * 1024
+        });
+    }
+
+    private static string CreateNativeCompatibilityTag()
+    {
+        var configuredPath = Environment.GetEnvironmentVariable("HTMLML_CLEARSCRIPT_NATIVE");
+        var rid = Environment.GetEnvironmentVariable("HTMLML_CLEARSCRIPT_RID")
+                  ?? RuntimeInformation.RuntimeIdentifier;
+        var extension = rid.StartsWith("win-", StringComparison.Ordinal)
+            ? "dll"
+            : rid.StartsWith("linux-", StringComparison.Ordinal)
+                ? "so"
+                : "dylib";
+        var path = string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(
+                AppContext.BaseDirectory,
+                "runtimes",
+                rid,
+                "native",
+                $"ClearScriptV8.{rid}.{extension}")
+            : configuredPath;
+        if (!File.Exists(path))
+        {
+            return $"playground-v1|{rid}|native-missing";
+        }
+        var info = new FileInfo(path);
+        return $"playground-v1|{rid}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+    }
+
+    private readonly record struct V8PreparationSummary(
+        int Requested,
+        int Compiled,
+        int Reused,
+        int Workers,
+        TimeSpan Elapsed);
+#endif
+
+    private Control CreatePreviewContent(string xaml, int instanceCount)
+    {
+        _documentRoots.Clear();
+        if (instanceCount <= 1)
+        {
+            var root = LoadPreviewRoot(xaml);
+            _documentRoots.Add(root);
+            return root;
+        }
+
+        if (instanceCount != 4)
+        {
+            throw new InvalidOperationException("The Playground multi-instance surface currently supports exactly four instances.");
+        }
+
+        var grid = new Grid
+        {
+            RowDefinitions = new RowDefinitions("*,*"),
+            ColumnDefinitions = new ColumnDefinitions("*,*")
+        };
+        for (var index = 0; index < instanceCount; index++)
+        {
+            var root = LoadPreviewRoot(xaml);
+            root.Margin = new Thickness(3);
+            Grid.SetRow(root, index / 2);
+            Grid.SetColumn(root, index % 2);
+            grid.Children.Add(root);
+            _documentRoots.Add(root);
+        }
+        return grid;
+    }
+
+    private static Control LoadPreviewRoot(string xaml)
+        => AvaloniaRuntimeXamlLoader.Load(xaml) as Control
+           ?? throw new InvalidOperationException("Root element must derive from Control.");
+
 
     private void ScheduleAutoRun(int loadVersion)
     {
@@ -136,10 +477,54 @@ public partial class MainWindow : Window
 
     private void ResetHost()
     {
-        _host = new JintAvaloniaHost(this, host => new PlaygroundDomDocument(host, this));
-        _host.Engine.SetValue("hostShell", _shellBridge);
-        _host.Engine.SetValue("playgroundFiles", new PlaygroundFileBridge(_host, this));
-        _host.Engine.Execute("""
+        DisposeSessions();
+        var roots = _documentRoots.Count > 0
+            ? _documentRoots.ToArray()
+            : PreviewHost.Child is Control root
+                ? [root]
+                : Array.Empty<Control>();
+        if (roots.Length == 0)
+        {
+            throw new InvalidOperationException("The Playground preview has no document roots.");
+        }
+
+        try
+        {
+            foreach (var documentRoot in roots)
+            {
+                CreateSession(documentRoot);
+            }
+        }
+        catch
+        {
+            DisposeSessions();
+            throw;
+        }
+    }
+
+    private void CreateSession(Control documentRoot)
+    {
+        var host = new AvaloniaBrowserHost(
+            this,
+            currentHost => new PlaygroundDomDocument(currentHost, documentRoot));
+        _hosts.Add(host);
+
+#if HTMLML_CLEARSCRIPT_V8
+        var runtime = new ClearScriptV8Runtime(
+            host,
+            new ClearScriptV8RuntimeOptions
+            {
+                EnableTrustedSameOriginContextSharing = true,
+                SharedCache = _v8SharedCache
+            });
+        _v8Runtimes.Add(runtime);
+        runtime.Engine.AddHostObject("hostShell", _shellBridge);
+        runtime.Engine.AddHostObject(
+            "playgroundFiles",
+            new PlaygroundFileBridge(
+                this,
+                (callback, result) => runtime.Invoke(callback, result)));
+        runtime.Execute("""
 if (typeof window !== 'undefined') {
   window.hostShell = hostShell;
   window.playgroundFiles = playgroundFiles;
@@ -148,7 +533,39 @@ if (typeof globalThis !== 'undefined') {
   globalThis.hostShell = hostShell;
   globalThis.playgroundFiles = playgroundFiles;
 }
-""");
+""", "playground-host-bridges.js");
+#else
+        throw new InvalidOperationException("The Playground requires the ClearScript V8 runtime.");
+#endif
+    }
+
+    private void DisposeSessions()
+    {
+#if HTMLML_CLEARSCRIPT_V8
+        for (var index = _v8Runtimes.Count - 1; index >= 0; index--)
+        {
+            _v8Runtimes[index].Dispose();
+        }
+        _v8Runtimes.Clear();
+#endif
+        for (var index = _hosts.Count - 1; index >= 0; index--)
+        {
+            var host = _hosts[index];
+            var budget = host.GetUiThreadWorkBudgetMetrics();
+            if (budget.JavaScriptSamples + budget.CssSamples + budget.LayoutSamples > 0)
+            {
+                Console.WriteLine(
+                    $"[JavaScript Playground] UI work budget {budget.Budget.TotalMilliseconds:F1} ms, " +
+                    $"chart={index + 1}: JS {budget.JavaScriptOverruns}/{budget.JavaScriptSamples} overruns " +
+                    $"(max {budget.MaximumJavaScriptDuration.TotalMilliseconds:F1} ms), " +
+                    $"CSS {budget.CssOverruns}/{budget.CssSamples} " +
+                    $"(max {budget.MaximumCssDuration.TotalMilliseconds:F1} ms), " +
+                    $"layout {budget.LayoutOverruns}/{budget.LayoutSamples} " +
+                    $"(max {budget.MaximumLayoutDuration.TotalMilliseconds:F1} ms).");
+            }
+            host.Dispose();
+        }
+        _hosts.Clear();
     }
 
     private void ConfigureEditors()
@@ -179,28 +596,54 @@ if (typeof globalThis !== 'undefined') {
 
     private void RunScript(bool resetHost)
     {
-        if (resetHost || _host is null)
-        {
-            ResetHost();
-        }
-
-        if (_host is null)
-        {
-            SetStatus("Host not ready", true);
-            return;
-        }
-
         try
         {
+            if (resetHost || _hosts.Count == 0)
+            {
+                ResetHost();
+            }
+
+            if (_hosts.Count == 0)
+            {
+                SetStatus("Host not ready", true);
+                return;
+            }
+
             var script = _scriptDocument.Text;
             if (!string.IsNullOrWhiteSpace(script))
             {
-                _host.ExecuteScriptText(script);
+                if (_v8Runtimes.Count > 0)
+                {
+                    foreach (var runtime in _v8Runtimes)
+                    {
+                        runtime.Execute(script, "playground-editor.js");
+                    }
+                }
             }
-            SetStatus("Script executed", false);
+            foreach (var host in _hosts)
+            {
+                if (host.EnableTargetOnlyInlineStyles)
+                {
+                    // The initial DOM/style transaction must use the full CSS
+                    // cascade. Arm the generic incremental policy only after the
+                    // user script has completed and the chart can enter resize/
+                    // interaction steady state.
+                    host.ArmTargetOnlyInlineStyles();
+                }
+            }
+            var instanceText = _hosts.Count == 1 ? string.Empty : $", {_hosts.Count} isolated charts";
+            var v8CacheMetrics = _v8SharedCache.GetMetrics();
+            SetStatus(
+                $"Script executed (V8{instanceText}; source-text reuses " +
+                $"{v8CacheMetrics.SourceHits}, compiled-code reuses " +
+                $"{v8CacheMetrics.CodeHits}, compilation leaders " +
+                $"{v8CacheMetrics.CompilationLeaders}, disk reuses " +
+                $"{v8CacheMetrics.DiskHits})",
+                false);
         }
         catch (Exception ex)
         {
+            Console.Error.WriteLine($"[JavaScript Playground] script failure: {ex}");
             SetStatus($"Script error: {ex.Message}", true);
         }
     }
@@ -209,6 +652,31 @@ if (typeof globalThis !== 'undefined') {
     {
         StatusText.Text = message;
         StatusText.Foreground = isError ? Brushes.DarkRed : Brushes.DarkGreen;
+    }
+
+    protected override void OnLoaded(RoutedEventArgs e)
+    {
+        base.OnLoaded(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+#if HTMLML_CLEARSCRIPT_V8
+        _v8PreparationCancellation?.Cancel();
+        _v8PreparationCancellation?.Dispose();
+        _v8PreparationCancellation = null;
+        StopV8PreparationIndicator();
+#endif
+        DisposeSessions();
+#if HTMLML_CLEARSCRIPT_V8
+        _v8SharedCache.Clear();
+#endif
+        base.OnClosed(e);
+    }
+
+    protected override void OnSizeChanged(SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
     }
 
     private static List<Preset> CreatePresets()
@@ -226,7 +694,7 @@ if (typeof globalThis !== 'undefined') {
         CornerRadius="8">
   <StackPanel Spacing="10">
     <TextBlock Name="title"
-               Text="JavaScript.Avalonia"
+               Text="HtmlML.Backend.Avalonia"
                Foreground="#1f2937"
                FontSize="22"
                FontWeight="SemiBold" />
@@ -1703,7 +2171,7 @@ renderChart(currentType);
             new Preset(
                 "Canvas WebGL + Three.js",
                 """
-<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=JavaScript.Avalonia" Padding="16" Background="#0f172a" BorderBrush="#1e293b" BorderThickness="1" CornerRadius="8">
+<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=HtmlML.Backend.Avalonia" Padding="16" Background="#0f172a" BorderBrush="#1e293b" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="Canvas WebGL with Three.js" FontWeight="SemiBold" Foreground="#e5e7eb" />
     <TextBlock Text="Runs Three.js against JavaScript.Avalonia's browser-style WebGL context and renders the scene into the canvas surface." TextWrapping="Wrap" Foreground="#94a3b8" />
@@ -1852,7 +2320,7 @@ frameHandle = window.requestAnimationFrame(tick);
             new Preset(
                 "Canvas WebGL + Three.js Lava Shader",
                 """
-<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=JavaScript.Avalonia" Padding="16" Background="#050505" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
+<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=HtmlML.Backend.Avalonia" Padding="16" Background="#050505" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
   <StackPanel Spacing="12">
     <TextBlock Text="Three.js lava shader" FontWeight="SemiBold" Foreground="#f8fafc" />
     <TextBlock Text="Port of the current three.js webgl_shader_lava: custom ShaderMaterial, official lava textures, BloomPass blur, and OutputPass sRGB transfer." TextWrapping="Wrap" Foreground="#fca5a5" />
@@ -2241,183 +2709,6 @@ resetBtn.addEventListener('click', () => {
 renderScene();
 report();
 frameHandle = window.requestAnimationFrame(render);
-"""
-            ),
-            new Preset(
-                "TradingView + Native WebGL",
-                """
-<Border xmlns="https://github.com/avaloniaui" xmlns:js="clr-namespace:JavaScript.Avalonia;assembly=JavaScript.Avalonia" Padding="16" Background="#0b1120" BorderBrush="#1f2937" BorderThickness="1" CornerRadius="8">
-  <StackPanel Spacing="12">
-    <TextBlock Text="TradingView Lightweight Charts + native WebGL" FontWeight="SemiBold" Foreground="#f8fafc" />
-    <TextBlock Text="TradingView renders the candlestick chart while JavaScript.Avalonia renders a synchronized WebGL volume panel on an OpenGL-backed canvas." TextWrapping="Wrap" Foreground="#cbd5e1" />
-    <Border Background="#101827" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
-      <Canvas Name="tradingViewChartHost" Width="720" Height="360" Background="#101827" ClipToBounds="True" />
-    </Border>
-    <Border Background="#050816" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
-      <js:CanvasOpenGlDrawingSurface Name="tradingViewWebGlSurface" Width="720" Height="180" />
-    </Border>
-    <StackPanel Orientation="Horizontal" Spacing="8">
-      <Button Name="tradingViewStream" Content="Stream tick" />
-      <Button Name="tradingViewShuffle" Content="Shuffle data" />
-      <Button Name="tradingViewZoom" Content="Zoom recent" />
-      <Button Name="tradingViewIndicators" Content="Hide indicators" />
-      <Button Name="tradingViewTheme" Content="Light theme" />
-      <Button Name="tradingViewReset" Content="Reset" />
-    </StackPanel>
-    <TextBlock Name="tradingViewQuote" Foreground="#f8fafc" FontWeight="SemiBold" TextWrapping="Wrap" />
-    <TextBlock Name="tradingViewIndicatorStatus" Foreground="#a7f3d0" TextWrapping="Wrap" />
-    <TextBlock Name="tradingViewStatus" Foreground="#d1d5db" TextWrapping="Wrap" />
-    <TextBlock Name="tradingViewWebGlStatus" Foreground="#93c5fd" TextWrapping="Wrap" />
-  </StackPanel>
-</Border>
-""",
-                """
-try {
-  require('./Scripts/tradingview-webgl-demo.js');
-} catch (error) {
-  const status = document.getElementById('tradingViewStatus');
-  if (status) {
-    status.textContent = `Failed to load TradingView WebGL demo: ${error}`;
-  }
-  throw error;
-}
-"""
-            ),
-            new Preset(
-                "TradingView Professional Charting",
-                """
-<Border xmlns="https://github.com/avaloniaui" Width="1316" Height="676" Background="#050506" BorderBrush="#2563eb" BorderThickness="2" CornerRadius="8" ClipToBounds="True">
-  <Grid RowDefinitions="44,600,32" ColumnDefinitions="44,900,330,42">
-    <Border Grid.Row="0" Grid.ColumnSpan="4" Background="#0a0a0b" BorderBrush="#22252a" BorderThickness="0,0,0,1">
-      <Grid ColumnDefinitions="*,Auto" Margin="8,5">
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <Border Width="30" Height="30" Background="#111318" BorderBrush="#2b3038" BorderThickness="1" CornerRadius="15">
-            <TextBlock Text="TV" Foreground="#f8fafc" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
-          </Border>
-          <TextBox Name="professionalSymbolInput" Text="NFLX" Width="138" Height="30" Background="#24262b" Foreground="#f8fafc" BorderBrush="#383d45" Padding="12,4" />
-          <Button Name="professionalSymbolApply" Content="+" Width="32" Height="30" />
-          <Button Name="professionalTf1H" Content="1h" Width="42" Height="30" />
-          <Button Name="professionalCandleMode" Content="Candles" Width="78" Height="30" />
-          <Button Name="professionalIndicatorToggle" Content="Indicators" Width="92" Height="30" />
-          <Button Name="professionalAlert" Content="Alert" Width="64" Height="30" />
-          <Button Name="professionalReplay" Content="Replay" Width="70" Height="30" />
-          <Button Name="professionalUndo" Content="Undo" Width="54" Height="30" />
-        </StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-          <Button Name="professionalLayout" Content="Supercharts" Width="110" Height="30" />
-          <Button Name="professionalScreenshot" Content="Shot" Width="54" Height="30" />
-          <Button Name="professionalTrade" Content="Trade" Width="64" Height="30" />
-          <Button Name="professionalPublish" Content="Publish" Width="76" Height="30" Background="#f8fafc" Foreground="#020617" />
-        </StackPanel>
-      </Grid>
-    </Border>
-
-    <Border Grid.Row="1" Grid.Column="0" Background="#0a0a0c" BorderBrush="#242833" BorderThickness="0,0,1,0">
-      <StackPanel Margin="5,8" Spacing="8">
-        <Button Name="professionalToolCross" Content="+" Width="32" Height="32" />
-        <Button Name="professionalToolTrend" Content="/" Width="32" Height="32" />
-        <Button Name="professionalToolFib" Content="Fib" Width="32" Height="32" />
-        <Button Name="professionalToolBrush" Content="Br" Width="32" Height="32" />
-        <Button Name="professionalToolText" Content="T" Width="32" Height="32" />
-        <Button Name="professionalToolMeasure" Content="M" Width="32" Height="32" />
-        <Button Name="professionalToolMagnet" Content="Mag" Width="32" Height="32" />
-        <Button Name="professionalRisk" Content="Risk" Width="32" Height="32" />
-        <Button Name="professionalToolTrash" Content="Del" Width="32" Height="32" />
-      </StackPanel>
-    </Border>
-
-    <Grid Grid.Row="1" Grid.Column="1" RowDefinitions="300,300" ColumnDefinitions="450,450" Background="#050506">
-      <Border Grid.Row="0" Grid.Column="0" Background="#08090b" BorderBrush="#2a2d33" BorderThickness="0,0,1,1">
-        <Grid RowDefinitions="30,*">
-          <TextBlock Name="professionalPanelAaplTitle" Text="Apple Inc. - 30 - NASDAQ - TPO" Foreground="#e5e7eb" Margin="10,7,0,0" />
-          <Canvas Grid.Row="1" Name="professionalChartAaplHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
-        </Grid>
-      </Border>
-      <Border Grid.Row="0" Grid.Column="1" Background="#08090b" BorderBrush="#2a2d33" BorderThickness="0,0,0,1">
-        <Grid RowDefinitions="30,*">
-          <TextBlock Name="professionalPanelMainTitle" Text="Netflix, Inc. - 1h - NASDAQ" Foreground="#e5e7eb" Margin="10,7,0,0" />
-          <Canvas Grid.Row="1" Name="professionalPriceChartHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
-        </Grid>
-      </Border>
-      <Border Grid.Row="1" Grid.Column="0" Background="#08090b" BorderBrush="#2a2d33" BorderThickness="0,0,1,0">
-        <Grid RowDefinitions="30,*">
-          <TextBlock Name="professionalPanelBtcTitle" Text="Bitcoin / U.S. Dollar - 15 - Coinbase" Foreground="#e5e7eb" Margin="10,7,0,0" />
-          <Canvas Grid.Row="1" Name="professionalChartBtcHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
-        </Grid>
-      </Border>
-      <Border Grid.Row="1" Grid.Column="1" Background="#08090b">
-        <Grid RowDefinitions="30,*">
-          <TextBlock Name="professionalPanelTslaTitle" Text="Tesla, Inc. - 1 - NASDAQ" Foreground="#e5e7eb" Margin="10,7,0,0" />
-          <Canvas Grid.Row="1" Name="professionalChartTslaHost" Width="450" Height="270" Background="#08090b" ClipToBounds="True" />
-        </Grid>
-      </Border>
-    </Grid>
-
-    <Border Grid.Row="1" Grid.Column="2" Background="#0a0a0b" BorderBrush="#242833" BorderThickness="1,0,1,0">
-      <Grid RowDefinitions="260,*">
-        <StackPanel Margin="12,10,12,0" Spacing="6">
-          <Grid ColumnDefinitions="*,70,70,70">
-            <TextBlock Text="Main Watchlist" Foreground="#f8fafc" FontWeight="SemiBold" />
-            <TextBlock Grid.Column="1" Text="Last" Foreground="#9ca3af" HorizontalAlignment="Right" />
-            <TextBlock Grid.Column="2" Text="Chg" Foreground="#9ca3af" HorizontalAlignment="Right" />
-            <TextBlock Grid.Column="3" Text="Chg%" Foreground="#9ca3af" HorizontalAlignment="Right" />
-          </Grid>
-          <Button Name="professionalWatchAapl" Content="AAPL      264.18    -8.77    -3.21%" HorizontalContentAlignment="Stretch" />
-          <Button Name="professionalWatchNflx" Content="NFLX       96.24    11.65    13.77%" HorizontalContentAlignment="Stretch" />
-          <Button Name="professionalWatchTsla" Content="TSLA      402.51    -6.07    -1.49%" HorizontalContentAlignment="Stretch" />
-          <Button Name="professionalWatchMsft" Content="MSFT      392.74    -8.98    -2.24%" HorizontalContentAlignment="Stretch" />
-          <Button Name="professionalWatchNvda" Content="NVDA      177.19    -7.70    -4.16%" HorizontalContentAlignment="Stretch" />
-          <Button Name="professionalWatchBtc" Content="BTCUSD  66042.10   428.50     0.65%" HorizontalContentAlignment="Stretch" />
-        </StackPanel>
-        <Border Grid.Row="1" Margin="12" Padding="12" Background="#101114" BorderBrush="#262b35" BorderThickness="1" CornerRadius="6">
-          <StackPanel Spacing="10">
-            <TextBlock Name="professionalQuote" Foreground="#f8fafc" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" />
-            <TextBlock Name="professionalExecution" Foreground="#9ca3af" TextWrapping="Wrap" />
-            <TextBlock Name="professionalRiskStatus" Foreground="#fde68a" TextWrapping="Wrap" />
-            <TextBlock Text="Order book" Foreground="#e2e8f0" FontWeight="SemiBold" />
-            <TextBlock Name="professionalOrderBook" Foreground="#bae6fd" FontFamily="Consolas" TextWrapping="Wrap" />
-            <TextBlock Name="professionalStatus" Foreground="#dbeafe" TextWrapping="Wrap" />
-          </StackPanel>
-        </Border>
-      </Grid>
-    </Border>
-
-    <Border Grid.Row="1" Grid.Column="3" Background="#0a0a0c">
-      <StackPanel Margin="5,8" Spacing="8">
-        <Button Name="professionalRightWatch" Content="WL" Width="32" Height="32" />
-        <Button Name="professionalRightClock" Content="Clk" Width="32" Height="32" />
-        <Button Name="professionalRightNews" Content="News" Width="32" Height="32" />
-        <Button Name="professionalRightCalendar" Content="Cal" Width="32" Height="32" />
-        <Button Name="professionalRightMore" Content="..." Width="32" Height="32" />
-      </StackPanel>
-    </Border>
-
-    <Border Grid.Row="2" Grid.ColumnSpan="4" Background="#09090b" BorderBrush="#242833" BorderThickness="0,1,0,0">
-      <Grid ColumnDefinitions="*,Auto" Margin="58,3,12,3">
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <Button Name="professionalTf1D" Content="1D" Width="42" Height="26" />
-          <Button Name="professionalTf5D" Content="5D" Width="42" Height="26" />
-          <Button Name="professionalTf1M" Content="1M" Width="42" Height="26" />
-          <Button Name="professionalTf6M" Content="6M" Width="42" Height="26" />
-          <Button Name="professionalTfYtd" Content="YTD" Width="50" Height="26" />
-          <Button Name="professionalTfAll" Content="All" Width="42" Height="26" />
-        </StackPanel>
-        <TextBlock Grid.Column="1" Name="professionalClock" Text="08:54:35 UTC   RTH   ADJ" Foreground="#d1d5db" VerticalAlignment="Center" />
-      </Grid>
-    </Border>
-  </Grid>
-</Border>
-""",
-                """
-try {
-  require('./Scripts/tradingview-professional-demo.js');
-} catch (error) {
-  const status = document.getElementById('professionalStatus');
-  if (status) {
-    status.textContent = `Failed to load professional TradingView demo: ${error}`;
-  }
-  throw error;
-}
 """
             ),
             new Preset(
@@ -3407,29 +3698,31 @@ updateTimeline();
 
     private sealed class Preset
     {
-        public Preset(string name, string xaml, string script)
+        public Preset(string name, string xaml, string script, int instanceCount = 1)
         {
             Name = name;
             Xaml = xaml;
             Script = script;
+            InstanceCount = instanceCount;
         }
 
         public string Name { get; }
         public string Xaml { get; }
         public string Script { get; }
+        public int InstanceCount { get; }
     }
 
     private sealed class PlaygroundDomDocument : AvaloniaDomDocument
     {
-        private readonly MainWindow _window;
+        private readonly Control _root;
 
-        public PlaygroundDomDocument(JintAvaloniaHost host, MainWindow window)
+        public PlaygroundDomDocument(AvaloniaBrowserHost host, Control root)
             : base(host)
         {
-            _window = window;
+            _root = root;
         }
 
         protected override Control? GetDocumentRoot()
-            => _window.PreviewHost.Child as Control;
+            => _root;
     }
 }

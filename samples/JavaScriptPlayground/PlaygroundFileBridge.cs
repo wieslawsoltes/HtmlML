@@ -5,24 +5,25 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using JavaScript.Avalonia;
-using Jint.Native;
 
 namespace JavaScriptPlayground;
 
 internal sealed class PlaygroundFileBridge
 {
-    private readonly JintAvaloniaHost _host;
     private readonly Window _owner;
+    private readonly Action<object, PlaygroundPdfFileResult> _invokeCallback;
 
-    public PlaygroundFileBridge(JintAvaloniaHost host, Window owner)
+    public PlaygroundFileBridge(
+        Window owner,
+        Action<object, PlaygroundPdfFileResult> invokeCallback)
     {
-        _host = host ?? throw new ArgumentNullException(nameof(host));
         _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+        _invokeCallback = invokeCallback ?? throw new ArgumentNullException(nameof(invokeCallback));
     }
 
-    public void openPdfDocument(JsValue callback)
+    public void openPdfDocument(object callback)
     {
-        if (callback == JsValue.Undefined || callback == JsValue.Null)
+        if (callback is null)
         {
             return;
         }
@@ -30,7 +31,7 @@ internal sealed class PlaygroundFileBridge
         _ = OpenPdfDocumentAsync(callback);
     }
 
-    private async Task OpenPdfDocumentAsync(JsValue callback)
+    private async Task OpenPdfDocumentAsync(object callback)
     {
         PlaygroundPdfFileResult result;
 
@@ -78,11 +79,11 @@ internal sealed class PlaygroundFileBridge
         InvokeCallback(callback, result);
     }
 
-    private void InvokeCallback(JsValue callback, PlaygroundPdfFileResult result)
+    private void InvokeCallback(object callback, PlaygroundPdfFileResult result)
     {
         try
         {
-            _host.Engine.Invoke(callback, result);
+            _invokeCallback(callback, result);
         }
         catch (Exception ex)
         {

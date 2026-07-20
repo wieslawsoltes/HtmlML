@@ -8,7 +8,6 @@ using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.Threading;
-using Jint.Native;
 
 namespace JavaScript.Avalonia;
 
@@ -307,11 +306,6 @@ internal sealed partial class CanvasWebGlRenderingContext
 
     private static int ToInt(object? value)
     {
-        if (value is JsValue jsValue)
-        {
-            return ToInt(jsValue.ToObject());
-        }
-
         if (value is IConvertible convertible)
         {
             try
@@ -329,11 +323,6 @@ internal sealed partial class CanvasWebGlRenderingContext
 
     private static bool ToBool(object? value)
     {
-        if (value is JsValue jsValue)
-        {
-            return ToBool(jsValue.ToObject());
-        }
-
         return value switch
         {
             bool boolValue => boolValue,

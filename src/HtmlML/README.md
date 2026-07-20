@@ -41,7 +41,8 @@ Import the namespace in XAML and begin authoring HTML-flavoured markup:
 
 ## JavaScript Integration
 
-HtmlML ships with a `JintHost` wrapper that derives from `JintAvaloniaHost`. When a `<script>` tag is present in the markup, JavaScript runs inside the embedded Jint engine and interacts with HtmlML elements through DOM-style APIs:
+Combine HtmlML with `AvaloniaBrowserHost` and `ClearScriptV8Runtime` to run JavaScript
+against HtmlML elements through DOM-style APIs:
 
 ```js
 const canvas = document.getElementById('draw');
@@ -82,7 +83,7 @@ HtmlML is licensed under the MIT. See [LICENSE](../../LICENSE).
 
 - [AvaloniaUI](https://github.com/AvaloniaUI/Avalonia) – cross-platform UI framework.
 - [AngleSharp](https://anglesharp.github.io/) – HTML/CSS parsing.
-- [Jint](https://github.com/sebastienros/jint) – embedded JavaScript engine used for scripting support.
+- [ClearScript](https://github.com/microsoft/ClearScript) – V8 hosting layer used by the scripting adapter.
 
 ---
 

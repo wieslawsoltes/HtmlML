@@ -1,0 +1,29 @@
+<Project>
+  <PropertyGroup>
+    <HtmlMlClearScriptPackageRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\'))</HtmlMlClearScriptPackageRoot>
+    <HtmlMlClearScriptPackageAsset>$(HtmlMlClearScriptPackageRoot)runtimes\$(HtmlMlClearScriptPackagedRid)\native\$(HtmlMlClearScriptPackagedFileName)</HtmlMlClearScriptPackageAsset>
+    <HtmlMlClearScriptPackageManifest>$(HtmlMlClearScriptPackageRoot)runtimes\$(HtmlMlClearScriptPackagedRid)\native\clearscript-native-runtime.json</HtmlMlClearScriptPackageManifest>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(HtmlMlClearScriptPackagedRid)' != ''">
+    <Content Include="$(HtmlMlClearScriptPackageAsset)"
+             Link="$(HtmlMlClearScriptPackagedFileName)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(HtmlMlClearScriptPackageManifest)"
+             Link="clearscript-native-runtime.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidateHtmlMlClearScriptRuntimePackage"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(HtmlMlClearScriptPackagedRid)' != ''">
+    <Error Condition="'$(RuntimeIdentifier)' != '' and '$(RuntimeIdentifier)' != '$(HtmlMlClearScriptPackagedRid)'"
+           Text="HtmlML ClearScript runtime package RID '$(HtmlMlClearScriptPackagedRid)' does not match target RuntimeIdentifier '$(RuntimeIdentifier)'." />
+    <Error Condition="!Exists('$(HtmlMlClearScriptPackageAsset)')"
+           Text="HtmlML ClearScript runtime package is corrupt; the native asset is missing: $(HtmlMlClearScriptPackageAsset)" />
+    <Error Condition="!Exists('$(HtmlMlClearScriptPackageManifest)')"
+           Text="HtmlML ClearScript runtime package is corrupt; its manifest is missing: $(HtmlMlClearScriptPackageManifest)" />
+  </Target>
+</Project>

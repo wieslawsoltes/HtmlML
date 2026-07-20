@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Computed style exposes resolved size without mutating inline style</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #intrinsic-parent {
+    position: absolute;
+  }
+  #constrained-child {
+    width: 120px;
+    min-width: 260px;
+    max-width: 200px;
+    height: 24px;
+  }
+</style>
+<body>
+<div id="intrinsic-parent">
+  <div id="constrained-child"></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assertEquals(actual, expected, message) {
+    if (actual !== expected) {
+      throw new Error(message + ": expected " + expected + ", got " + actual);
+    }
+  }
+
+  try {
+    const parent = document.getElementById("intrinsic-parent");
+    const parentComputed = getComputedStyle(parent);
+
+    assertEquals(parent.style.width, "",
+      "reading computed style must not synthesize an inline parent width");
+    assertEquals(parentComputed.width, "260px",
+      "computed property getter must expose the resolved intrinsic width");
+    assertEquals(parentComputed.getPropertyValue("width"), "260px",
+      "getPropertyValue must expose the same resolved intrinsic width");
+
+    state.results.push({
+      name: "computed size is resolved independently from authored inline style",
+      status: "PASS",
+      message: null,
+      stack: null
+    });
+    state.harness = { status: 0, message: null, stack: null };
+  } catch (error) {
+    state.results.push({
+      name: "computed size is resolved independently from authored inline style",
+      status: "FAIL",
+      message: String(error && error.message || error),
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = {
+      status: 1,
+      message: state.results[0].message,
+      stack: state.results[0].stack
+    };
+  }
+  state.complete = true;
+</script>
+</body>

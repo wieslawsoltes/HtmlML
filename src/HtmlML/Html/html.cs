@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using Avalonia;
 using Avalonia.Controls;
@@ -7,7 +7,6 @@ using Avalonia.Metadata;
 using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using Avalonia.Platform;
-using Jint;
 
 namespace HtmlML;
 
@@ -38,8 +37,6 @@ public class html : Window
     
     [Content]
     public content content { get; } = new content();
-
-    private JintHost? _js;
 
     protected override void OnLoaded(RoutedEventArgs e)
     {
@@ -77,11 +74,13 @@ public class html : Window
             }
             else
             {
-                Content = bodyElement;
+                Content = new Viewbox
+                {
+                    Child = bodyElement,
+                    Stretch = Avalonia.Media.Stretch.Uniform,
+                    StretchDirection = Avalonia.Media.StretchDirection.Both
+                };
             }
-            // Ensure JS engine and register canvases before running scripts
-            EnsureJs();
-            RegisterAllCanvases(bodyElement);
         }
         else
         {
@@ -89,9 +88,12 @@ public class html : Window
             {
                 if (child is Control c)
                 {
-                    Content = c;
-                    EnsureJs();
-                    RegisterAllCanvases(c);
+                    Content = new Viewbox
+                    {
+                        Child = c,
+                        Stretch = Avalonia.Media.Stretch.Uniform,
+                        StretchDirection = Avalonia.Media.StretchDirection.Both
+                    };
                     break;
                 }
             }
@@ -118,8 +120,6 @@ public class html : Window
             // Apply styles from <link rel="stylesheet"> and <style>
             ApplyHeadStyles(headElement);
 
-            // Execute scripts in head
-            ExecuteHeadScripts(headElement);
         }
 
         // Fallback: use html.title or default
@@ -136,23 +136,6 @@ public class html : Window
         }
     }
 
-    internal void RegisterCanvas(canvas c)
-    {
-        EnsureJs();
-        _js!.RegisterCanvas(c);
-    }
-
-    internal void DispatchCanvasPointerEvent(canvas c, string type, double x, double y)
-    {
-        if (_js is null) return;
-        _js.DispatchPointer(c.Name ?? string.Empty, type, x, y);
-    }
-
-    private void EnsureJs()
-    {
-        _js ??= new JintHost(this);
-    }
-
     private void ApplyHeadStyles(head headElement)
     {
         foreach (var hChild in headElement.content)
@@ -166,51 +149,6 @@ public class html : Window
                     LoadInlineStyle(st);
                     break;
             }
-        }
-    }
-
-    private void ExecuteHeadScripts(head headElement)
-    {
-        EnsureJs();
-        foreach (var hChild in headElement.content)
-        {
-            switch (hChild)
-            {
-                case script s when string.IsNullOrWhiteSpace(s.type) || s.type!.Contains("javascript", StringComparison.OrdinalIgnoreCase):
-                    if (!string.IsNullOrWhiteSpace(s.src) && Uri.TryCreate(s.src, UriKind.Absolute, out var uri))
-                    {
-                        _js!.ExecuteScriptUri(uri);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(s.Text))
-                    {
-                        _js!.ExecuteScriptText(s.Text!);
-                    }
-                    break;
-            }
-        }
-    }
-
-    private void RegisterAllCanvases(Control root)
-    {
-        if (root is canvas canv)
-        {
-            RegisterCanvas(canv);
-        }
-        if (root is Panel panel)
-        {
-            foreach (var child in panel.Children)
-            {
-                if (child is Control c)
-                    RegisterAllCanvases(c);
-            }
-        }
-        else if (root is ContentControl cc && cc.Content is Control ctrl)
-        {
-            RegisterAllCanvases(ctrl);
-        }
-        else if (root is Decorator dec && dec.Child is Control child)
-        {
-            RegisterAllCanvases(child);
         }
     }
 

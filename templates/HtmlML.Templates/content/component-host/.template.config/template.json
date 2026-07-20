@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "HtmlML",
+  "classifications": ["Desktop", "Avalonia", "React", "TypeScript"],
+  "identity": "HtmlML.Templates.ComponentHost",
+  "name": "HtmlML React component host",
+  "shortName": "htmlml-component-host",
+  "sourceName": "HtmlMLComponentHost",
+  "preferNameDirectory": true,
+  "primaryOutputs": [{ "path": "HtmlMLComponentHost.csproj" }]
+}

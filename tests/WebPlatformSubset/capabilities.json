@@ -1,0 +1,107 @@
+{
+  "schema": "htmlml-component-capabilities-v1",
+  "profile": "htmlml-component-1",
+  "derivation": "Observed public DOM, style, geometry, event, and paint behavior from connected-component interaction corpora; no vendor source inspection.",
+  "capabilities": [
+    {
+      "family": "sizing",
+      "required": ["min/max precedence", "percentage and fixed lengths", "box sizing", "synchronous computed geometry"],
+      "productEvidence": ["indicators dialog", "chart-type menu", "sidebar flyouts", "resize-back"],
+      "coverage": ["css/css-sizing/min-width-max-width-precedence.html", "CssLayoutResizeSpikeTests"]
+    },
+    {
+      "family": "positioning",
+      "required": ["relative", "absolute", "fixed iframe portals", "containing-block relayout", "inline hypothetical static position", "negative inline margins", "anchored hit testing"],
+      "productEvidence": ["top toolbar popups", "indicators dialog", "sidebar menus", "calendar positioned underline"],
+      "coverage": ["css/css-position/position-absolute-container-dynamic-002.html", "css/css-position/position-relative-001.html", "css/css-position/position-relative-007.html", "css/CSS2/positioning/abspos-negative-margin-001.html", "CssRelativeInsetDefinitenessTests", "CssAbsoluteInlineStaticPositionSpikeTests", "V8WhitespaceStaticPositionRegressionTests", "IframeBrowserContractSpikeTests"]
+    },
+    {
+      "family": "transforms",
+      "required": ["ordered 2D transform lists", "translate", "scale and scaleX", "rotate", "negative offsets", "computed matrix serialization", "transformed bounding rectangles", "inverse transformed hit testing"],
+      "productEvidence": ["popup portals", "toolbar controls", "slideout menus", "settings tab underline"],
+      "coverage": ["css/css-transforms/scalex.html", "css/css-transforms/transform_translate_zero.html", "css/css-transforms/transform_translate_neg.html", "css/css-transforms/transform-scale-hittest.html", "CssTransformComputedStyleTests", "CssTransformedHitTestingTests"]
+    },
+    {
+      "family": "clipping-and-rounded-borders",
+      "required": ["border-radius projection", "1/2/3/4-value shorthand expansion", "slash-separated vertical-radius preservation", "custom-property calc() used values", "shorthand/longhand cascade order", "overflow clipping to the radius curve", "descendant paint clipping"],
+      "productEvidence": ["chart hover market-status marker", "rounded toolbar and menu chrome", "volume settings Cancel and Ok buttons"],
+      "coverage": ["css/css-backgrounds/border-radius-overflow-hidden.html", "css/css-backgrounds/border-radius-shorthand-001.htm (nearest, harness-blocked)", "CssComputedValueNormalizerTests", "CssLayoutResizeSpikeTests", "CssInvalidationOptimizationTests", "V8 volume-settings geometry/paint/hit gate"],
+      "gap": "The upstream shorthand case is self-overlaid and the current Avalonia corner projection is scalar, so vertical elliptical paint is not claimed. No exact WPT combines border-radius shorthand with var()-substitution and additive calc(max()) used values; the isolated native/portable raster spike covers that composition."
+    },
+    {
+      "family": "cascade-and-selectors",
+      "required": ["important vs inline", "dynamic inline mutation", "structural selectors", "enabled and disabled state", "hover entry and exit invalidation", "pointer-vs-keyboard focus-visible modality"],
+      "productEvidence": ["menu item highlight", "favorite star", "conditional menu rows", "calendar future-day state", "cursor menu focus toolbox"],
+      "coverage": ["css/css-cascade/important-vs-inline-001.html", "css/selectors/last-of-type.html", "css/selectors/only-child.html", "css/selectors/pseudo-enabled-disabled.html", "css/selectors/focus-visible-001.html", "css/selectors/focus-visible-003.html", "AvaloniaDomDocumentTests", "DomTabIndexAndFocusVisibleTests", "DomDisabledControlTests", "CssPointerMediaHoverSpikeTests"],
+      "gap": "The unchanged focus-visible keyboard test and all 12 pointer-focus control subtests pass exactly in native and forced-portable lanes. The WPT input adapter is intentionally bounded to the primary click and WebDriver Tab actions used by these pinned tests; broader WebDriver action sequences are not claimed."
+    },
+    {
+      "family": "colors-and-borders",
+      "required": ["CSS #RRGGBBAA channel order", "currentColor inheritance into backgrounds and borders", "border shorthand and longhand cascade", "background and border painting"],
+      "productEvidence": ["volume chevron hover background", "volume chevron border", "toolbar state colors"],
+      "coverage": ["css/css-color/hex-002.html", "css/css-color/t44-currentcolor-background-b.xht", "css/css-color/t44-currentcolor-border-b.xht", "CssColorParserTests", "CssStylesheetCompilerTests", "CssInvalidationOptimizationTests"]
+    },
+    {
+      "family": "svg-presentation-paint",
+      "required": ["presentation attributes below author rules in the cascade", "inherited fill and stroke properties", "currentColor resolution against the painted element", "scene invalidation after inherited color and class changes"],
+      "productEvidence": ["Volume three-dot submenu chevrons", "axis-scale Labels and Lines submenu chevrons", "sidebar and toolbar currentColor icons"],
+      "coverage": ["svg/painting/inheritance.svg (nearest upstream mapping, not promoted)", "svg/styling/presentation-attributes-relevant.html (nearest upstream mapping, not promoted)", "css/css-color/currentcolor-002.html (nearest used-value mapping, not promoted)", "SvgSkiaSpikeTests", "CssMutationInvalidationPlannerTests", "V8 Volume-more and axis-scale native scene/color/hit gates"],
+      "gap": "The exact product composition is covered by product-neutral portable-scene/native-raster spikes and operated-menu gates. The current subset runner does not load SVG-root XML documents or the shared inheritance-testcommon.js harness used by svg/painting/inheritance.svg; presentation-attributes-relevant.html intentionally ranges across the complete SVG presentation-property surface, beyond the retained icon subset. These upstream documents are therefore mapped but not vendored or promoted as passing claims."
+    },
+    {
+      "family": "generated-content",
+      "required": ["::before box creation", "generated text child boxes", "normal-flow participation", "pseudo-element display type", "visibility-hidden layout retention"],
+      "productEvidence": ["left-sidebar separator", "toolbar pseudo-element chrome", "side hide-options measuring menu"],
+      "coverage": ["css/CSS2/generated-content/before-content-display-002.xht", "css/CSS2/generated-content/before-after-positioned-003.html", "css/css-flexbox/flexbox-with-pseudo-elements-001.html", "css/CSS2/visufx/visibility-layout-001.xht", "CssGeneratedPseudoElementTests", "CssPositionedOverlayTests"],
+      "gap": "Empty decorative and literal-text in-flow pseudo boxes participate in native and portable block/flex geometry, ordering, intrinsic sizing, alignment, and paint. Absolutely positioned generated boxes resolve against positioned padding boxes or the initial containing block through the shared native/portable resolver. Hidden generated boxes retain layout participation while suppressing paint, including synchronous measurement of newly inserted fixed menus. The exact block, flex, and positioned generated-content WPTs are required and pixel-exact. WPT visibility-layout-001.xht remains a self-verifying visual test that does not compose visibility with generated content; the exact hidden composition is covered by the native/portable spike."
+    },
+    {
+      "family": "list-formatting",
+      "required": ["list-item marker paint", "ordered counters", "outside marker geometry", "inside marker first-line participation", "marker-before-block-child anonymous line"],
+      "productEvidence": ["R5 ReactDashboard list markers", "connected menu and disclosure rows"],
+      "coverage": ["css/css-lists/li-value-reversed-001.html", "css/css-lists/list-and-flex-001.html", "css/CSS2/lists/list-style-position-023.xht", "css/CSS2/lists/list-style-position-020.xht (nearest visual, harness-blocked)", "R5SampleListLayoutTests"],
+      "gap": "Outside marker paint, counters, block-child behavior, and inside-marker first-line participation now have required exact WPT plus independent native-pixel/portable-geometry and initial-font-metrics evidence. The most direct CSS2 inside-marker wrapping case remains a self-verifying visual test that the runner cannot score, so the minimal product-neutral reduction retains precise wrap and marker-only-line geometry coverage."
+    },
+    {
+      "family": "flex-layout",
+      "required": ["row/column sizing", "wrapping", "per-line flexible sizing", "deterministic subpixel residual allocation", "authored gap preservation", "alignment", "min-size interaction", "dynamic relayout"],
+      "productEvidence": ["top toolbar", "dialog header/search/list", "calendar date/time controls", "sidebar row alignment", "R5 ReactDashboard metric-card grid"],
+      "coverage": ["css/css-flexbox/flexbox-flex-wrap-horiz-001.html", "css/css-flexbox/flexbox-with-pseudo-elements-001.html", "CSS Flexbox 1 section 9.7 Resolving Flexible Lengths", "CssLayoutResizeSpikeTests", "CssGeneratedPseudoElementTests", "CssFractionalFlexDistributionTests", "R5ReactDashboardResponsiveVisualTests"],
+      "gap": "The upstream wrap reftest maps line collection and flexible main sizing, while the exact Chromium 1/64px residual distribution and 14px gap raster composition are covered by native/portable/R5 spikes because the Flexbox specification intentionally defines real-number flexible lengths rather than a browser's internal layout-unit precision. Decorative and literal-text before/after flex items are required through an exact WPT plus product-neutral native/portable geometry and raster spikes. The flex-wrap candidate still includes an unsupported floated reference construction in addition to a small flex margin/width residual; the dynamic check-layout flex test remains harness-blocked."
+    },
+    {
+      "family": "grid-layout",
+      "required": ["fixed pixel columns", "fixed pixel rows", "row and column gaps", "source-order auto placement", "collapsible authored whitespace"],
+      "productEvidence": ["calendar date/time controls", "calendar seven-column date matrix", "Go to dialog"],
+      "coverage": ["css/css-grid/alignment/grid-gutters-001.html", "CssFixedGridRowTracksTests", "CssLayoutResizeSpikeTests"],
+      "gap": "The required exact reftest and independent V8 iframe raster authority cover the fixed-track grid slice used by the current calendar. Fractional tracks, minmax(), named lines, dense placement, spanning, and the broader Grid specification remain outside this MVP claim."
+    },
+    {
+      "family": "table-layout",
+      "required": ["HTML table UA display roles", "anonymous row generation", "anonymous cell wrappers for improper children", "row-group stacking", "shared intrinsic columns", "single-column definite used-width distribution", "fixed-layout multi-column excess distribution", "anonymous-cell auto block stretch", "subpixel column widths", "cell vertical alignment"],
+      "productEvidence": ["top toolbar table/flex wrapper", "volume indicator more menu", "axis scale context menu"],
+      "coverage": ["css/css-tables/subpixel-table-cell-width-001.html", "css/css-tables/table-model-fixup.html", "css/css-tables/fixed-layout-excess-width-distribution-001.html", "CssTableLayoutTests", "CssPositionedOverlayTests", "CssMeasurementEngineTests", "CssArrangementEngineTests"],
+      "gap": "The exact fractional table-cell reftest, fixed-layout multi-column excess-width test, and all 11 table-model-fixup assertions are required and pass in native, forced-portable application, and direct portable-snapshot lanes. Anonymous row/cell runs preserve source order without mutating the DOM; table-column tracks, misparented internals, collapsible whitespace, single-column used-width excess, proportional fixed-length excess distribution, percentage base widths, and auto-width block children are covered. WPT css/css-tables/bounding-box-computation-1.html remains outside the claim because its exact assertions also require border-spacing and column/column-group box geometry. Colspan/rowspan and border conflict resolution remain outside this MVP slice."
+    },
+    {
+      "family": "checkable-controls",
+      "required": ["radio grouping", "checkbox activation", "label default activation", "programmatic click activation", "checked selector state", "option selected state", "dynamic input type invalidation", "opacity-zero hit testing", "native raster and hit ownership"],
+      "productEvidence": ["Volume Settings selected and unselected radios", "Volume Settings checkbox", "cursor values-tooltip switch"],
+      "coverage": ["html/semantics/selectors/pseudo-classes/checked.html", "DomCheckableInputTests", "DomCheckableInputRasterTests", "volume-indicator-settings-dialog action", "side-cursors-toggle action"],
+      "gap": "The unchanged upstream checked-state WPT is required and passes all three assertions in native and forced-portable lanes. Product-shaped native geometry/raster/event/hit gates and operated actions cover transparent overlays and styled-label activation. Broader form validation, submission, and complete select/option UI behavior remain outside this slice."
+    },
+    {
+      "family": "pointer-boundaries",
+      "required": ["pointer capture/release", "enter/leave between siblings", "hover clearing", "long-press cancellation"],
+      "productEvidence": ["chart pan", "values tooltip", "menu hover/favorite state"],
+      "coverage": ["IframeBrowserContractSpikeTests", "AvaloniaDomDocumentTests"],
+      "gap": "WPT testdriver pointer actions are not implemented by the subset runner."
+    },
+    {
+      "family": "dom-event-dispatch",
+      "required": ["capture phase", "at-target phase", "bubble phase", "listener order"],
+      "productEvidence": ["nested toolbar controls", "volume settings activation", "menu command delegation"],
+      "coverage": ["dom/events/Event-dispatch-order.html", "AvaloniaDomDocumentTests"]
+    }
+  ]
+}

@@ -25,9 +25,8 @@
     <PackageReference Include="Avalonia" />
     <PackageReference Include="AngleSharp" />
     <PackageReference Include="AngleSharp.Css" />
-    <PackageReference Include="Jint" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\JavaScript.Avalonia\JavaScript.Avalonia.csproj" />
+    <ProjectReference Include="..\HtmlML.Backend.Avalonia\HtmlML.Backend.Avalonia.csproj" />
   </ItemGroup>
 </Project>

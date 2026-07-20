@@ -104,10 +104,6 @@ public class canvas : Control
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
-        if (VisualRoot is html h)
-        {
-            h.RegisterCanvas(this);
-        }
     }
 
     public override void Render(DrawingContext context)
@@ -238,20 +234,17 @@ public class canvas : Control
     {
         base.OnPointerPressed(e);
         var p = e.GetPosition(this);
-        if (VisualRoot is html h) h.DispatchCanvasPointerEvent(this, "pointerdown", p.X, p.Y);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
         var p = e.GetPosition(this);
-        if (VisualRoot is html h) h.DispatchCanvasPointerEvent(this, "pointermove", p.X, p.Y);
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
         var p = e.GetPosition(this);
-        if (VisualRoot is html h) h.DispatchCanvasPointerEvent(this, "pointerup", p.X, p.Y);
     }
 }

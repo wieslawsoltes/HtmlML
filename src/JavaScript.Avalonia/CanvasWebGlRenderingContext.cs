@@ -7,7 +7,6 @@ using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.OpenGL;
 using Avalonia.Media;
-using Jint.Native;
 
 namespace JavaScript.Avalonia;
 
@@ -1104,7 +1103,7 @@ internal sealed partial class CanvasWebGlRenderingContext
 
         var attachment = ToInt(args[1]);
         var textureTarget = ToInt(args[2]);
-        var texture = args[3] as WebGlTexture ?? (args[3] as JsValue)?.ToObject() as WebGlTexture;
+        var texture = args[3] as WebGlTexture;
         var level = ToInt(args[4]);
 
         if (attachment != COLOR_ATTACHMENT0)
@@ -1149,7 +1148,7 @@ internal sealed partial class CanvasWebGlRenderingContext
         }
 
         var attachment = ToInt(args[1]);
-        var renderbuffer = args[3] as WebGlRenderbuffer ?? (args[3] as JsValue)?.ToObject() as WebGlRenderbuffer;
+        var renderbuffer = args[3] as WebGlRenderbuffer;
         renderbuffer = renderbuffer is { Deleted: false } ? renderbuffer : null;
 
         if (attachment == DEPTH_ATTACHMENT)
@@ -1717,11 +1716,6 @@ internal sealed partial class CanvasWebGlRenderingContext
             return array;
         }
 
-        if (data is JsValue jsValue)
-        {
-            return ExtractArray(jsValue.ToObject());
-        }
-
         if (data is IEnumerable enumerable && data is not string)
         {
             var values = new List<double>();
@@ -1749,11 +1743,6 @@ internal sealed partial class CanvasWebGlRenderingContext
         width = 0;
         height = 0;
         pixels = null;
-
-        if (source is JsValue jsValue)
-        {
-            return TryExtractImagePixels(jsValue.ToObject(), out width, out height, out pixels);
-        }
 
         if (source is AvaloniaDomImageElement image &&
             image.TryGetRgbaPixels(out width, out height, out var imagePixels))
@@ -1811,8 +1800,6 @@ internal sealed partial class CanvasWebGlRenderingContext
             case null:
                 result = 0;
                 return false;
-            case JsValue jsValue:
-                return TryConvertToDouble(jsValue.ToObject(), out result);
             case IConvertible convertible:
                 try
                 {

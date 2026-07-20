@@ -2,17 +2,20 @@
 
 [![HtmlML NuGet](https://img.shields.io/nuget/vpre/HtmlML.svg)](https://www.nuget.org/packages/HtmlML/) [![JavaScript.Avalonia NuGet](https://img.shields.io/nuget/vpre/JavaScript.Avalonia.svg)](https://www.nuget.org/packages/JavaScript.Avalonia/)
 
-HtmlML brings HTML-inspired markup and scripting capabilities to [Avalonia](https://avaloniaui.net/). The repository is split into two reusable libraries that can be consumed together or independently:
+HtmlML brings HTML-inspired markup and V8 scripting capabilities to [Avalonia](https://avaloniaui.net/). The repository contains reusable markup, browser-services, and runtime libraries:
 
 - **HtmlML** – a markup layer that renders HTML-like tags inside Avalonia applications, complete with styling and canvas support.
-- **JavaScript.Avalonia** – a standalone JavaScript bridge powered by [Jint](https://github.com/sebastienros/jint) which exposes DOM-style APIs and event handling for any Avalonia `TopLevel`.
+- **JavaScript.Avalonia** – engine-neutral DOM, browser, event, canvas, and layout services for any Avalonia `TopLevel`.
+- **JavaScript.Avalonia.ClearScript** – the ClearScript/V8 execution adapter, module loader, virtual-iframe runtime, and compilation cache.
+- **HtmlML.Sdk** – versioned component manifests, compatibility checks, offline assets, lifecycle diagnostics, and the capability-based host bridge.
+- **HtmlML.Sdk.Avalonia** – the XAML-first packaged React/TypeScript component host.
 
 Together they enable you to describe user interfaces with familiar HTML semantics while orchestrating dynamic behaviour from JavaScript—no browser required.
 
 ## Highlights
 
 - ⚡ **Avalonia-first**: Render HTML-inspired controls natively, respecting Avalonia layout, styling, and theming.
-- 🧠 **Embedded JavaScript engine**: Run ES-compatible scripts via Jint, with `window`, `document`, timers, animation frames, and console access.
+- 🧠 **V8 JavaScript engine**: Run scripts through ClearScript/V8 with `window`, `document`, timers, animation frames, modules, and console access.
 - 🧩 **DOM abstraction**: Query, create, and mutate Avalonia controls through a DOM-like API (`getElementById`, `querySelector`, `appendChild`, `setAttribute`, etc.).
 - 🕹️ **Event bridge**: Wire Avalonia routed events (`click`, `pointerdown`, `keydown`, `input`, …) to JavaScript callbacks with strongly-typed payloads.
 - 🖼️ **Canvas integration**: HtmlML ships with a `<canvas>` element that mirrors the familiar 2D drawing API.
@@ -22,10 +25,19 @@ Together they enable you to describe user interfaces with familiar HTML semantic
 
 | Path | Description |
 | --- | --- |
+| `src/HtmlML.Core` | UI-framework-neutral values and host/backend contracts. |
 | `src/HtmlML` | HtmlML markup library and HTML element implementations. |
-| `src/JavaScript.Avalonia` | Generic JavaScript host with DOM/event bridge for Avalonia. |
+| `src/JavaScript.Avalonia` | Engine-neutral browser/DOM services for Avalonia. |
+| `src/JavaScript.Avalonia.ClearScript` | ClearScript/V8 execution adapter and shared compilation cache. |
+| `src/HtmlML.Sdk` | Portable Component Profile 1 product contracts and host bridge. |
+| `src/HtmlML.Sdk.Avalonia` | Avalonia `HtmlMlComponentHost` for packaged components. |
+| `tooling/htmlml` | Bounded TypeScript declarations, checker, and Vite/esbuild plugins. |
+| `templates/HtmlML.Templates` | Component-host, hybrid, and TypeScript `dotnet new` templates. |
+| `samples/components` | Twelve versioned, offline component packages shared by backends. |
+| `samples/hosts/Avalonia` | Runnable `.csproj` hosts: the R5 catalog and three standalone product shapes. |
+| `third-party/clearscript` | ClearScript 7.5.1 source submodule on the HtmlML native patch branch. |
+| `third-party/v8` | V8 14.7.173.23 source submodule on ClearScript's compatibility patch branch. |
 | `samples/website` | HtmlML showcase demonstrating markup, styling, and canvas scripting. |
-| `samples/JavaScriptHostSample` | Plain Avalonia desktop app using `JavaScript.Avalonia` without HtmlML. |
 | `samples/JavaScriptPlayground` | Interactive playground with editable XAML, live preview, and JavaScript console for `JavaScript.Avalonia`. |
 
 ## Getting Started
@@ -37,6 +49,12 @@ Together they enable you to describe user interfaces with familiar HTML semantic
 
 ### Building the repository
 
+Initialize source dependencies before producing reviewed native runtime packages:
+
+```bash
+git submodule update --init --recursive
+```
+
 ```bash
 # Restore and build everything (libraries + samples)
 dotnet build HtmlML.sln
@@ -45,15 +63,52 @@ dotnet build HtmlML.sln
 ### Running the samples
 
 ```bash
+# Browse and run all 12 R5 component packages
+dotnet run --project samples/hosts/Avalonia/HtmlML.Sdk.SampleCatalog
+
+# Run one of the copyable R5 product-shape hosts
+dotnet run --project samples/hosts/Avalonia/ComponentHost.Basic
+dotnet run --project samples/hosts/Avalonia/Hybrid.ReactIslands
+dotnet run --project samples/hosts/Avalonia/TypeScriptDesktop
+
 # HtmlML website sample
 dotnet run --project samples/website/website.csproj
 
-# Standalone JavaScript host sample
-dotnet run --project samples/JavaScriptHostSample/JavaScriptHostSample.csproj
-
 # JavaScript.Avalonia playground
 dotnet run --project samples/JavaScriptPlayground/JavaScriptPlayground.csproj
+
+# Validate the complete R5 SDK/template/sample workflow
+scripts/run-r5-sdk-smoke.sh
+
+# Execute all 12 catalog bundles through real Avalonia + V8 (native runtime required)
+scripts/run-r5-catalog-runtime-smoke.sh
 ```
+
+The R5 hosts use the reviewed patched ClearScript V8 native library and automatically
+copy it from the repository's stable per-RID cache. See
+[`samples/hosts/Avalonia/README.md`](samples/hosts/Avalonia/README.md) for the one-time
+native preparation command and optional environment overrides.
+
+### Creating a React/TypeScript application
+
+After installing the `HtmlML.Templates` package, create one of the supported product
+shapes:
+
+```bash
+dotnet new htmlml-component-host -n MyComponentHost
+dotnet new htmlml-hybrid -n MyHybridApp
+dotnet new htmlml-typescript -n MyTypeScriptApp
+cd MyTypeScriptApp/web
+npm install
+npm run build
+cd ..
+dotnet run
+```
+
+The web build runs the bounded compatibility checker and emits a versioned
+`htmlml-component.json`. Host services are available only through declared,
+asynchronous `htmlml.host.*` capabilities. Applications must also ship the reviewed
+native V8 package for their target RID.
 
 ### Consuming the libraries
 
@@ -62,11 +117,12 @@ NuGet packages are not yet published. To reference the projects locally:
 ```xml
 <ItemGroup>
   <ProjectReference Include="..\src\HtmlML\HtmlML.csproj" />
-  <ProjectReference Include="..\src\JavaScript.Avalonia\JavaScript.Avalonia.csproj" />
+  <ProjectReference Include="..\src\HtmlML.Backend.Avalonia\HtmlML.Backend.Avalonia.csproj" />
+  <ProjectReference Include="..\src\JavaScript.Avalonia.ClearScript\JavaScript.Avalonia.ClearScript.csproj" />
 </ItemGroup>
 ```
 
-If you only need the JavaScript integration, reference `JavaScript.Avalonia` on its own.
+For the Avalonia presentation layer, reference `HtmlML.Backend.Avalonia` directly.
 
 ## Using HtmlML
 
@@ -105,19 +161,22 @@ HtmlML parses the markup, applies classes and inline styles, wires `<canvas>` po
 
 ## Using JavaScript.Avalonia directly
 
-`JintAvaloniaHost` is the entry point for integrating JavaScript into any Avalonia window:
+`AvaloniaBrowserHost` supplies browser/DOM services and `ClearScriptV8Runtime` supplies
+V8 execution:
 
 ```csharp
 public partial class MainWindow : Window
 {
-    private readonly JintAvaloniaHost _jsHost;
+    private readonly AvaloniaBrowserHost _browserHost;
+    private readonly ClearScriptV8Runtime _runtime;
 
     public MainWindow()
     {
         InitializeComponent();
-        _jsHost = new JintAvaloniaHost(this);
+        _browserHost = new AvaloniaBrowserHost(this);
+        _runtime = new ClearScriptV8Runtime(_browserHost);
 
-        _jsHost.ExecuteScriptText("""
+        _runtime.Execute("""
 const label = document.getElementById('OutputText');
 const button = document.getElementById('RunButton');
 
@@ -134,7 +193,9 @@ if (button && label) {
 
 ### Loading external scripts
 
-`JintAvaloniaHost` includes a lightweight module loader that can pull in local files, Avalonia assets (`avares://`), or HTTP resources. By default it resolves relative paths against `AppContext.BaseDirectory`, but you can change this via `ScriptBaseDirectory`.
+`ClearScriptV8Runtime` includes a CommonJS-style module loader that can resolve local
+files, Avalonia assets (`avares://`), or HTTP resources through the host's resource
+resolver.
 
 ```javascript
 // CommonJS-style modules
@@ -167,25 +228,28 @@ textBox.addEventListener('keydown', evt => {
 
 ## Architecture Overview
 
-```
-HtmlML (markup + HTML elements)
- ├─ Core (HtmlElementBase, styling helpers)
- ├─ Html (HTML-like control set, canvas)
- └─ JavaScript (Html-specific document bridging)
-
-JavaScript.Avalonia (standalone library)
- ├─ JintAvaloniaHost (engine lifecycle, timers, document binding)
- └─ AvaloniaDomDocument / AvaloniaDomElement (DOM traversal, events, attribute handling)
+```text
+HtmlML.Sdk (components, profile, lifecycle, host bridge)
+        ↓                         ↓
+HtmlML portable cores       JavaScript.Avalonia.ClearScript (V8)
+        ↓                         ↓
+HtmlML.Backend.Avalonia + HtmlML.Sdk.Avalonia
 ```
 
-HtmlML builds on JavaScript.Avalonia by overriding the generic DOM to inject HTML-specific behaviour (canvas wrappers, style parsing, etc.).
+R0 through R5 are complete: the semantic cores are portable, Avalonia is the reference
+backend package, and the React/TypeScript SDK is packaged and template-tested. R6 is
+the direct ProGPU backend proof using the same component assets and profile contracts.
 
 ## Roadmap
 
-- Publish official NuGet packages for HtmlML and JavaScript.Avalonia.
-- Expand HTML element coverage and CSS support.
-- Provide additional samples (MVVM integration, hybrid C#/JS applications).
-- Improve documentation and API reference.
+HtmlML's roadmap is to extract reusable JavaScript, DOM, CSS/layout, and graphics cores
+from the current Avalonia implementation while preserving Avalonia as the reference
+backend and adding direct ProGPU, WPF, WinUI, and Uno backends. React/TypeScript
+tooling, an explicit component compatibility profile, and an executable sample for
+every supported product use case are part of the same plan.
+
+See the [supported use cases](use-cases.md) and
+[architecture decisions](docs/architecture/README.md).
 
 ## Contributing
 
@@ -205,7 +269,7 @@ If your organisation requires a different licensing arrangement, please reach ou
 ## Acknowledgements
 
 - [AvaloniaUI](https://github.com/AvaloniaUI/Avalonia) for the cross-platform UI framework.
-- [Jint](https://github.com/sebastienros/jint) for the embeddable JavaScript engine.
+- [ClearScript](https://github.com/microsoft/ClearScript) for the V8 hosting layer.
 - [AngleSharp](https://anglesharp.github.io/) for HTML/CSS parsing used by HtmlML.
 
 ---
