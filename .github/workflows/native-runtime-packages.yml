@@ -1,0 +1,132 @@
+name: Native runtime packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package-version:
+        description: NuGet package version (defaults to Directory.Build.props)
+        required: false
+        type: string
+      publish:
+        description: Publish verified packages to NuGet.org
+        required: true
+        default: false
+        type: boolean
+  push:
+    tags:
+    - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      package-version: ${{ steps.version.outputs.package-version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+    - uses: actions/checkout@v4
+    - id: version
+      name: Resolve package version
+      shell: bash
+      env:
+        REQUESTED_VERSION: ${{ inputs.package-version }}
+        REQUESTED_PUBLISH: ${{ inputs.publish }}
+      run: |
+        version="$REQUESTED_VERSION"
+        publish="$REQUESTED_PUBLISH"
+        if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+          version="${GITHUB_REF_NAME#v}"
+          publish=true
+        elif [[ -z "$version" ]]; then
+          version="$(sed -n 's:.*<VersionPrefix>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)"
+        fi
+        if [[ -z "$version" ]]; then
+          echo "Unable to resolve a package version." >&2
+          exit 1
+        fi
+        echo "package-version=$version" >> "$GITHUB_OUTPUT"
+        echo "publish=${publish:-false}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: macos-latest
+          rid: osx-arm64
+          script: unix
+        - os: ubuntu-latest
+          rid: linux-x64
+          script: unix
+        - os: windows-latest
+          rid: win-x64
+          script: windows
+    name: Build ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Initialize reviewed V8 patch inputs
+      shell: bash
+      run: git submodule update --init third-party/clearscript
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
+    - name: Build, pack, and test Unix runtime
+      if: matrix.script == 'unix'
+      shell: bash
+      run: |
+        scripts/build-native-engine-runtime.sh \
+          --rid '${{ matrix.rid }}' \
+          --package-version '${{ needs.metadata.outputs.package-version }}' \
+          --output "$GITHUB_WORKSPACE/artifacts/native-engine-runtime"
+    - name: Build, pack, and test Windows runtime
+      if: matrix.script == 'windows'
+      shell: pwsh
+      run: |
+        ./scripts/build-native-engine-runtime.ps1 `
+          -Rid '${{ matrix.rid }}' `
+          -PackageVersion '${{ needs.metadata.outputs.package-version }}' `
+          -Output "$env:GITHUB_WORKSPACE/artifacts/native-engine-runtime"
+    - name: Upload verified RID package
+      uses: actions/upload-artifact@v4
+      with:
+        name: native-runtime-${{ matrix.rid }}-${{ needs.metadata.outputs.package-version }}
+        path: artifacts/native-engine-runtime/*.nupkg
+        if-no-files-found: error
+
+  publish:
+    needs: [metadata, build]
+    if: needs.metadata.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment: nuget.org
+    steps:
+    - uses: actions/checkout@v4
+    - name: Download verified RID packages
+      uses: actions/download-artifact@v4
+      with:
+        pattern: native-runtime-*-${{ needs.metadata.outputs.package-version }}
+        path: artifacts/native-engine-runtime
+        merge-multiple: true
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
+    - name: Publish to NuGet.org
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      shell: bash
+      run: |
+        if [[ -z "$NUGET_API_KEY" ]]; then
+          echo "The nuget.org environment must define the NUGET_API_KEY secret." >&2
+          exit 1
+        fi
+        for package in artifacts/native-engine-runtime/*.nupkg; do
+          dotnet nuget push "$package" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+        done

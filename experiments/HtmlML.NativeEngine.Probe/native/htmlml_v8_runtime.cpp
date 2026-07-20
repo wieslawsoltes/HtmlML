@@ -21,6 +21,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -28,7 +29,10 @@
 
 #if defined(_WIN32)
 #include <process.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #else
+#include <dlfcn.h>
 #include <unistd.h>
 #endif
 
@@ -128,6 +132,43 @@ enum inline_style_property : uint64_t {
 std::once_flag v8_initialize_once;
 std::unique_ptr<v8::Platform> v8_platform;
 
+std::filesystem::path native_module_directory()
+{
+#if defined(_WIN32)
+    HMODULE module = nullptr;
+    const auto address = reinterpret_cast<LPCWSTR>(&native_module_directory);
+    if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            address,
+            &module) == 0) {
+        throw std::runtime_error("Unable to locate the HtmlML native engine module.");
+    }
+
+    std::vector<wchar_t> buffer(1024);
+    for (;;) {
+        const auto length = GetModuleFileNameW(
+            module,
+            buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        if (length == 0) {
+            throw std::runtime_error("Unable to read the HtmlML native engine module path.");
+        }
+        if (length < buffer.size() - 1U) {
+            return std::filesystem::path(buffer.data(), buffer.data() + length).parent_path();
+        }
+        buffer.resize(buffer.size() * 2U);
+    }
+#else
+    Dl_info module{};
+    if (dladdr(reinterpret_cast<const void*>(&native_module_directory), &module) == 0
+        || module.dli_fname == nullptr) {
+        throw std::runtime_error("Unable to locate the HtmlML native engine module.");
+    }
+    return std::filesystem::weakly_canonical(module.dli_fname).parent_path();
+#endif
+}
+
 display_mode default_display_for_tag(std::string_view tag)
 {
     constexpr std::array<std::string_view, 8> non_rendered_tags{
@@ -152,13 +193,18 @@ display_mode default_display_for_tag(std::string_view tag)
 void initialize_v8_process()
 {
     std::call_once(v8_initialize_once, [] {
-        constexpr const char* executable_name = "htmlml_native_engine";
-#if defined(HTMLML_V8_ICU_DATA_PATH)
-        v8::V8::InitializeICU(HTMLML_V8_ICU_DATA_PATH);
+#if defined(HTMLML_V8_ICU_DATA_FILENAME)
+        const auto icu_data_path =
+            native_module_directory() / HTMLML_V8_ICU_DATA_FILENAME;
+        if (!std::filesystem::is_regular_file(icu_data_path)
+            || !v8::V8::InitializeICU(icu_data_path.string().c_str())) {
+            throw std::runtime_error(
+                "Unable to initialize V8 ICU data beside the HtmlML native engine: "
+                + icu_data_path.string());
+        }
 #else
-        v8::V8::InitializeICUDefaultLocation(executable_name);
+        throw std::runtime_error("The HtmlML native engine was built without an ICU data filename.");
 #endif
-        v8::V8::InitializeExternalStartupData(executable_name);
         v8_platform = v8::platform::NewDefaultPlatform();
         v8::V8::InitializePlatform(v8_platform.get());
         v8::V8::Initialize();

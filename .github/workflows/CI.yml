@@ -63,6 +63,15 @@ jobs:
       run: dotnet test tests/JavaScript.Avalonia.Tests/JavaScript.Avalonia.Tests.csproj -c Release --no-build
     - name: WPT manifest integrity
       run: dotnet run --project tests/WebPlatformSubset/runner/HtmlML.WebPlatformSubset.Runner.csproj -c Release --no-build -- --selection all --list
+    - name: Native C++ portability build (without V8)
+      run: >-
+        cmake
+        -S experiments/HtmlML.NativeEngine.Probe
+        -B artifacts/native-engine-portability
+        -DCMAKE_BUILD_TYPE=Release
+        -DHTMLML_NATIVE_ENGINE_ENABLE_V8=OFF
+    - name: Compile native C++ portability target
+      run: cmake --build artifacts/native-engine-portability --config Release --parallel
 
   r0-artifacts:
     name: R0 coverage and evidence

@@ -2,6 +2,7 @@
   <PropertyGroup>
     <HtmlMlNativeEnginePackageRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\'))</HtmlMlNativeEnginePackageRoot>
     <HtmlMlNativeEnginePackageAsset>$(HtmlMlNativeEnginePackageRoot)runtimes\$(HtmlMlNativeEnginePackagedRid)\native\$(HtmlMlNativeEnginePackagedFileName)</HtmlMlNativeEnginePackageAsset>
+    <HtmlMlNativeEnginePackageIcuData>$(HtmlMlNativeEnginePackageRoot)runtimes\$(HtmlMlNativeEnginePackagedRid)\native\$(HtmlMlNativeEnginePackagedIcuFileName)</HtmlMlNativeEnginePackageIcuData>
     <HtmlMlNativeEnginePackageManifest>$(HtmlMlNativeEnginePackageRoot)runtimes\$(HtmlMlNativeEnginePackagedRid)\native\htmlml-native-runtime.json</HtmlMlNativeEnginePackageManifest>
   </PropertyGroup>
 
@@ -12,6 +13,10 @@
              CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(HtmlMlNativeEnginePackageManifest)"
              Link="htmlml-native-runtime.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(HtmlMlNativeEnginePackageIcuData)"
+             Link="$(HtmlMlNativeEnginePackagedIcuFileName)"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
@@ -25,5 +30,7 @@
            Text="HtmlML native runtime package is corrupt; the native asset is missing: $(HtmlMlNativeEnginePackageAsset)" />
     <Error Condition="!Exists('$(HtmlMlNativeEnginePackageManifest)')"
            Text="HtmlML native runtime package is corrupt; its manifest is missing: $(HtmlMlNativeEnginePackageManifest)" />
+    <Error Condition="!Exists('$(HtmlMlNativeEnginePackageIcuData)')"
+           Text="HtmlML native runtime package is corrupt; V8 ICU data is missing: $(HtmlMlNativeEnginePackageIcuData)" />
   </Target>
 </Project>
