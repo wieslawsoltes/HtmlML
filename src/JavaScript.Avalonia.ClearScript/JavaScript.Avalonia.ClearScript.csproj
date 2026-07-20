@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <Description>Optional ClearScript V8 runtime for JavaScript.Avalonia.</Description>
+    <PackageId>JavaScript.Avalonia.ClearScript</PackageId>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>avalonia;javascript;v8;clearscript</PackageTags>
+    <RepositoryUrl>https://github.com/wieslawsoltes/HtmlML</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HtmlML.JavaScript\HtmlML.JavaScript.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      Deliberately use the managed V8 package rather than ClearScript.Complete.
+      Complete transitively supplies stock native binaries for every RID, which can
+      silently bypass HtmlML's reviewed same-origin-context patch. Applications must
+      opt into an HtmlML-reviewed native asset separately.
+    -->
+    <PackageReference Include="Microsoft.ClearScript.V8" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -406,7 +406,7 @@ function tryResizeTerminal(cols: number, rows: number) {
   try {
     terminal.resize(cols, rows);
   } catch (error) {
-    // The bundled headless xterm build can expose readonly rows/cols under Jint.
+    // The bundled headless xterm build can expose readonly rows/cols.
     // Keep the constructor size in that case; it is already large enough for TUIs.
   }
 }

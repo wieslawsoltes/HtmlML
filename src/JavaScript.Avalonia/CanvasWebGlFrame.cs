@@ -70,6 +70,12 @@ internal sealed class CanvasWebGlDrawOperation : ICustomDrawOperation
             var clip = new SKRect((float)Bounds.X, (float)Bounds.Y, (float)Bounds.Right, (float)Bounds.Bottom);
             canvas.ClipRect(clip, SKClipOperation.Intersect, antialias: false);
             canvas.Translate((float)Bounds.X, (float)Bounds.Y);
+            if (_frame.Width > 0 && _frame.Height > 0)
+            {
+                float scaleX = (float)(Bounds.Width / _frame.Width);
+                float scaleY = (float)(Bounds.Height / _frame.Height);
+                canvas.Scale(scaleX, scaleY);
+            }
 
             if (_frame.HasClear)
             {

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.4" />
+    <PackageReference Include="HtmlML.Sdk" Version="11.3.4" />
+    <PackageReference Include="HtmlML.Sdk.Avalonia" Version="11.3.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Component\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

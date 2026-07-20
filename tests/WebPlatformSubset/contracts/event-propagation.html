@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Programmatic events follow capture, target, and bubble order</title>
+<body>
+<div id="event-parent"><button id="event-child">Activate</button></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  try {
+    const parent = document.getElementById("event-parent");
+    const child = document.getElementById("event-child");
+    const order = [];
+
+    parent.addEventListener("component-activate", event => {
+      order.push("capture");
+      assert(event.target === child, "capture target must remain the dispatch target");
+      assert(event.currentTarget === parent, "capture currentTarget must be the parent");
+    }, true);
+    child.addEventListener("component-activate", event => {
+      order.push("target");
+      assert(event.currentTarget === child, "target currentTarget must be the child");
+    });
+    parent.addEventListener("component-activate", event => {
+      order.push("bubble");
+    });
+
+    const dispatched = child.dispatchEvent(new Event("component-activate", {
+      bubbles: true,
+      cancelable: true
+    }));
+    assert(dispatched === true, "uncancelled dispatchEvent must return true");
+    assert(order.join(",") === "capture,target,bubble",
+      "listener order was " + order.join(","));
+
+    let onceCount = 0;
+    child.addEventListener("component-once", () => onceCount++, { once: true });
+    child.dispatchEvent(new Event("component-once"));
+    child.dispatchEvent(new Event("component-once"));
+    assert(onceCount === 1, "once listener ran " + onceCount + " times");
+
+    child.addEventListener("component-cancel", event => event.preventDefault());
+    const cancelled = child.dispatchEvent(new Event("component-cancel", {
+      cancelable: true
+    }));
+    assert(cancelled === false, "cancelled dispatchEvent must return false");
+
+    state.results.push({
+      name: "programmatic events propagate through capture, target, and bubble phases",
+      status: "PASS",
+      message: null,
+      stack: null
+    });
+    state.harness = { status: 0, message: null, stack: null };
+  } catch (error) {
+    state.results.push({
+      name: "programmatic events propagate through capture, target, and bubble phases",
+      status: "FAIL",
+      message: String(error && error.message || error),
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = {
+      status: 1,
+      message: state.results[0].message,
+      stack: state.results[0].stack
+    };
+  }
+  state.complete = true;
+</script>
+</body>

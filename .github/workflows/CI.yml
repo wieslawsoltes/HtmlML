@@ -11,18 +11,97 @@ on:
     - release/*
 
 jobs:
-
-  build:
+  build-and-test:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    name: Build ${{ matrix.os }}
+    name: Build and test ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v1
-    - name: Setup .NET Core
+    - uses: actions/checkout@v4
+    - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         global-json-file: global.json
-    - name: Build
-      run: dotnet build -c Release
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Restore
+      run: dotnet restore HtmlML.sln
+    - name: Build Release
+      run: dotnet build HtmlML.sln -c Release --no-restore -p:HtmlMlClearScriptNativeRequired=false -p:HtmlMlClearScriptNativeRid=
+    - name: Portable Core contracts
+      run: dotnet test tests/HtmlML.Core.Tests/HtmlML.Core.Tests.csproj -c Release --no-build
+    - name: Portable JavaScript contracts
+      run: dotnet test tests/HtmlML.JavaScript.Tests/HtmlML.JavaScript.Tests.csproj -c Release --no-build
+    - name: Portable DOM contracts
+      run: dotnet test tests/HtmlML.Dom.Tests/HtmlML.Dom.Tests.csproj -c Release --no-build
+    - name: Portable CSS and layout contracts
+      run: dotnet test tests/HtmlML.Css.Tests/HtmlML.Css.Tests.csproj -c Release --no-build
+    - name: Portable graphics contracts
+      run: dotnet test tests/HtmlML.Graphics.Tests/HtmlML.Graphics.Tests.csproj -c Release --no-build
+    - name: Backend authoring contracts
+      run: dotnet test tests/HtmlML.Backend.Abstractions.Tests/HtmlML.Backend.Abstractions.Tests.csproj -c Release --no-build
+    - name: React and TypeScript SDK contracts
+      run: dotnet test tests/HtmlML.Sdk.Tests/HtmlML.Sdk.Tests.csproj -c Release --no-build
+    - name: TypeScript profile and bundler tooling
+      run: npm test --prefix tooling/htmlml
+    - name: Build and execute R5 component catalog
+      run: |
+        npm ci --prefix samples/components
+        npm run build --prefix samples/components
+        npm run check --prefix samples/components
+        npm test --prefix samples/components
+    - name: R5 offline sample catalog
+      run: dotnet run --project tests/HtmlML.Sdk.SampleSmoke/HtmlML.Sdk.SampleSmoke.csproj -c Release --no-build
+    - name: Architecture dependency gates
+      run: dotnet test tests/HtmlML.Architecture.Tests/HtmlML.Architecture.Tests.csproj -c Release --no-build
+    - name: Backend package smoke
+      run: dotnet run --project tests/HtmlML.Backend.PackageSmoke/HtmlML.Backend.PackageSmoke.csproj -c Release --no-build
+    - name: Avalonia headless tests
+      run: dotnet test tests/JavaScript.Avalonia.Tests/JavaScript.Avalonia.Tests.csproj -c Release --no-build
+    - name: WPT manifest integrity
+      run: dotnet run --project tests/WebPlatformSubset/runner/HtmlML.WebPlatformSubset.Runner.csproj -c Release --no-build -- --selection all --list
+
+  r0-artifacts:
+    name: R0 coverage and evidence
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
+    - name: Run reproducible R0 CI profile
+      run: scripts/run-r0-baseline.sh --profile ci
+    - name: Upload R0 evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: r0-baseline-${{ github.sha }}
+        path: TestResults/R0/
+        if-no-files-found: error
+
+  r5-sdk:
+    name: R5 React and TypeScript SDK authority smoke
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Create, bundle, build, run, and publish R5 templates and samples
+      run: scripts/run-r5-sdk-smoke.sh
+    - name: Upload R5 evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: r5-sdk-${{ github.sha }}
+        path: TestResults/R5/
+        if-no-files-found: error

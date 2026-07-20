@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "HtmlML",
+  "classifications": ["Desktop", "Avalonia", "Hybrid", "React"],
+  "identity": "HtmlML.Templates.Hybrid",
+  "name": "HtmlML hybrid Avalonia and React application",
+  "shortName": "htmlml-hybrid",
+  "sourceName": "HtmlMLHybrid",
+  "preferNameDirectory": true,
+  "primaryOutputs": [{ "path": "HtmlMLHybrid.csproj" }]
+}

@@ -20,11 +20,17 @@
         <Button Content="Reload XAML" Click="OnReloadXamlClick" />
         <Button Content="Run Script" Click="OnRunScriptClick" />
         <CheckBox x:Name="AutoRunCheckBox" Content="Auto run script" IsChecked="True" VerticalAlignment="Center" />
+        <ProgressBar x:Name="CompilationProgress"
+                     Width="96"
+                     Height="6"
+                     IsIndeterminate="True"
+                     IsVisible="False"
+                     VerticalAlignment="Center" />
         <TextBlock x:Name="StatusText" Margin="16,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
       </StackPanel>
     </Border>
 
-    <Grid Grid.Row="1" ColumnDefinitions="*,5,*,5,*">
+    <Grid Grid.Row="1" ColumnDefinitions="160,5,*,5,160">
       <Border Grid.Column="0" BorderBrush="#ddd" BorderThickness="0,0,1,0">
         <Grid RowDefinitions="Auto,*">
           <Border Background="#f7f7f7" Padding="8" BorderBrush="#ddd" BorderThickness="0,0,0,1">

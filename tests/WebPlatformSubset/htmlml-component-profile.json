@@ -1,0 +1,351 @@
+{
+  "profile": "htmlml-component-1",
+  "wptRevision": "2c705104a295c48053eeddf7fe0170d790a4e853",
+  "runtime": "v8",
+  "viewport": {
+    "width": 800,
+    "height": 600,
+    "deviceScaleFactor": 1
+  },
+  "required": [
+    {
+      "path": "contracts/responsive-release-list.html",
+      "type": "contract",
+      "capabilities": ["flex-shrink-redistribution", "right-alignment", "text-wrapping", "intrinsic-block-growth", "resize-back-stability"],
+      "evidence": ["public-release-list-responsive-layout"]
+    },
+    {
+      "path": "contracts/computed-style-used-size.html",
+      "type": "contract",
+      "capabilities": ["computed-style", "inline-style-separation", "intrinsic-width", "min-max-width-precedence"],
+      "evidence": ["component-dialog-and-menu-sizing"]
+    },
+    {
+      "path": "contracts/event-propagation.html",
+      "type": "contract",
+      "capabilities": ["event-capture", "event-at-target", "event-bubbling", "event-current-target", "event-once", "event-cancellation"],
+      "evidence": ["nested-component-activation", "toolbar-and-menu-event-delegation"]
+    },
+    {
+      "path": "css/css-position/position-absolute-chrome-bug-001.html",
+      "type": "testharness",
+      "capabilities": ["absolute-positioning", "percentage-insets", "dynamic-class-relayout", "resize-back-stability"],
+      "evidence": ["popup-positioning", "resize-back"]
+    },
+    {
+      "path": "css/css-position/position-absolute-container-dynamic-002.html",
+      "type": "testharness",
+      "capabilities": ["absolute-positioning", "containing-block-relayout", "synchronous-geometry"],
+      "evidence": ["popup-reopen-lifecycle", "resize-layout-sync"]
+    },
+    {
+      "path": "css/selectors/last-of-type.html",
+      "type": "testharness",
+      "capabilities": ["last-of-type-selector", "selector-invalidation", "dynamic-dom"],
+      "evidence": ["toolbar-and-menu-item-styling"]
+    },
+    {
+      "path": "css/selectors/only-child.html",
+      "type": "testharness",
+      "capabilities": ["only-child-selector", "selector-invalidation", "dynamic-dom"],
+      "evidence": ["conditional-menu-content", "empty-state-layout"]
+    },
+    {
+      "path": "css/selectors/pseudo-enabled-disabled.html",
+      "type": "testharness",
+      "capabilities": ["enabled-disabled-selectors", "boolean-disabled-attribute", "query-selector"],
+      "evidence": ["calendar-future-day-disabled-color", "disabled-toolbar-activation"]
+    },
+    {
+      "path": "html/semantics/selectors/pseudo-classes/checked.html",
+      "type": "testharness",
+      "capabilities": ["checked-selector", "checkbox-activation", "radio-group-activation", "option-selected-state", "dynamic-input-type", "dom-proxy-identity"],
+      "evidence": ["volume-settings-radio-state", "volume-settings-checkbox-state", "cursor-long-press-switch-state"],
+      "reason": "Required after all three unchanged upstream assertions pass in native and forced-portable runs: initial checkbox/radio/option state, dynamic input type removal, and programmatic checkbox/radio/option activation. Independent V8 identity, event-order, native raster, geometry, hit-testing, and state spikes preserve the operated component-control coverage. Evidence: TestResults/WebPlatformSubset-checked-required-native-final/results.json and TestResults/WebPlatformSubset-checked-required-portable-final/results.json."
+    },
+    {
+      "path": "css/selectors/hover-002.html",
+      "type": "testharness",
+      "capabilities": ["hover-invalidation", "pointer-boundary-events"],
+      "evidence": ["indicators-row-hover", "favorite-star-lifecycle"]
+    },
+    {
+      "path": "dom/events/Event-dispatch-order.html",
+      "type": "testharness",
+      "capabilities": ["event-capture", "event-at-target", "event-bubbling", "listener-order"],
+      "evidence": ["nested-toolbar-activation", "volume-settings-first-click"]
+    },
+    {
+      "path": "css/css-color/hex-002.html",
+      "type": "reftest",
+      "reference": "css/css-color/greensquare-ref.html",
+      "capabilities": ["css-hex-alpha", "rrggbbaa-channel-order", "background-color-painting"],
+      "evidence": ["volume-chevron-pointerover-color", "toolbar-translucent-hover-background"]
+    },
+    {
+      "path": "css/css-color/t44-currentcolor-border-b.xht",
+      "type": "reftest",
+      "reference": "css/css-color/t44-currentcolor-border-b-ref.html",
+      "capabilities": ["currentcolor", "border-shorthand", "border-color-cascade", "border-painting"],
+      "evidence": ["volume-chevron-currentcolor-border", "toolbar-border-state-cascade"]
+    },
+    {
+      "path": "css/css-color/t44-currentcolor-background-b.xht",
+      "type": "reftest",
+      "reference": "css/css-color/t44-currentcolor-background-b-ref.html",
+      "capabilities": ["currentcolor", "background-shorthand", "background-color-cascade", "background-color-painting"],
+      "evidence": ["volume-chevron-currentcolor-background", "toolbar-state-color-inheritance"]
+    },
+    {
+      "path": "css/css-sizing/min-width-max-width-precedence.html",
+      "type": "testharness",
+      "capabilities": ["min-max-width-precedence", "absolute-intrinsic-width", "computed-style"],
+      "evidence": ["sidebar-menu-sizing", "indicators-dialog-sizing"]
+    },
+    {
+      "path": "css/css-transforms/scalex.html",
+      "type": "reftest",
+      "reference": "css/css-transforms/scalex-ref.html",
+      "capabilities": ["transform-scalex", "transform-origin", "transform-painting", "positioned-margins", "static-position"],
+      "evidence": ["settings-tab-selected-indicator", "chevron-final-state"]
+    },
+    {
+      "path": "css/CSS2/text/text-transform-003.xht",
+      "type": "reftest",
+      "reference": "css/CSS2/text/text-transform-003-ref.xht",
+      "capabilities": ["text-transform-uppercase", "semantic-inline-text-painting"],
+      "evidence": ["indicators-script-name-heading"]
+    },
+    {
+      "path": "css/CSS2/linebox/line-height-bleed-001.xht",
+      "type": "reftest",
+      "reference": "css/CSS2/linebox/line-height-bleed-001-ref.xht",
+      "capabilities": ["line-height", "unclipped-glyph-painting"],
+      "evidence": ["indicators-dialog-title"]
+    },
+    {
+      "path": "css/css-tables/subpixel-table-cell-width-001.html",
+      "type": "reftest",
+      "reference": "css/css-tables/subpixel-table-cell-width-001-ref.html",
+      "capabilities": ["table-cell-display", "table-row-generation", "intrinsic-column-sizing", "subpixel-column-widths"],
+      "evidence": ["volume-indicator-more-menu", "axis-scale-context-menu"]
+    },
+    {
+      "path": "css/css-tables/table-model-fixup.html",
+      "type": "testharness",
+      "capabilities": ["anonymous-table-row", "anonymous-table-cell", "table-model-fixup-order", "misparented-table-internals", "collapsible-table-whitespace"],
+      "evidence": ["top-toolbar-table-flex-wrapper", "volume-indicator-more-menu", "axis-scale-context-menu"]
+    },
+    {
+      "path": "css/css-tables/fixed-layout-excess-width-distribution-001.html",
+      "type": "testharness",
+      "capabilities": ["fixed-table-layout", "multi-column-used-width-distribution", "length-column-proportions", "percentage-column-base-width"],
+      "evidence": ["top-toolbar-table-flex-wrapper", "volume-indicator-more-menu", "axis-scale-context-menu"]
+    },
+    {
+      "path": "css/css-lists/li-value-reversed-001.html",
+      "type": "reftest",
+      "reference": "css/css-lists/li-value-reversed-001-ref.html",
+      "capabilities": ["ordered-list-marker", "ol-reversed", "li-value", "list-item-counter"],
+      "evidence": ["r5-react-dashboard-list-markers-native-pixel", "r5-react-dashboard-list-markers-portable-geometry", "r5-ordered-list-counter-authority"],
+      "reason": "Required after exact native and forced-portable reftest passes. Because both WPT sides use native markers, required status remains qualified by the independent green R5 native marker pixel gate; the reftest alone could false-pass if both sides omitted marker paint."
+    },
+    {
+      "path": "css/css-lists/list-and-flex-001.html",
+      "type": "reftest",
+      "reference": "css/css-lists/list-and-flex-001-ref.html",
+      "capabilities": ["unordered-list-marker", "list-item-block-child", "flex-first-child", "inline-flex-reference", "no-spurious-marker-line-box"],
+      "evidence": ["r5-react-dashboard-list-markers-native-pixel", "r5-react-dashboard-list-markers-portable-geometry", "r5-list-flex-first-child-authority"],
+      "reason": "Required after exact native and forced-portable reftest passes. The independent green R5 native marker pixel gate remains part of the evidence because marker omission on both reftest sides could otherwise mask a failure."
+    },
+    {
+      "path": "css/CSS2/lists/list-style-position-023.xht",
+      "type": "reftest",
+      "reference": "css/CSS2/lists/list-style-position-023-ref.xht",
+      "capabilities": ["inside-list-marker", "first-inline-formatting-context", "marker-before-block-child", "nested-list-items", "initial-font-metrics"],
+      "evidence": ["r5-inside-list-marker-first-line-reduction", "r5-list-marker-native-pixel", "r5-list-marker-portable-geometry", "initial-font-metrics-authority"],
+      "reason": "Required after exact native and forced-portable reftest passes. Required status remains coupled to the independent green marker geometry/raster and initial-font-metrics authorities so a test/reference marker omission or shared font fallback cannot create a false pass."
+    },
+    {
+      "path": "css/CSS2/positioning/abspos-negative-margin-001.html",
+      "type": "reftest",
+      "reference": "css/CSS2/positioning/abspos-negative-margin-001-ref.html",
+      "capabilities": ["absolute-positioning", "negative-inline-margin", "inline-static-position", "block-in-inline-line-generation", "collapsed-source-whitespace"],
+      "evidence": ["calendar-current-day-generated-negative-margin", "positioned-generated-box-authority", "inline-static-position-authority", "v8-whitespace-static-position-regression"],
+      "reason": "Required after exact native and forced-portable reftest passes. Independent native/portable geometry and V8 authored-text regressions retain coverage for the hypothetical inline insertion point and whitespace semantics exercised by the WPT."
+    },
+    {
+      "path": "uievents/order-of-events/focus-events/focus-automated-blink-webkit.html",
+      "type": "testharness",
+      "capabilities": ["focus-event-order", "focusin-focusout", "focus-related-target", "active-element-timing", "cross-document-focus"],
+      "evidence": ["calendar-programmatic-focus-bubbling-spike", "goto-date-focused-compound-control"],
+      "reason": "Required after the unchanged two-subtest WPT passes in exact native and forced-portable runs. Required status remains coupled to the independent green local ancestor-bubbling spike and a high-DPI connected-component focus/highlight gate because this WPT listens on each focused target rather than an ancestor."
+    },
+    {
+      "path": "css/selectors/focus-visible-001.html",
+      "type": "testharness",
+      "capabilities": ["focus-visible-selector", "keyboard-focus-modality", "selector-query", "focus-style-invalidation"],
+      "evidence": ["focus-visible-pointer-keyboard-authority", "cursor-menu-favorite-focus-parity"],
+      "reason": "Required after the unchanged upstream keyboard-modality test passes in exact native and forced-portable runs. Required status remains coupled to the independent Avalonia NavigationMethod.Tab authority and an operated connected-menu gate; the bounded runner adapter supports only the WebDriver Tab action exercised here. Evidence: TestResults/WebPlatformSubset-focus-visible-cssom-{native,portable}/results.json."
+    },
+    {
+      "path": "css/selectors/focus-visible-003.html",
+      "type": "testharness",
+      "capabilities": ["focus-visible-selector", "pointer-focus-modality", "non-text-control-focus", "focus-style-invalidation"],
+      "evidence": ["focus-visible-pointer-keyboard-authority", "cursor-menu-favorite-focus-parity"],
+      "reason": "Required after all 12 unchanged upstream pointer-focus subtests pass in exact native and forced-portable runs across tabindex spans, button, image/reset/submit, checkbox, radio, range, and color inputs. Required status remains coupled to the independent modality authority and an operated connected-menu gate; the bounded runner adapter supports the primary click used here. Evidence: TestResults/WebPlatformSubset-focus-visible-cssom-{native,portable}/results.json."
+    },
+    {
+      "path": "css/css-position/position-relative-001.html",
+      "type": "reftest",
+      "reference": "css/reference/ref-filled-green-100px-square.xht",
+      "capabilities": ["relative-positioning", "percentage-insets", "painting"],
+      "evidence": ["toolbar-icon-offsets", "badge-positioning"],
+      "reason": "Required after the settled unchanged XHTML reference passes exact pixels in optimized native and forced-portable runs. This replaces the earlier false pass from a prematurely captured blank reference and is coupled to independent positioned-control geometry gates. Evidence: TestResults/WebPlatformSubset-candidate-post-focus-{native,portable}/results.json."
+    },
+    {
+      "path": "css/css-cascade/important-vs-inline-001.html",
+      "type": "testharness",
+      "capabilities": ["cascade-important", "inline-style-mutation", "computed-style", "window-named-properties"],
+      "evidence": ["menu-hover-state", "component-inline-style-updates"],
+      "reason": "Required after all four unchanged upstream assertions pass in optimized native and forced-portable runs: author !important survives inline add, modification, and removal. The run also exercises browser-compatible window named-property lookup. Evidence: TestResults/WebPlatformSubset-candidate-post-focus-{native,portable}/results.json."
+    },
+    {
+      "path": "css/css-position/position-relative-007.html",
+      "type": "reftest",
+      "reference": "css/reference/ref-filled-green-100px-square.xht",
+      "capabilities": ["relative-positioning", "calc", "indefinite-size"],
+      "evidence": ["responsive-menu-positioning", "relative-inset-definiteness-authority"],
+      "reason": "Required after exact native and forced-portable passes of the unchanged reftest. Vertical percentage-bearing calc() relative insets correctly become auto when the containing-block height is indefinite, while the independent authority retains definite and negative-length coverage. Evidence: TestResults/WebPlatformSubset-relative-inset-fixed-{native,portable}/results.json."
+    },
+    {
+      "path": "css/css-transforms/transform-scale-hittest.html",
+      "type": "testharness",
+      "capabilities": ["transformed-hit-testing", "transformed-bounding-rect", "element-from-point"],
+      "evidence": ["chart-toolbar-hit-testing", "scaled-popup-hit-testing", "transformed-hit-region-authority"],
+      "reason": "Required after both unchanged upstream hit assertions pass in native and forced-portable runs. getBoundingClientRect uses transformed corner extents and elementFromPoint inverse-transforms the viewport point into the local border box, coupled to an independent scaled geometry/half-open edge authority. Evidence: TestResults/WebPlatformSubset-transform-hittest-fixed-{native,portable}/results.json."
+    },
+    {
+      "path": "css/css-transforms/transform_translate_zero.html",
+      "type": "testharness",
+      "capabilities": ["transform-translate", "computed-style-serialization"],
+      "evidence": ["iframe-popup-positioning", "toolbar-hit-testing", "transform-list-order-authority"],
+      "reason": "Required after the unchanged upstream assertion passes in exact native and forced-portable runs. Computed style serializes the applied transform matrix, while independent Chrome-authority regressions preserve authored noncommutative transform-list order in Avalonia's row-vector model. Evidence: TestResults/WPT-transform-order-{native,portable}/results.json."
+    },
+    {
+      "path": "css/css-transforms/transform_translate_neg.html",
+      "type": "testharness",
+      "capabilities": ["negative-transform-translate", "computed-style-serialization"],
+      "evidence": ["anchored-menu-positioning", "sidebar-slideout-positioning", "transform-list-order-authority"],
+      "reason": "Required after the unchanged upstream negative-translation assertion passes in exact native and forced-portable runs. The same computed matrix is used for visual application and CSSOM serialization, coupled to independent ordered-composition tests. Evidence: TestResults/WPT-transform-order-{native,portable}/results.json."
+    },
+    {
+      "path": "css/css-grid/alignment/grid-gutters-001.html",
+      "type": "reftest",
+      "reference": "css/css-grid/reference/grid-equal-gutters-ref.html",
+      "capabilities": ["grid-fixed-pixel-columns", "grid-fixed-pixel-rows", "grid-gap-shorthand", "grid-auto-placement", "collapsible-grid-whitespace"],
+      "evidence": ["calendar-date-time-controls", "goto-date-dialog", "fixed-grid-whitespace-raster-authority"],
+      "reason": "Required after the unchanged upstream reftest passes exact pixels in native and forced-portable runs. Fixed row and column tracks, gap, source-order auto placement, and collapsible authored whitespace are coupled to an independent V8 iframe geometry/raster authority. Evidence: TestResults/WebPlatformSubset-grid-rows-final-{native,portable}/results.json."
+    },
+    {
+      "path": "css/CSS2/generated-content/before-content-display-002.xht",
+      "type": "reftest",
+      "reference": "css/CSS2/generated-content/after-content-display-002-ref.xht",
+      "capabilities": ["generated-before", "generated-text-content", "block-display", "intrinsic-line-sizing", "normal-flow-participation", "generated-paint"],
+      "evidence": ["left-sidebar-separator", "toolbar-pseudo-element-chrome", "generated-text-native-portable-authority"],
+      "reason": "Required after the unchanged upstream block generated-content reftest passes exact pixels in native and forced-portable runs. Literal pseudo text is measured as intrinsic content, participates in normal flow, and paints through a DOM-invisible carrier without entering the DOM or flex item list. Evidence: TestResults/WebPlatformSubset-generated-current-{native,portable}-block/results.json."
+    },
+    {
+      "path": "css/css-flexbox/flexbox-with-pseudo-elements-001.html",
+      "type": "reftest",
+      "reference": "css/css-flexbox/flexbox-with-pseudo-elements-001-ref.html",
+      "capabilities": ["generated-before", "generated-after", "flex-item-generation", "align-self", "generated-text-content", "intrinsic-flex-sizing", "generated-paint"],
+      "evidence": ["menu-row-pseudo-strut", "interval-menu-row-height", "volume-and-axis-menu-layout", "generated-text-flex-authority"],
+      "reason": "Required after the unchanged upstream generated-pseudo flex reftest passes exact pixels in native and forced-portable runs. Literal before/after text preserves source ordering, intrinsic sizing, align-self, background paint, and anonymous authored text behavior; independent spikes retain native/portable geometry and raster proof. Evidence: TestResults/WebPlatformSubset-generated-current-{native,portable}-flex/results.json."
+    },
+    {
+      "path": "css/CSS2/generated-content/before-after-positioned-003.html",
+      "type": "reftest",
+      "reference": "css/CSS2/generated-content/before-after-positioned-002-ref.html",
+      "capabilities": ["generated-before", "generated-after", "absolute-positioning", "bottom-right-insets", "initial-containing-block", "generated-box-painting"],
+      "evidence": ["volume-radio-selected-dot", "settings-tab-selected-indicator", "generated-pseudo-icb-authority"],
+      "reason": "Required after the unchanged upstream positioned generated-content reftest passes exact pixels in native and forced-portable runs. Out-of-flow generated backgrounds use the shared containing-block resolver, current-pass layout slots, and the precomputed portable absolute containing block, coupled to an isolated live ICB geometry/raster authority."
+    }
+  ],
+  "candidate": [
+    {
+      "path": "css/css-flexbox/flexbox-flex-wrap-horiz-001.html",
+      "type": "reftest",
+      "reference": "css/css-flexbox/flexbox-flex-wrap-horiz-001-ref.html",
+      "capabilities": ["flex-wrap", "per-line-flex-sizing", "cross-line-stretch", "flex-shrink"],
+      "evidence": ["calendar-date-time-controls", "responsive-dialog-controls"],
+      "reason": "The actual flex document now matches the WPT-encoded margin, per-line shrink, overflow, and cross-line stretch geometry in native and forced-portable layout; their actual PNGs are byte-identical. Exact comparison remains blocked by unsupported construction on the reference side: ordinary block children still receive their left margin twice at the Avalonia arrange boundary, and the second of two exact-fit floated boxes drops to the following line. Those reference-only differences account for all 1,528 mismatched pixels (828 block-margin pixels and 700 float pixels). Keep candidate until block margin commit and the bounded float reference construction are supported; do not special-case the runner."
+    }
+  ],
+  "harnessBlocked": [
+    {
+      "path": "css/CSS2/lists/list-style-001.xht",
+      "type": "visual",
+      "capabilities": ["list-style-shorthand", "square-list-marker", "list-item-marker-paint"],
+      "evidence": ["r5-list-style-computed-values", "r5-list-marker-native-pixel"],
+      "reason": "This pinned CSS2 visual case verifies that list-style:square produces a square marker, but it has neither rel=match nor testharness assertions. The subset runner cannot execute self-verifying visual tests unchanged, and the case does not exercise list-style-position:inside or first-line participation. Keep it harness-blocked and use the independent local marker-pixel gate for this base rule."
+    },
+    {
+      "path": "css/CSS2/lists/list-style-position-020.xht",
+      "type": "visual",
+      "capabilities": ["inside-list-marker", "first-line-inline-participation", "continuation-line-wrap"],
+      "evidence": ["r5-inside-list-marker-first-line-reduction"],
+      "reason": "This is the closest CSS2 visual statement of the exact rule: an inside marker participates on the first line while the following forced line starts at the principal block edge. It has no rel=match or assertions, so the current exact-match/testharness adapter cannot execute it unchanged; the runner-compatible nested-list reftest remains candidate and the minimal local reduction must carry the precise geometry claim."
+    },
+    {
+      "path": "css/CSS2/visufx/visibility-layout-001.xht",
+      "type": "visual",
+      "capabilities": ["visibility-hidden", "layout-box-retention", "paint-suppression"],
+      "evidence": ["side-hide-options-measuring-menu", "synchronous-popup-placement"],
+      "reason": "This is the nearest official WPT and exactly asserts the base rule that visibility:hidden suppresses paint without removing layout boxes. It is a self-verifying visual test without rel=match, and it does not compose inherited hidden visibility with generated ::before content. Keep it harness-blocked; the product-neutral native/portable regression covers that exact composition and synchronous geometry read."
+    },
+    {
+      "path": "css/css-backgrounds/border-radius-overflow-hidden.html",
+      "type": "visual",
+      "capabilities": ["rounded-overflow-clipping", "border-radius", "descendant-paint-clipping"],
+      "evidence": ["chart-hover-market-status-marker"],
+      "reason": "This exact upstream coverage is a self-overlaid visual test without rel=match or testharness assertions. The product-neutral pixel spike now covers the primitive; promote after the subset runner can evaluate self-verifying visual tests."
+    },
+    {
+      "path": "css/css-backgrounds/border-radius-shorthand-001.htm",
+      "type": "visual",
+      "capabilities": ["border-radius-shorthand", "corner-longhand-expansion", "elliptical-radius-values"],
+      "evidence": ["volume-settings-footer-buttons", "rounded-dialog-controls"],
+      "reason": "This is the nearest official WPT for the base shorthand rule: it checks one-value expansion and a three-value horizontal/two-value vertical ellipse. It is a self-overlaid visual test without rel=match, and HtmlML's Avalonia projection still models only one scalar per corner, so elliptical vertical paint is not claimed. WPT does not currently combine this rule with the connected-component composition of var()-substitution plus additive calc(max()) used values; the native/portable raster spike covers that exact composition."
+    },
+    {
+      "path": "css/css-flexbox/relayout-align-items.html",
+      "type": "testharness",
+      "capabilities": ["flex-align-items", "dynamic-flex-relayout"],
+      "evidence": ["toolbar-vertical-alignment", "dialog-row-alignment"],
+      "reason": "Requires WPT check-layout-th.js support and flexbox support styles; add as the next adapter facility."
+    }
+  ],
+  "excluded": [
+    {
+      "area": "print-and-paged-media",
+      "reason": "Not observed in the supported connected-component interaction corpus."
+    },
+    {
+      "area": "multicol-ruby-complex-writing-modes",
+      "reason": "Not observed in the supported connected-component interaction corpus."
+    },
+    {
+      "area": "navigation-security-storage-service-workers",
+      "reason": "Outside the local trusted chart-host profile."
+    },
+    {
+      "area": "broad-native-form-controls",
+      "reason": "Only the controls and input contracts exercised by the connected-component corpus are in scope."
+    },
+    {
+      "area": "manual-and-physical-device-tests",
+      "reason": "The conformance lane is deterministic and headless; real interactions remain in application-owned parity probes."
+    }
+  ]
+}

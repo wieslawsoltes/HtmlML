@@ -1,19 +1,19 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
-using Jint;
-using Jint.Native;
-using Jint.Native.Object;
-using Jint.Runtime;
+using HtmlML.JavaScript;
 
 namespace JavaScript.Avalonia;
 
@@ -21,14 +21,77 @@ namespace JavaScript.Avalonia;
 
 internal sealed class CanvasDrawingSurface : Control
 {
-    
+    private static readonly bool s_disableFillRectCoalescing =
+        string.Equals(Environment.GetEnvironmentVariable("HTMLML_DISABLE_FILL_RECT_COALESCING"), "1", StringComparison.Ordinal);
+    private static readonly bool s_enableCanvasInvalidationSuppression =
+        string.Equals(
+            Environment.GetEnvironmentVariable("HTMLML_ENABLE_CANVAS_INVALIDATION_SUPPRESSION"),
+            "1",
+            StringComparison.Ordinal);
+    private static readonly bool s_enableNativeCanvasHotPath =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("HTMLML_DISABLE_AVALONIA_NATIVE_CANVAS_HOTPATH"),
+            "1",
+            StringComparison.Ordinal);
+    private static readonly bool s_disableLineDashReplayDeduplication =
+        string.Equals(
+            Environment.GetEnvironmentVariable("HTMLML_DISABLE_CANVAS_LINE_DASH_REPLAY_DEDUP"),
+            "1",
+            StringComparison.Ordinal);
+
     private readonly List<CanvasDrawCommand> _commands = new();
+    private CanvasDisplayListModel _portableDisplayList = new();
+    private bool _portableDisplayListDirty;
+    private bool _portableDisplayListObserved;
+    private readonly List<CanvasTextMeasurement> _textMeasurements = new();
+    private readonly Dictionary<CanvasTextLayoutKey, FormattedText> _formattedTextCache = new();
     private CanvasRenderingContext2D? _context;
     private CanvasWebGlFrame? _webGlFrame;
     private bool _visualInvalidated;
+    private long _renderTicks;
+    private long _renderCount;
+    private long _renderedCommandCount;
+    private long _fullClearCount;
+    private long _partialClearCount;
+    private int _logicalCommandCount;
+
+    private double _virtualWidth = 300;
+    private double _virtualHeight = 150;
+
+    public double VirtualWidth
+    {
+        get => _virtualWidth;
+        set => _virtualWidth = value;
+    }
+
+    public double VirtualHeight
+    {
+        get => _virtualHeight;
+        set => _virtualHeight = value;
+    }
 
     internal IReadOnlyList<CanvasDrawCommand> Commands => _commands;
+    internal static bool EnableNativeCanvasHotPath => s_enableNativeCanvasHotPath;
+    internal static bool EnableLineDashReplayDeduplication => !s_disableLineDashReplayDeduplication;
+    internal CanvasDisplayListModel PortableDisplayList
+    {
+        get
+        {
+            EnsurePortableDisplayList();
+            _portableDisplayListObserved = true;
+            return _portableDisplayList;
+        }
+    }
+    internal int LogicalCommandCount => _logicalCommandCount;
+    internal IReadOnlyList<CanvasTextMeasurement> TextMeasurements => _textMeasurements;
     internal string LastWebGlRenderBackend { get; private set; } = "not rendered";
+    internal long RenderCount => _renderCount;
+    internal long RenderedCommandCount => _renderedCommandCount;
+    internal TimeSpan RenderDuration => TimeSpan.FromSeconds((double)_renderTicks / Stopwatch.Frequency);
+    internal long FullClearCount => _fullClearCount;
+    internal long PartialClearCount => _partialClearCount;
+    internal IReadOnlyDictionary<string, CanvasCallMetric> FastCallMetrics =>
+        _context?.FastCallMetrics ?? CanvasRenderingContext2D.EmptyFastCallMetrics;
 
     public CanvasDrawingSurface()
     {
@@ -48,44 +111,79 @@ internal sealed class CanvasDrawingSurface : Control
         }
 
         _commands.Add(command);
+        if (s_enableNativeCanvasHotPath && !_portableDisplayListObserved)
+        {
+            _portableDisplayListDirty = true;
+        }
+        else
+        {
+            _portableDisplayList.AddRetained(command.PortableCommand);
+        }
+        _logicalCommandCount += command.LogicalCommandCount;
         InvalidateCanvasVisual();
+    }
+
+    internal bool TryAppendFillRect(Rect rect, CanvasStateSnapshot state)
+    {
+        if (s_disableFillRectCoalescing
+            || _commands.Count == 0
+            || _commands[^1] is not FillRectCommand fillRect
+            || !fillRect.TryAppend(rect, state))
+        {
+            return false;
+        }
+
+        _logicalCommandCount++;
+        if (s_enableNativeCanvasHotPath && !_portableDisplayListObserved)
+        {
+            _portableDisplayListDirty = true;
+        }
+        else
+        {
+            _portableDisplayList.AddRetained(fillRect.CreatePortableCommand(rect));
+        }
+        InvalidateCanvasVisual();
+        return true;
+    }
+
+    internal void RecordTextMeasurement(string text, string font, double width)
+    {
+        const int limit = 2048;
+        if (_textMeasurements.Count == limit)
+        {
+            _textMeasurements.RemoveRange(0, limit / 4);
+        }
+
+        _textMeasurements.Add(new CanvasTextMeasurement(text, font, width));
     }
 
     internal void ClearAll()
     {
+        _fullClearCount++;
         if (_commands.Count == 0)
         {
+            _portableDisplayList = new CanvasDisplayListModel();
+            _portableDisplayListDirty = false;
+            _logicalCommandCount = 0;
             return;
         }
 
         _commands.Clear();
+        _portableDisplayList = new CanvasDisplayListModel();
+        _portableDisplayListDirty = false;
+        _logicalCommandCount = 0;
         InvalidateCanvasVisual();
     }
 
-    internal void ClearRect(Rect rect)
+    internal void ClearRect(Rect rect, CanvasStateSnapshot state)
     {
         if (rect.Width <= 0 || rect.Height <= 0)
         {
             return;
         }
 
-        var canvasBounds = new Rect(Bounds.Size);
-        if (rect.Contains(canvasBounds))
-        {
-            ClearAll();
-            return;
-        }
-
-        var removed = _commands.RemoveAll(cmd =>
-        {
-            var bounds = cmd.GetBounds();
-            return bounds.HasValue && rect.Contains(bounds.Value);
-        });
-
-        if (removed > 0)
-        {
-            InvalidateCanvasVisual();
-        }
+        _partialClearCount++;
+        AddCommand(new CanvasClearRectCommand(rect, state));
     }
 
     internal void SetWebGlFrame(CanvasWebGlFrame? frame)
@@ -99,7 +197,30 @@ internal sealed class CanvasDrawingSurface : Control
         LastWebGlRenderBackend = backend;
     }
 
+    internal static bool CollectRenderMetrics { get; set; }
+
     public override void Render(DrawingContext context)
+    {
+        if (!CollectRenderMetrics)
+        {
+            RenderCore(context);
+            return;
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            RenderCore(context);
+        }
+        finally
+        {
+            _renderCount++;
+            _renderedCommandCount += LogicalCommandCount;
+            _renderTicks += Stopwatch.GetTimestamp() - started;
+        }
+    }
+
+    private void RenderCore(DrawingContext context)
     {
         base.Render(context);
         _visualInvalidated = false;
@@ -114,7 +235,34 @@ internal sealed class CanvasDrawingSurface : Control
         // also clip its own Render output so oversized draws cannot cover siblings.
         using (context.PushClip(bounds))
         {
-            RenderCommands(context);
+            // HTML canvas is an atomic hit-test box even when every pixel is
+            // transparent. Avalonia otherwise hit-tests only retained drawing
+            // content, allowing a painted backing canvas to win over a later
+            // transparent interaction canvas at the same bounds.
+            context.DrawRectangle(Brushes.Transparent, null, bounds);
+            if (VirtualWidth > 0 && VirtualHeight > 0)
+            {
+                double scaleX = bounds.Width / VirtualWidth;
+                double scaleY = bounds.Height / VirtualHeight;
+                bool needsScale = Math.Abs(scaleX - 1.0) > 0.001 || Math.Abs(scaleY - 1.0) > 0.001;
+                if (needsScale)
+                {
+                    // Only push a non-identity scale when virtual backing intentionally differs from DIP layout size
+                    // (e.g. high-dpi compensation path). When they match we draw 1:1 to avoid squish.
+                    using (context.PushTransform(Matrix.CreateScale(scaleX, scaleY)))
+                    {
+                        RenderCommands(context);
+                    }
+                }
+                else
+                {
+                    RenderCommands(context);
+                }
+            }
+            else
+            {
+                RenderCommands(context);
+            }
 
             if (_webGlFrame is not null)
             {
@@ -125,15 +273,126 @@ internal sealed class CanvasDrawingSurface : Control
 
     internal void RenderCommands(DrawingContext context)
     {
-        foreach (var command in _commands)
+        var canvasRect = new Rect(0, 0, VirtualWidth, VirtualHeight);
+        if (s_enableNativeCanvasHotPath && !_portableDisplayListObserved)
         {
-            command.Render(context);
+            RenderCommandList(context, _commands, canvasRect);
+            return;
+        }
+
+        EnsurePortableDisplayList();
+        AvaloniaCanvasDisplayListRenderer.Render(context, _portableDisplayList, this, canvasRect);
+    }
+
+    internal byte[] CapturePng()
+    {
+        var width = Math.Max(1, (int)Math.Ceiling(VirtualWidth));
+        var height = Math.Max(1, (int)Math.Ceiling(VirtualHeight));
+        using var bitmap = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
+        using (var context = bitmap.CreateDrawingContext(clear: true))
+        {
+            if (Commands.Count == 0
+                && Context.TryGetRgbaPixels(out var pixelWidth, out var pixelHeight, out var pixels))
+            {
+                using var pixelBitmap = CanvasBitmapFactory.CreateWriteableBitmap(pixelWidth, pixelHeight, pixels);
+                context.DrawImage(
+                    pixelBitmap,
+                    new Rect(0, 0, pixelWidth, pixelHeight),
+                    new Rect(0, 0, width, height));
+            }
+            else
+            {
+                RenderCommands(context);
+            }
+        }
+
+        using var stream = new MemoryStream();
+        bitmap.Save(stream);
+        return stream.ToArray();
+    }
+
+    internal static void RenderCommandList(
+        DrawingContext context,
+        IReadOnlyList<CanvasDrawCommand> commands,
+        Rect canvasRect)
+    {
+        if (commands.Count == 0)
+        {
+            return;
+        }
+
+        // Most chart frames are complete redraws. Once a full opaque fill or
+        // clear has superseded the old command list, there is no partial-clear
+        // geometry to resolve and allocating a Geometry slot for every command
+        // only adds per-frame GC pressure.
+        var hasPartialClear = false;
+        for (var i = 0; i < commands.Count; i++)
+        {
+            if (commands[i] is CanvasClearRectCommand)
+            {
+                hasPartialClear = true;
+                break;
+            }
+        }
+
+        if (!hasPartialClear)
+        {
+            for (var i = 0; i < commands.Count; i++)
+            {
+                commands[i].Render(context);
+            }
+
+            return;
+        }
+
+        var clearedAfter = new Geometry?[commands.Count];
+        Geometry? cleared = null;
+        for (var i = commands.Count - 1; i >= 0; i--)
+        {
+            if (commands[i] is CanvasClearRectCommand clear)
+            {
+                var clearGeometry = clear.ClearGeometry;
+                cleared = cleared is null
+                    ? clearGeometry
+                    : new CombinedGeometry(GeometryCombineMode.Union, cleared, clearGeometry);
+                continue;
+            }
+            clearedAfter[i] = cleared;
+        }
+
+        for (var i = 0; i < commands.Count; i++)
+        {
+            var command = commands[i];
+            if (command is CanvasClearRectCommand)
+            {
+                continue;
+            }
+
+            if (clearedAfter[i] is not { } exclusion)
+            {
+                command.Render(context);
+                continue;
+            }
+
+            var drawable = new CombinedGeometry(
+                GeometryCombineMode.Exclude,
+                new RectangleGeometry(canvasRect),
+                exclusion);
+            using (context.PushGeometryClip(drawable))
+            {
+                command.Render(context);
+            }
         }
     }
 
     internal void InvalidateCanvasVisual()
     {
-        if (_visualInvalidated)
+        // Avalonia already coalesces visual invalidations. The additional
+        // HtmlML flag can span an intermediate compositor render while a
+        // Canvas2D frame is still being replayed, suppressing the final damage
+        // request and leaving correctly updated retained commands only partly
+        // visible. Keep the old path solely as a diagnostic control.
+        if (s_enableCanvasInvalidationSuppression && _visualInvalidated)
         {
             return;
         }
@@ -142,28 +401,144 @@ internal sealed class CanvasDrawingSurface : Control
         InvalidateVisual();
     }
 
-    internal FormattedText CreateFormattedText(string text, CanvasStateSnapshot state)
+    /// <summary>
+    /// Scales coordinate values in existing draw commands by the given factor.
+    /// Used when correcting virtual (backing) size for chart layers so that render matches DIP layout * dpr.
+    /// </summary>
+    internal void ScaleCommands(double factor)
     {
-        return new FormattedText(
+        if (!double.IsFinite(factor) || factor == 1.0 || factor <= 0)
+            return;
+
+        foreach (var cmd in _commands)
+        {
+            cmd.Scale(factor);
+        }
+        if (s_enableNativeCanvasHotPath && !_portableDisplayListObserved)
+        {
+            _portableDisplayListDirty = true;
+        }
+        else
+        {
+            RebuildPortableDisplayList();
+        }
+        InvalidateCanvasVisual();
+    }
+
+    private void EnsurePortableDisplayList()
+    {
+        if (_portableDisplayListDirty)
+        {
+            RebuildPortableDisplayList();
+        }
+    }
+
+    private void RebuildPortableDisplayList()
+    {
+        _portableDisplayList = CreatePortableDisplayListSnapshot(_commands);
+        _portableDisplayListDirty = false;
+    }
+
+    internal static CanvasDisplayListModel CreatePortableDisplayListSnapshot(
+        IReadOnlyList<CanvasDrawCommand> commands)
+    {
+        var displayList = new CanvasDisplayListModel();
+        foreach (var command in commands)
+        {
+            foreach (var portableCommand in command.GetPortableCommands())
+            {
+                displayList.AddRetained(portableCommand);
+            }
+        }
+        return displayList;
+    }
+
+    internal FormattedText CreateFormattedText(string text, CanvasStateSnapshot state)
+        => GetCachedFormattedText(text, state, state.FillBrush);
+
+    internal FormattedText GetCachedFormattedText(string text, CanvasStateSnapshot state, IImmutableBrush? brush)
+    {
+        if (brush is null)
+        {
+            return new FormattedText(
+                text ?? string.Empty,
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                state.Typeface,
+                state.FontSize,
+                null);
+        }
+
+        var key = new CanvasTextLayoutKey(text ?? string.Empty, state.Typeface, state.FontSize, brush);
+        if (_formattedTextCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        if (_formattedTextCache.Count >= 2048)
+        {
+            _formattedTextCache.Clear();
+        }
+
+        var formatted = new FormattedText(
             text ?? string.Empty,
             CultureInfo.CurrentCulture,
             FlowDirection.LeftToRight,
             state.Typeface,
             state.FontSize,
-            state.FillBrush);
+            brush);
+        formatted.SetForegroundBrush(brush);
+        _formattedTextCache[key] = formatted;
+        return formatted;
     }
+
+    private readonly record struct CanvasTextLayoutKey(
+        string Text,
+        Typeface Typeface,
+        double FontSize,
+        IImmutableBrush Brush);
 }
 
 internal abstract class CanvasDrawCommand
 {
+    private CanvasDisplayCommand? _portableCommand;
+
     protected CanvasDrawCommand(CanvasStateSnapshot state)
     {
-        State = state ?? throw new ArgumentNullException(nameof(state));
+        State = state;
     }
 
     protected CanvasStateSnapshot State { get; }
 
+    internal virtual void Scale(double factor) { }
+
     internal CanvasStateSnapshot Snapshot => State;
+
+    internal CanvasDisplayCommand PortableCommand
+        => _portableCommand ??= CreatePortableCommand();
+
+    protected abstract CanvasDisplayCommand CreatePortableCommand();
+
+    protected void InvalidatePortableCommand() => _portableCommand = null;
+
+    internal virtual IEnumerable<CanvasDisplayCommand> GetPortableCommands()
+    {
+        yield return PortableCommand;
+    }
+
+    protected static HtmlML.Core.HtmlMlRect ToPortableRect(Rect rect)
+        => new(rect.X, rect.Y, rect.Width, rect.Height);
+
+    protected static HtmlML.Core.HtmlMlPoint ToPortablePoint(Point point)
+        => new(point.X, point.Y);
+
+    internal virtual int LogicalCommandCount => 1;
+
+    internal virtual void AppendDiagnosticHash(ref HashCode hash)
+    {
+        hash.Add(GetType().Name, StringComparer.Ordinal);
+        hash.Add(GetBounds());
+    }
 
     public void Render(DrawingContext context)
     {
@@ -203,9 +578,61 @@ internal abstract class CanvasDrawCommand
     public virtual Rect? GetBounds() => null;
 }
 
+internal sealed class CanvasClearRectCommand : CanvasDrawCommand
+{
+    private Rect _rect;
+
+    public CanvasClearRectCommand(Rect rect, CanvasStateSnapshot state)
+        : base(state)
+    {
+        _rect = rect;
+    }
+
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.ClearRectangle,
+            State.Model,
+            Rectangle: ToPortableRect(_rect));
+
+    public Geometry ClearGeometry
+    {
+        get
+        {
+            Geometry geometry = new RectangleGeometry(_rect);
+            if (!State.Transform.IsIdentity)
+            {
+                geometry.Transform = new MatrixTransform(State.Transform);
+            }
+            if (State.ClipGeometry is not null)
+            {
+                geometry = new CombinedGeometry(GeometryCombineMode.Intersect, geometry, State.ClipGeometry);
+            }
+            return geometry;
+        }
+    }
+
+    protected override void RenderCore(DrawingContext context)
+    {
+        // Clear commands affect the visibility of earlier commands and are
+        // applied by CanvasDrawingSurface.RenderCommandList.
+    }
+
+    public override Rect? GetBounds() => _rect;
+
+    internal override void Scale(double factor)
+    {
+        if (factor != 1.0 && double.IsFinite(factor))
+        {
+            _rect = new Rect(_rect.X * factor, _rect.Y * factor, _rect.Width * factor, _rect.Height * factor);
+            InvalidatePortableCommand();
+        }
+    }
+}
+
 internal sealed class FillRectCommand : CanvasDrawCommand
 {
-    private readonly Rect _rect;
+    private Rect _rect;
+    private List<Rect>? _additionalRects;
 
     public FillRectCommand(Rect rect, CanvasStateSnapshot state)
         : base(state)
@@ -213,20 +640,123 @@ internal sealed class FillRectCommand : CanvasDrawCommand
         _rect = rect;
     }
 
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => CreatePortableCommand(_rect);
+
     protected override void RenderCore(DrawingContext context)
     {
         if (State.FillBrush is not null && _rect.Width > 0 && _rect.Height > 0)
         {
             context.FillRectangle(State.FillBrush, _rect);
+            if (_additionalRects is not null)
+            {
+                foreach (var rect in _additionalRects)
+                {
+                    context.FillRectangle(State.FillBrush, rect);
+                }
+            }
         }
     }
 
-    public override Rect? GetBounds() => _rect;
+    internal int RectangleCount => 1 + (_additionalRects?.Count ?? 0);
+
+    internal IEnumerable<Rect> Rectangles
+    {
+        get
+        {
+            yield return _rect;
+            if (_additionalRects is not null)
+            {
+                foreach (var rect in _additionalRects)
+                {
+                    yield return rect;
+                }
+            }
+        }
+    }
+
+    internal override int LogicalCommandCount => RectangleCount;
+
+    internal bool TryAppend(Rect rect, CanvasStateSnapshot state)
+    {
+        if (!State.HasSameRenderingState(state))
+        {
+            return false;
+        }
+
+        (_additionalRects ??= new List<Rect>(8)).Add(rect);
+        return true;
+    }
+
+    internal CanvasDisplayCommand CreatePortableCommand(Rect rect)
+        => new(
+            CanvasDisplayCommandKind.FillRectangle,
+            State.Model,
+            Rectangle: ToPortableRect(rect));
+
+    internal override IEnumerable<CanvasDisplayCommand> GetPortableCommands()
+    {
+        foreach (var rect in Rectangles)
+        {
+            yield return CreatePortableCommand(rect);
+        }
+    }
+
+    internal override void AppendDiagnosticHash(ref HashCode hash)
+    {
+        foreach (var rect in Rectangles)
+        {
+            hash.Add(nameof(FillRectCommand), StringComparer.Ordinal);
+            hash.Add((Rect?)rect);
+        }
+    }
+
+    public override Rect? GetBounds()
+    {
+        if (_additionalRects is null)
+        {
+            return _rect;
+        }
+
+        var left = _rect.Left;
+        var top = _rect.Top;
+        var right = _rect.Right;
+        var bottom = _rect.Bottom;
+        foreach (var rect in _additionalRects)
+        {
+            left = Math.Min(left, rect.Left);
+            top = Math.Min(top, rect.Top);
+            right = Math.Max(right, rect.Right);
+            bottom = Math.Max(bottom, rect.Bottom);
+        }
+        return new Rect(left, top, right - left, bottom - top);
+    }
+
+    internal override void Scale(double factor)
+    {
+        if (factor == 1.0 || !double.IsFinite(factor))
+        {
+            return;
+        }
+
+        _rect = ScaleRect(_rect, factor);
+        InvalidatePortableCommand();
+        if (_additionalRects is not null)
+        {
+            for (var index = 0; index < _additionalRects.Count; index++)
+            {
+                _additionalRects[index] = ScaleRect(_additionalRects[index], factor);
+            }
+        }
+    }
+
+    private static Rect ScaleRect(Rect rect, double factor)
+        => new(rect.X * factor, rect.Y * factor, rect.Width * factor, rect.Height * factor);
 }
 
 internal sealed class StrokeRectCommand : CanvasDrawCommand
 {
-    private readonly Rect _rect;
+    private Rect _rect;
 
     public StrokeRectCommand(Rect rect, CanvasStateSnapshot state)
         : base(state)
@@ -234,9 +764,15 @@ internal sealed class StrokeRectCommand : CanvasDrawCommand
         _rect = rect;
     }
 
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.StrokeRectangle,
+            State.Model,
+            Rectangle: ToPortableRect(_rect));
+
     protected override void RenderCore(DrawingContext context)
     {
-        if (_rect.Width <= 0 || _rect.Height <= 0)
+        if (_rect.Width == 0 && _rect.Height == 0)
         {
             return;
         }
@@ -247,7 +783,18 @@ internal sealed class StrokeRectCommand : CanvasDrawCommand
             return;
         }
 
-        context.DrawRectangle(null, pen, _rect);
+        if (_rect.Width == 0)
+        {
+            context.DrawLine(pen, _rect.TopLeft, _rect.BottomLeft);
+        }
+        else if (_rect.Height == 0)
+        {
+            context.DrawLine(pen, _rect.TopLeft, _rect.TopRight);
+        }
+        else
+        {
+            context.DrawRectangle(null, pen, _rect);
+        }
     }
 
     public override Rect? GetBounds()
@@ -259,34 +806,53 @@ internal sealed class StrokeRectCommand : CanvasDrawCommand
 
 internal sealed class FillPathCommand : CanvasDrawCommand
 {
-    private readonly StreamGeometry _geometry;
+    private readonly CanvasPathModel _path;
+    private Geometry? _geometry;
 
-    public FillPathCommand(StreamGeometry geometry, CanvasStateSnapshot state)
+    public FillPathCommand(CanvasPathModel path, CanvasStateSnapshot state)
         : base(state)
     {
-        _geometry = geometry ?? throw new ArgumentNullException(nameof(geometry));
+        ArgumentNullException.ThrowIfNull(path);
+        _path = path.Snapshot();
     }
+
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.FillPath,
+            State.Model,
+            Path: _path);
 
     protected override void RenderCore(DrawingContext context)
     {
         if (State.FillBrush is not null)
         {
-            context.DrawGeometry(State.FillBrush, null, _geometry);
+            context.DrawGeometry(State.FillBrush, null, Geometry);
         }
     }
 
-    public override Rect? GetBounds() => _geometry.Bounds;
+    internal Geometry Geometry
+        => _geometry ??= CanvasPathBuilder.BuildGeometry(_path);
+
+    public override Rect? GetBounds() => Geometry.Bounds;
 }
 
 internal sealed class StrokePathCommand : CanvasDrawCommand
 {
-    private readonly StreamGeometry _geometry;
+    private readonly CanvasPathModel _path;
+    private Geometry? _geometry;
 
-    public StrokePathCommand(StreamGeometry geometry, CanvasStateSnapshot state)
+    public StrokePathCommand(CanvasPathModel path, CanvasStateSnapshot state)
         : base(state)
     {
-        _geometry = geometry ?? throw new ArgumentNullException(nameof(geometry));
+        ArgumentNullException.ThrowIfNull(path);
+        _path = path.Snapshot();
     }
+
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.StrokePath,
+            State.Model,
+            Path: _path);
 
     protected override void RenderCore(DrawingContext context)
     {
@@ -296,32 +862,45 @@ internal sealed class StrokePathCommand : CanvasDrawCommand
             return;
         }
 
-        context.DrawGeometry(null, pen, _geometry);
+        context.DrawGeometry(null, pen, Geometry);
     }
+
+    internal Geometry Geometry
+        => _geometry ??= CanvasPathBuilder.BuildGeometry(_path);
 
     public override Rect? GetBounds()
     {
         var pen = State.CreatePen();
         if (pen is null)
         {
-            return _geometry.Bounds;
+            return Geometry.Bounds;
         }
 
-        return _geometry.GetRenderBounds(pen);
+        return Geometry.GetRenderBounds(pen);
     }
 }
 
 internal sealed class FillTextCommand : CanvasDrawCommand
 {
+    private readonly CanvasDrawingSurface _owner;
     private readonly string _text;
     private readonly Point _origin;
+    private FormattedText? _formattedText;
 
-    public FillTextCommand(string text, Point origin, CanvasStateSnapshot state)
+    public FillTextCommand(CanvasDrawingSurface owner, string text, Point origin, CanvasStateSnapshot state)
         : base(state)
     {
+        _owner = owner ?? throw new ArgumentNullException(nameof(owner));
         _text = text ?? string.Empty;
         _origin = origin;
     }
+
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.FillText,
+            State.Model,
+            Text: _text,
+            Origin: ToPortablePoint(_origin));
 
     protected override void RenderCore(DrawingContext context)
     {
@@ -330,17 +909,19 @@ internal sealed class FillTextCommand : CanvasDrawCommand
             return;
         }
 
-        var formatted = new FormattedText(
-            _text,
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            State.Typeface,
-            State.FontSize,
-            State.FillBrush);
-
-        formatted.SetForegroundBrush(State.FillBrush);
+        var formatted = GetFormattedText();
         var origin = AdjustOrigin(formatted);
-        context.DrawText(formatted, origin);
+        if (Math.Abs(State.FontWidthScale - 1d) < 0.0001)
+        {
+            context.DrawText(formatted, origin);
+        }
+        else
+        {
+            using (context.PushTransform(Matrix.CreateScale(State.FontWidthScale, 1d)))
+            {
+                context.DrawText(formatted, new Point(origin.X / State.FontWidthScale, origin.Y));
+            }
+        }
     }
 
     private Point AdjustOrigin(FormattedText formatted)
@@ -351,11 +932,11 @@ internal sealed class FillTextCommand : CanvasDrawCommand
         switch (State.TextAlign)
         {
             case CanvasTextAlign.Center:
-                x -= formatted.Width / 2;
+                x -= formatted.Width * State.FontWidthScale / 2;
                 break;
             case CanvasTextAlign.Right:
             case CanvasTextAlign.End:
-                x -= formatted.Width;
+                x -= formatted.Width * State.FontWidthScale;
                 break;
             case CanvasTextAlign.Left:
             case CanvasTextAlign.Start:
@@ -394,30 +975,44 @@ internal sealed class FillTextCommand : CanvasDrawCommand
             return null;
         }
 
-        var formatted = new FormattedText(
-            _text,
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            State.Typeface,
-            State.FontSize,
-            State.FillBrush);
+        var formatted = GetFormattedText();
 
         var origin = AdjustOrigin(formatted);
-        return new Rect(origin, new Size(formatted.Width, formatted.Height));
+        return new Rect(origin, new Size(formatted.Width * State.FontWidthScale, formatted.Height));
+    }
+
+    private FormattedText GetFormattedText()
+    {
+        if (_formattedText is not null)
+        {
+            return _formattedText;
+        }
+
+        return _formattedText = _owner.GetCachedFormattedText(_text, State, State.FillBrush);
     }
 }
 
 internal sealed class StrokeTextCommand : CanvasDrawCommand
 {
+    private readonly CanvasDrawingSurface _owner;
     private readonly string _text;
     private readonly Point _origin;
+    private FormattedText? _formattedText;
 
-    public StrokeTextCommand(string text, Point origin, CanvasStateSnapshot state)
+    public StrokeTextCommand(CanvasDrawingSurface owner, string text, Point origin, CanvasStateSnapshot state)
         : base(state)
     {
+        _owner = owner ?? throw new ArgumentNullException(nameof(owner));
         _text = text ?? string.Empty;
         _origin = origin;
     }
+
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.StrokeText,
+            State.Model,
+            Text: _text,
+            Origin: ToPortablePoint(_origin));
 
     protected override void RenderCore(DrawingContext context)
     {
@@ -426,16 +1021,19 @@ internal sealed class StrokeTextCommand : CanvasDrawCommand
             return;
         }
 
-        var formatted = new FormattedText(
-            _text,
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            State.Typeface,
-            State.FontSize,
-            State.StrokeBrush);
-
-        formatted.SetForegroundBrush(State.StrokeBrush);
-        context.DrawText(formatted, AdjustOrigin(formatted));
+        var formatted = GetFormattedText();
+        var origin = AdjustOrigin(formatted);
+        if (Math.Abs(State.FontWidthScale - 1d) < 0.0001)
+        {
+            context.DrawText(formatted, origin);
+        }
+        else
+        {
+            using (context.PushTransform(Matrix.CreateScale(State.FontWidthScale, 1d)))
+            {
+                context.DrawText(formatted, new Point(origin.X / State.FontWidthScale, origin.Y));
+            }
+        }
     }
 
     private Point AdjustOrigin(FormattedText formatted)
@@ -446,11 +1044,11 @@ internal sealed class StrokeTextCommand : CanvasDrawCommand
         switch (State.TextAlign)
         {
             case CanvasTextAlign.Center:
-                x -= formatted.Width / 2;
+                x -= formatted.Width * State.FontWidthScale / 2;
                 break;
             case CanvasTextAlign.Right:
             case CanvasTextAlign.End:
-                x -= formatted.Width;
+                x -= formatted.Width * State.FontWidthScale;
                 break;
             case CanvasTextAlign.Left:
             case CanvasTextAlign.Start:
@@ -489,15 +1087,19 @@ internal sealed class StrokeTextCommand : CanvasDrawCommand
             return null;
         }
 
-        var formatted = new FormattedText(
-            _text,
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            State.Typeface,
-            State.FontSize,
-            State.StrokeBrush);
+        var formatted = GetFormattedText();
 
-        return new Rect(AdjustOrigin(formatted), new Size(formatted.Width, formatted.Height));
+        return new Rect(AdjustOrigin(formatted), new Size(formatted.Width * State.FontWidthScale, formatted.Height));
+    }
+
+    private FormattedText GetFormattedText()
+    {
+        if (_formattedText is not null)
+        {
+            return _formattedText;
+        }
+
+        return _formattedText = _owner.GetCachedFormattedText(_text, State, State.StrokeBrush);
     }
 }
 
@@ -515,6 +1117,14 @@ internal sealed class DrawImageCommand : CanvasDrawCommand
         _destinationRect = destinationRect;
     }
 
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.DrawImage,
+            State.Model,
+            SourceRectangle: ToPortableRect(_sourceRect),
+            DestinationRectangle: ToPortableRect(_destinationRect),
+            Resource: HtmlML.Core.HtmlMlBackendHandle.Create(_image));
+
     protected override void RenderCore(DrawingContext context)
     {
         context.DrawImage(_image, _sourceRect, _destinationRect);
@@ -525,17 +1135,29 @@ internal sealed class DrawImageCommand : CanvasDrawCommand
 
 internal sealed class DrawRgbaPixelsCommand : CanvasDrawCommand
 {
+    private readonly CanvasImageDataModel _imageData;
     private readonly WriteableBitmap _bitmap;
     private readonly Rect _sourceRect;
     private readonly Rect _destinationRect;
 
-    public DrawRgbaPixelsCommand(byte[] rgbaPixels, int width, int height, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot state)
+    public DrawRgbaPixelsCommand(CanvasImageDataModel imageData, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot state)
         : base(state)
     {
-        _bitmap = CanvasBitmapFactory.CreateWriteableBitmap(width, height, rgbaPixels);
+        _imageData = imageData ?? throw new ArgumentNullException(nameof(imageData));
+        _bitmap = CanvasBitmapFactory.CreateWriteableBitmap(imageData.Width, imageData.Height, imageData.RgbaPixels);
         _sourceRect = sourceRect;
         _destinationRect = destinationRect;
     }
+
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.PutImageData,
+            State.Model,
+            ImageData: _imageData,
+            SourceRectangle: ToPortableRect(_sourceRect),
+            DestinationRectangle: ToPortableRect(_destinationRect));
+
+    internal CanvasImageDataModel ImageData => _imageData;
 
     protected override void RenderCore(DrawingContext context)
     {
@@ -559,10 +1181,20 @@ internal sealed class DrawCanvasSurfaceCommand : CanvasDrawCommand
     public DrawCanvasSurfaceCommand(CanvasDrawingSurface surface, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot state)
         : base(state)
     {
-        _commands = new List<CanvasDrawCommand>((surface ?? throw new ArgumentNullException(nameof(surface))).Commands);
+        ArgumentNullException.ThrowIfNull(surface);
+        _commands = new List<CanvasDrawCommand>(surface.Commands);
         _sourceRect = sourceRect;
         _destinationRect = destinationRect;
     }
+
+    protected override CanvasDisplayCommand CreatePortableCommand()
+        => new(
+            CanvasDisplayCommandKind.DrawImage,
+            State.Model,
+            SourceRectangle: ToPortableRect(_sourceRect),
+            DestinationRectangle: ToPortableRect(_destinationRect),
+            Resource: HtmlML.Core.HtmlMlBackendHandle.Create(
+                CanvasDrawingSurface.CreatePortableDisplayListSnapshot(_commands)));
 
     protected override void RenderCore(DrawingContext context)
     {
@@ -584,17 +1216,14 @@ internal sealed class DrawCanvasSurfaceCommand : CanvasDrawCommand
         using (context.PushClip(_destinationRect))
         using (context.PushTransform(transform))
         {
-            foreach (var command in _commands)
-            {
-                command.Render(context);
-            }
+            CanvasDrawingSurface.RenderCommandList(context, _commands, _sourceRect);
         }
     }
 
     public override Rect? GetBounds() => _destinationRect;
 }
 
-internal sealed class CanvasTextMetrics
+public sealed class CanvasTextMetrics
 {
     public CanvasTextMetrics(double width)
     {
@@ -604,7 +1233,7 @@ internal sealed class CanvasTextMetrics
     public double width { get; }
 }
 
-internal sealed class CanvasDomMatrix
+public sealed class CanvasDomMatrix
 {
     public CanvasDomMatrix(Matrix matrix)
     {
@@ -657,7 +1286,7 @@ internal sealed class CanvasDomMatrix
     public double[] toFloat64Array() => toFloat32Array();
 }
 
-internal sealed class CanvasImageData
+public sealed class CanvasImageData
 {
     public CanvasImageData(int width, int height)
         : this(width, height, new byte[Math.Max(0, width) * Math.Max(0, height) * 4])
@@ -666,23 +1295,36 @@ internal sealed class CanvasImageData
 
     public CanvasImageData(int width, int height, byte[] data)
     {
-        this.width = Math.Max(0, width);
-        this.height = Math.Max(0, height);
-        this.data = data ?? Array.Empty<byte>();
+        var normalizedWidth = Math.Max(0, width);
+        var normalizedHeight = Math.Max(0, height);
+        var expectedLength = checked(normalizedWidth * normalizedHeight * 4);
+        var normalizedData = data ?? Array.Empty<byte>();
+        if (normalizedData.Length != expectedLength)
+        {
+            var copy = new byte[expectedLength];
+            normalizedData.AsSpan(0, Math.Min(normalizedData.Length, expectedLength)).CopyTo(copy);
+            normalizedData = copy;
+        }
+
+        Model = new CanvasImageDataModel(normalizedWidth, normalizedHeight, normalizedData);
     }
 
-    public int width { get; }
+    internal CanvasImageDataModel Model { get; }
 
-    public int height { get; }
+    public int width => Model.Width;
 
-    public byte[] data { get; }
+    public int height => Model.Height;
+
+    public byte[] data => Model.RgbaPixels;
 }
 
-internal sealed class CanvasRenderingContext2D
+public sealed class CanvasRenderingContext2D : IHtmlMlCanvasTextTarget, IHtmlMlCanvasBatchTarget
 {
     private readonly CanvasDrawingSurface _owner;
+    private readonly Dictionary<string, CanvasCallMetric> _fastCallMetrics = new(StringComparer.Ordinal);
     private readonly CanvasPathBuilder _path = new();
     private CanvasState _state = CanvasState.CreateDefault();
+    private readonly Dictionary<CanvasStateCacheKey, CanvasStateSnapshot> _stateSnapshotCache = new();
     private readonly Stack<CanvasState> _stateStack = new();
     private byte[]? _rgbaPixels;
     private int _rgbaWidth;
@@ -693,9 +1335,14 @@ internal sealed class CanvasRenderingContext2D
         _owner = owner ?? throw new ArgumentNullException(nameof(owner));
     }
 
+    internal static IReadOnlyDictionary<string, CanvasCallMetric> EmptyFastCallMetrics { get; } =
+        new Dictionary<string, CanvasCallMetric>();
+
+    internal IReadOnlyDictionary<string, CanvasCallMetric> FastCallMetrics => _fastCallMetrics;
+
     public object? canvas { get; set; }
 
-    internal int CommandCount => _owner.Commands.Count;
+    internal int CommandCount => _owner.LogicalCommandCount;
 
     public object? fillStyle
     {
@@ -748,8 +1395,11 @@ internal sealed class CanvasRenderingContext2D
     public string font
     {
         get => _state.Font;
-        set => _state.UpdateFont(value);
+        set => _state.UpdateFont(value, GetFontRegistry());
     }
+
+    private CssFontFaceRegistry? GetFontRegistry()
+        => canvas is AvaloniaDomElement element ? element.ownerDocument.FontFaces : null;
 
     public string textAlign
     {
@@ -763,17 +1413,53 @@ internal sealed class CanvasRenderingContext2D
         set => _state.TextBaseline = CanvasTextParser.ParseBaseline(value, _state.TextBaseline);
     }
 
-    public bool imageSmoothingEnabled { get; set; } = true;
+    public bool imageSmoothingEnabled
+    {
+        get => _state.ImageSmoothingEnabled;
+        set => _state.ImageSmoothingEnabled = value;
+    }
 
-    public string globalCompositeOperation { get; set; } = "source-over";
+    public string imageSmoothingQuality
+    {
+        get => _state.ImageSmoothingQuality;
+        set
+        {
+            if (value is "low" or "medium" or "high")
+            {
+                _state.ImageSmoothingQuality = value;
+            }
+        }
+    }
 
-    public string shadowColor { get; set; } = string.Empty;
+    public string globalCompositeOperation
+    {
+        get => _state.CompositeOperation;
+        set => _state.CompositeOperation = value ?? "source-over";
+    }
 
-    public double shadowBlur { get; set; }
+    public string shadowColor
+    {
+        get => _state.ShadowColor;
+        set => _state.ShadowColor = value ?? string.Empty;
+    }
 
-    public double shadowOffsetX { get; set; }
+    public double shadowBlur
+    {
+        get => _state.ShadowBlur;
+        set => _state.ShadowBlur = value;
+    }
 
-    public double shadowOffsetY { get; set; }
+    public double shadowOffsetX
+    {
+        get => _state.ShadowOffsetX;
+        set => _state.ShadowOffsetX = value;
+    }
+
+    public double shadowOffsetY
+    {
+        get => _state.ShadowOffsetY;
+        set => _state.ShadowOffsetY = value;
+    }
 
     public double[] mozCurrentTransform => ToCanvasMatrix(_state.Transform);
 
@@ -810,38 +1496,46 @@ internal sealed class CanvasRenderingContext2D
         }
     }
 
-    public void setTransform(JsValue transform)
-    {
-        setTransform((object?)transform);
-    }
-
-    public void setTransform(ObjectInstance transform)
-    {
-        setTransform((object?)transform);
-    }
-
     public void transform(double a, double b, double c, double d, double e, double f)
     {
         var m = new Matrix(a, b, c, d, e, f);
-        _state.Transform = _state.Transform * m;
+        // Canvas2D post-multiplies its current transform in column-vector
+        // notation. Avalonia matrices transform row vectors, so the equivalent
+        // composition order is reversed.
+        _state.Transform = m * _state.Transform;
     }
 
     public void translate(double x, double y)
     {
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+        {
+            return;
+        }
+
         var translation = Matrix.CreateTranslation(x, y);
-        _state.Transform = _state.Transform * translation;
+        _state.Transform = translation * _state.Transform;
     }
 
     public void scale(double x, double y)
     {
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+        {
+            return;
+        }
+
         var scale = Matrix.CreateScale(x, y);
-        _state.Transform = _state.Transform * scale;
+        _state.Transform = scale * _state.Transform;
     }
 
     public void rotate(double angle)
     {
+        if (!double.IsFinite(angle))
+        {
+            return;
+        }
+
         var rotation = Matrix.CreateRotation(angle);
-        _state.Transform = _state.Transform * rotation;
+        _state.Transform = rotation * _state.Transform;
     }
 
     public void beginPath()
@@ -856,11 +1550,21 @@ internal sealed class CanvasRenderingContext2D
 
     public void moveTo(double x, double y)
     {
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+        {
+            return;
+        }
+
         _path.MoveTo(x, y);
     }
 
     public void lineTo(double x, double y)
     {
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+        {
+            return;
+        }
+
         _path.LineTo(x, y);
     }
 
@@ -896,12 +1600,16 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        var geometry = _path.BuildGeometry();
+        var retainedPath = _path.Model.Snapshot();
+        _state.Clips.Add(new CanvasClipModel(
+            retainedPath,
+            CanvasState.ToPortableTransform(_state.Transform)));
+
+        Geometry geometry = CanvasPathBuilder.BuildGeometry(retainedPath);
         if (!_state.Transform.IsIdentity)
         {
             geometry.Transform = new MatrixTransform(_state.Transform);
         }
-
         _state.ClipGeometry = _state.ClipGeometry is null
             ? geometry
             : new CombinedGeometry(GeometryCombineMode.Intersect, _state.ClipGeometry, geometry);
@@ -924,7 +1632,63 @@ internal sealed class CanvasRenderingContext2D
 
     public void setLineDash(object? segments)
     {
-        _state.LineDash = CanvasStrokeParser.ParseLineDash(segments);
+        SetLineDash(CanvasStrokeParser.ParseLineDash(segments));
+    }
+
+    internal void SetLineDash(ReadOnlySpan<double> segments)
+    {
+        var validCount = 0;
+        for (var index = 0; index < segments.Length; index++)
+        {
+            if (double.IsFinite(segments[index]) && segments[index] >= 0)
+            {
+                validCount++;
+            }
+        }
+
+        if (_state.LineDash.Length == validCount)
+        {
+            var currentIndex = 0;
+            var equal = true;
+            for (var index = 0; index < segments.Length; index++)
+            {
+                var segment = segments[index];
+                if (!double.IsFinite(segment) || segment < 0)
+                {
+                    continue;
+                }
+
+                if (_state.LineDash[currentIndex++] != segment)
+                {
+                    equal = false;
+                    break;
+                }
+            }
+
+            if (equal)
+            {
+                return;
+            }
+        }
+
+        if (validCount == 0)
+        {
+            _state.LineDash = Array.Empty<double>();
+            return;
+        }
+
+        var normalized = new double[validCount];
+        var destination = 0;
+        for (var index = 0; index < segments.Length; index++)
+        {
+            var segment = segments[index];
+            if (double.IsFinite(segment) && segment >= 0)
+            {
+                normalized[destination++] = segment;
+            }
+        }
+
+        _state.LineDash = normalized;
     }
 
     public double[] getLineDash()
@@ -962,8 +1726,24 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        var geometry = _path.BuildGeometry();
-        _owner.AddCommand(new StrokePathCommand(geometry, _state.CreateSnapshot()));
+        _owner.AddCommand(new StrokePathCommand(_path.Model, CreateSnapshot()));
+    }
+
+    // Libraries can pass either the active path or a retained Path2D object.
+    public void stroke(object? path)
+    {
+        if (CanvasPath2D.TryResolve(path, out var path2D))
+        {
+            _owner.AddCommand(new StrokePathCommand(path2D.Model, CreateSnapshot()));
+            return;
+        }
+
+        stroke();
+    }
+
+    public void stroke(object? path, object? options)
+    {
+        stroke(path);
     }
 
     public void fill()
@@ -973,41 +1753,57 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        var geometry = _path.BuildGeometry();
-        _owner.AddCommand(new FillPathCommand(geometry, _state.CreateSnapshot()));
-    }
-
-    public void fill(string fillRule)
-    {
-        fill();
+        _owner.AddCommand(new FillPathCommand(_path.Model, CreateSnapshot()));
     }
 
     public void fill(object? pathOrFillRule)
     {
+        if (CanvasPath2D.TryResolve(pathOrFillRule, out var path2D))
+        {
+            _owner.AddCommand(new FillPathCommand(path2D.Model, CreateSnapshot()));
+            return;
+        }
+
         fill();
     }
 
     public void fill(object? path, object? fillRule)
     {
-        fill();
+        fill(path);
     }
 
     public void fillRect(double x, double y, double width, double height)
     {
-        var rect = new Rect(x, y, width, height);
-        _owner.AddCommand(new FillRectCommand(rect, _state.CreateSnapshot()));
+        if (!TryCreateFiniteRect(x, y, width, height, allowSingleDegenerateDimension: false, out var rect))
+        {
+            return;
+        }
+
+        if (CanDiscardPriorCommandsForFullFill(rect))
+        {
+            _owner.ClearAll();
+        }
+
+        var state = CreateSnapshot();
+        if (!_owner.TryAppendFillRect(rect, state))
+        {
+            _owner.AddCommand(new FillRectCommand(rect, state));
+        }
     }
 
     public void strokeRect(double x, double y, double width, double height)
     {
-        var rect = new Rect(x, y, width, height);
-        _owner.AddCommand(new StrokeRectCommand(rect, _state.CreateSnapshot()));
+        if (!TryCreateFiniteRect(x, y, width, height, allowSingleDegenerateDimension: true, out var rect))
+        {
+            return;
+        }
+
+        _owner.AddCommand(new StrokeRectCommand(rect, CreateSnapshot()));
     }
 
     public void clearRect(double x, double y, double width, double height)
     {
-        var rect = new Rect(x, y, width, height);
-        if (rect.Width <= 0 || rect.Height <= 0)
+        if (!TryCreateFiniteRect(x, y, width, height, allowSingleDegenerateDimension: false, out var rect))
         {
             return;
         }
@@ -1015,24 +1811,108 @@ internal sealed class CanvasRenderingContext2D
         ClearRgbaPixels(rect);
 
         var canvasRect = new Rect(0, 0, GetCanvasPixelWidth(0), GetCanvasPixelHeight(0));
-        if (rect.Contains(canvasRect))
+        if (_state.Clips.Count == 0 && TransformedRectCoversCanvas(rect, _state.Transform, canvasRect))
         {
             _owner.ClearAll();
             return;
         }
 
-        _owner.ClearRect(rect);
+        _owner.ClearRect(rect, CreateSnapshot());
+    }
+
+    private static bool TryCreateFiniteRect(
+        double x,
+        double y,
+        double width,
+        double height,
+        bool allowSingleDegenerateDimension,
+        out Rect rect)
+    {
+        rect = default;
+        if (!double.IsFinite(x)
+            || !double.IsFinite(y)
+            || !double.IsFinite(width)
+            || !double.IsFinite(height)
+            || (allowSingleDegenerateDimension
+                ? width == 0 && height == 0
+                : width == 0 || height == 0))
+        {
+            return false;
+        }
+
+        if (width < 0)
+        {
+            x += width;
+            width = -width;
+        }
+
+        if (height < 0)
+        {
+            y += height;
+            height = -height;
+        }
+
+        if (!double.IsFinite(x)
+            || !double.IsFinite(y)
+            || !double.IsFinite(width)
+            || !double.IsFinite(height))
+        {
+            return false;
+        }
+
+        rect = new Rect(x, y, width, height);
+        return true;
+    }
+
+    private static bool TransformedRectCoversCanvas(Rect rect, Matrix transform, Rect canvasRect)
+    {
+        const double epsilon = 0.001;
+        if (Math.Abs(transform.M12) > epsilon || Math.Abs(transform.M21) > epsilon)
+        {
+            return false;
+        }
+
+        var first = transform.Transform(rect.TopLeft);
+        var second = transform.Transform(rect.BottomRight);
+        var left = Math.Min(first.X, second.X) - epsilon;
+        var top = Math.Min(first.Y, second.Y) - epsilon;
+        var right = Math.Max(first.X, second.X) + epsilon;
+        var bottom = Math.Max(first.Y, second.Y) + epsilon;
+        return left <= canvasRect.Left
+               && top <= canvasRect.Top
+               && right >= canvasRect.Right
+               && bottom >= canvasRect.Bottom;
+    }
+
+    private bool CanDiscardPriorCommandsForFullFill(Rect rect)
+    {
+        var replacesCanvas = string.Equals(globalCompositeOperation, "source-over", StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(globalCompositeOperation, "copy", StringComparison.OrdinalIgnoreCase);
+        if (!replacesCanvas
+            || _state.GlobalAlpha < 1.0
+            || _state.Clips.Count != 0
+            || shadowBlur != 0
+            || shadowOffsetX != 0
+            || shadowOffsetY != 0
+            || _state.FillBrush is not ImmutableSolidColorBrush solidBrush
+            || solidBrush.Color.A != byte.MaxValue)
+        {
+            return false;
+        }
+
+        var canvasRect = new Rect(0, 0, GetCanvasPixelWidth(0), GetCanvasPixelHeight(0));
+        return TransformedRectCoversCanvas(rect, _state.Transform, canvasRect);
     }
 
     public void fillText(string text, double x, double y)
     {
-        if (string.IsNullOrEmpty(text))
+        if (string.IsNullOrEmpty(text) || !double.IsFinite(x) || !double.IsFinite(y))
         {
             return;
         }
 
         var origin = new Point(x, y);
-        _owner.AddCommand(new FillTextCommand(text, origin, _state.CreateSnapshot()));
+        _owner.AddCommand(new FillTextCommand(_owner, text, origin, CreateSnapshot()));
     }
 
     public void fillText(string text, double x, double y, double maxWidth)
@@ -1047,13 +1927,13 @@ internal sealed class CanvasRenderingContext2D
 
     public void strokeText(string text, double x, double y)
     {
-        if (string.IsNullOrEmpty(text))
+        if (string.IsNullOrEmpty(text) || !double.IsFinite(x) || !double.IsFinite(y))
         {
             return;
         }
 
         var origin = new Point(x, y);
-        _owner.AddCommand(new StrokeTextCommand(text, origin, _state.CreateSnapshot()));
+        _owner.AddCommand(new StrokeTextCommand(_owner, text, origin, CreateSnapshot()));
     }
 
     public void strokeText(string text, double x, double y, double maxWidth)
@@ -1068,8 +1948,24 @@ internal sealed class CanvasRenderingContext2D
 
     public object measureText(string text)
     {
-        var formatted = _owner.CreateFormattedText(text ?? string.Empty, _state.CreateSnapshot());
-        return new CanvasTextMetrics(formatted.Width);
+        return new CanvasTextMetrics(MeasureTextWidthCore(text));
+    }
+
+    double IHtmlMlCanvasTextTarget.MeasureTextWidth(string text)
+        => MeasureTextWidthCore(text);
+
+    int IHtmlMlCanvasBatchTarget.ReplayCanvasBatch(
+        ReadOnlySpan<double> values,
+        IReadOnlyList<string> strings)
+        => AvaloniaCanvasBatchReplay.Replay(this, values, strings);
+
+    private double MeasureTextWidthCore(string text)
+    {
+        text ??= string.Empty;
+        var formatted = _owner.CreateFormattedText(text, CreateSnapshot());
+        var width = formatted.Width * _state.FontWidthScale;
+        _owner.RecordTextMeasurement(text, _state.Font, width);
+        return width;
     }
 
     public object getTransform()
@@ -1157,7 +2053,7 @@ internal sealed class CanvasRenderingContext2D
         if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
         {
             var pixelSourceRect = new Rect(0, 0, pixelWidth, pixelHeight);
-            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, pixelSourceRect.Width, pixelSourceRect.Height), _state.CreateSnapshot());
+            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, pixelSourceRect.Width, pixelSourceRect.Height), CreateSnapshot());
             return;
         }
 
@@ -1172,8 +2068,9 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        _owner.AddCommand(new DrawImageCommand(resolved, sourceRect, destRect, _state.CreateSnapshot()));
+        _owner.AddCommand(new DrawImageCommand(resolved, sourceRect, destRect, CreateSnapshot()));
     }
+
 
     public void drawImage(object image, double dx, double dy, double dWidth, double dHeight)
     {
@@ -1190,7 +2087,7 @@ internal sealed class CanvasRenderingContext2D
 
         if (TryResolveImagePixels(image, out var pixelWidth, out var pixelHeight, out var pixelData))
         {
-            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, new Rect(0, 0, pixelWidth, pixelHeight), new Rect(dx, dy, dWidth, dHeight), _state.CreateSnapshot());
+            BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, new Rect(0, 0, pixelWidth, pixelHeight), new Rect(dx, dy, dWidth, dHeight), CreateSnapshot());
             return;
         }
 
@@ -1200,7 +2097,7 @@ internal sealed class CanvasRenderingContext2D
         }
 
         var destRect = new Rect(dx, dy, dWidth, dHeight);
-        _owner.AddCommand(new DrawImageCommand(resolved, sourceRect, destRect, _state.CreateSnapshot()));
+        _owner.AddCommand(new DrawImageCommand(resolved, sourceRect, destRect, CreateSnapshot()));
     }
 
     public void drawImage(object image, double sx, double sy, double sWidth, double sHeight, double dx, double dy, double dWidth, double dHeight)
@@ -1228,7 +2125,7 @@ internal sealed class CanvasRenderingContext2D
             var pixelSourceRect = new Rect(sx, sy, sWidth, sHeight).Intersect(new Rect(0, 0, pixelWidth, pixelHeight));
             if (pixelSourceRect.Width > 0 && pixelSourceRect.Height > 0)
             {
-                BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, dWidth, dHeight), _state.CreateSnapshot());
+                BlitRgbaPixels(pixelData, pixelWidth, pixelHeight, pixelSourceRect, new Rect(dx, dy, dWidth, dHeight), CreateSnapshot());
             }
 
             return;
@@ -1247,7 +2144,7 @@ internal sealed class CanvasRenderingContext2D
         }
 
         var destRect = new Rect(dx, dy, dWidth, dHeight);
-        _owner.AddCommand(new DrawImageCommand(resolved, bounded, destRect, _state.CreateSnapshot()));
+        _owner.AddCommand(new DrawImageCommand(resolved, bounded, destRect, CreateSnapshot()));
     }
 
     private void PutImageData(CanvasImageData? imageData, double dx, double dy)
@@ -1272,7 +2169,7 @@ internal sealed class CanvasRenderingContext2D
             imageData.height,
             sourceRect,
             new Rect(dx, dy, sourceRect.Width, sourceRect.Height),
-            _state.CreateSnapshot(Matrix.Identity, ignoreClip: true, globalAlpha: 1.0));
+            CreateSnapshot(Matrix.Identity, ignoreClip: true, globalAlpha: 1.0));
     }
 
     private void BlitRgbaPixels(byte[] sourcePixels, int sourceWidth, int sourceHeight, Rect sourceRect, Rect destinationRect, CanvasStateSnapshot drawState)
@@ -1312,7 +2209,13 @@ internal sealed class CanvasRenderingContext2D
             }
         }
 
-        _owner.AddCommand(new DrawRgbaPixelsCommand(sourcePixels, sourceWidth, sourceHeight, sourceRect, destinationRect, drawState));
+        var retainedPixels = new byte[checked(sourceWidth * sourceHeight * 4)];
+        sourcePixels.AsSpan(0, retainedPixels.Length).CopyTo(retainedPixels);
+        _owner.AddCommand(new DrawRgbaPixelsCommand(
+            new CanvasImageDataModel(sourceWidth, sourceHeight, retainedPixels),
+            sourceRect,
+            destinationRect,
+            drawState));
     }
 
     private void ClearRgbaPixels(Rect rect)
@@ -1394,7 +2297,7 @@ internal sealed class CanvasRenderingContext2D
             return;
         }
 
-        _owner.AddCommand(new DrawCanvasSurfaceCommand(surface, sourceRect, destinationRect, _state.CreateSnapshot()));
+        _owner.AddCommand(new DrawCanvasSurfaceCommand(surface, sourceRect, destinationRect, CreateSnapshot()));
     }
 
     private static bool TryResolveImagePixels(object image, out int width, out int height, out byte[] pixels)
@@ -1505,6 +2408,57 @@ internal sealed class CanvasRenderingContext2D
         return 0;
     }
 
+    private CanvasStateSnapshot CreateSnapshot()
+        => CreateSnapshot(
+            _state.Transform,
+            ignoreClip: false,
+            globalAlpha: _state.GlobalAlpha);
+
+    private CanvasStateSnapshot CreateSnapshot(
+        Matrix transform,
+        bool ignoreClip,
+        double globalAlpha)
+    {
+        var key = new CanvasStateCacheKey(
+            _state.FillPaint,
+            _state.StrokePaint,
+            _state.LineWidth,
+            _state.LineCap,
+            _state.LineJoin,
+            _state.MiterLimit,
+            globalAlpha,
+            _state.LineDash,
+            _state.LineDashOffset,
+            transform,
+            ignoreClip ? null : _state.Clips,
+            ignoreClip ? 0 : _state.Clips.Count,
+            _state.Font,
+            _state.TextAlign,
+            _state.TextBaseline,
+            _state.ImageSmoothingEnabled,
+            _state.ImageSmoothingQuality,
+            _state.CompositeOperation,
+            _state.ShadowColor,
+            _state.ShadowBlur,
+            _state.ShadowOffsetX,
+            _state.ShadowOffsetY);
+        if (_stateSnapshotCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var snapshot = CanvasDrawingSurface.EnableNativeCanvasHotPath
+            ? _state.CreateNativeSnapshot(transform, ignoreClip, globalAlpha)
+            : _state.CreateSnapshot(transform, ignoreClip, globalAlpha);
+        const int capacity = 4096;
+        if (_stateSnapshotCache.Count >= capacity)
+        {
+            _stateSnapshotCache.Clear();
+        }
+        _stateSnapshotCache.Add(key, snapshot);
+        return snapshot;
+    }
+
     private static double[] ToCanvasMatrix(Matrix matrix)
         => new[] { matrix.M11, matrix.M12, matrix.M21, matrix.M22, matrix.M31, matrix.M32 };
 
@@ -1550,6 +2504,37 @@ internal sealed class CanvasRenderingContext2D
         sourceRect = new Rect(0, 0, size.Width, size.Height);
         return sourceRect.Width > 0 && sourceRect.Height > 0;
     }
+
+    private readonly record struct CanvasStateCacheKey(
+        CanvasPaintModel FillPaint,
+        CanvasPaintModel StrokePaint,
+        double LineWidth,
+        CanvasLineCap LineCap,
+        CanvasLineJoin LineJoin,
+        double MiterLimit,
+        double GlobalAlpha,
+        double[] LineDash,
+        double LineDashOffset,
+        Matrix Transform,
+        List<CanvasClipModel>? Clips,
+        int ClipCount,
+        string Font,
+        CanvasTextAlign TextAlign,
+        CanvasTextBaseline TextBaseline,
+        bool ImageSmoothingEnabled,
+        string ImageSmoothingQuality,
+        string CompositeOperation,
+        string ShadowColor,
+        double ShadowBlur,
+        double ShadowOffsetX,
+        double ShadowOffsetY);
+}
+
+internal sealed class CanvasCallMetric
+{
+    internal long Count;
+    internal long Ticks;
+    internal long AllocatedBytes;
 }
 
 internal static class CanvasBitmapFactory
@@ -1595,33 +2580,46 @@ internal static class CanvasBitmapFactory
     }
 }
 
+internal sealed record CanvasTextMeasurement(string Text, string Font, double Width);
+
 internal sealed class CanvasState
 {
-    public IImmutableBrush? FillBrush { get; set; } = new ImmutableSolidColorBrush(Colors.Black);
-    public IImmutableBrush? StrokeBrush { get; set; } = new ImmutableSolidColorBrush(Colors.Black);
+    public CanvasPaintModel FillPaint { get; set; } = new CanvasColorPaintModel(HtmlML.Core.HtmlMlColor.FromRgb(0, 0, 0));
+    public CanvasPaintModel StrokePaint { get; set; } = new CanvasColorPaintModel(HtmlML.Core.HtmlMlColor.FromRgb(0, 0, 0));
+    public IImmutableBrush? FillBrush => CanvasPaintParser.Project(FillPaint);
+    public IImmutableBrush? StrokeBrush => CanvasPaintParser.Project(StrokePaint);
     public object? FillStyleValue { get; set; } = "#000000";
     public object? StrokeStyleValue { get; set; } = "#000000";
     public double LineWidth { get; set; } = 1.0;
-    public PenLineCap LineCap { get; set; } = PenLineCap.Flat;
-    public PenLineJoin LineJoin { get; set; } = PenLineJoin.Miter;
+    public CanvasLineCap LineCap { get; set; } = CanvasLineCap.Butt;
+    public CanvasLineJoin LineJoin { get; set; } = CanvasLineJoin.Miter;
     public double MiterLimit { get; set; } = 10.0;
     public double GlobalAlpha { get; set; } = 1.0;
     public double[] LineDash { get; set; } = Array.Empty<double>();
     public double LineDashOffset { get; set; }
     public Matrix Transform { get; set; } = Matrix.Identity;
+    public List<CanvasClipModel> Clips { get; set; } = new();
     public Geometry? ClipGeometry { get; set; }
     public Typeface Typeface { get; set; } = new Typeface("Segoe UI");
     public double FontSize { get; set; } = 16.0;
+    public double FontWidthScale { get; set; } = 1.0;
     public CanvasTextAlign TextAlign { get; set; } = CanvasTextAlign.Start;
     public CanvasTextBaseline TextBaseline { get; set; } = CanvasTextBaseline.Alphabetic;
     public string Font { get; set; } = "16px Segoe UI";
+    public bool ImageSmoothingEnabled { get; set; } = true;
+    public string ImageSmoothingQuality { get; set; } = "low";
+    public string CompositeOperation { get; set; } = "source-over";
+    public string ShadowColor { get; set; } = string.Empty;
+    public double ShadowBlur { get; set; }
+    public double ShadowOffsetX { get; set; }
+    public double ShadowOffsetY { get; set; }
 
     public static CanvasState CreateDefault() => new();
 
     public CanvasState Clone() => new()
     {
-        FillBrush = FillBrush,
-        StrokeBrush = StrokeBrush,
+        FillPaint = FillPaint,
+        StrokePaint = StrokePaint,
         FillStyleValue = FillStyleValue,
         StrokeStyleValue = StrokeStyleValue,
         LineWidth = LineWidth,
@@ -1632,28 +2630,42 @@ internal sealed class CanvasState
         LineDash = LineDash.Length == 0 ? Array.Empty<double>() : (double[])LineDash.Clone(),
         LineDashOffset = LineDashOffset,
         Transform = Transform,
+        // Clip entries are immutable snapshots captured by clip(). Saving state only
+        // needs a private list container; deep-copying every retained path here made
+        // chart crosshair and pan frames allocate hundreds of megabytes.
+        Clips = Clips.Count == 0
+            ? new List<CanvasClipModel>()
+            : new List<CanvasClipModel>(Clips),
         ClipGeometry = ClipGeometry,
         Typeface = Typeface,
         FontSize = FontSize,
+        FontWidthScale = FontWidthScale,
         TextAlign = TextAlign,
         TextBaseline = TextBaseline,
-        Font = Font
+        Font = Font,
+        ImageSmoothingEnabled = ImageSmoothingEnabled,
+        ImageSmoothingQuality = ImageSmoothingQuality,
+        CompositeOperation = CompositeOperation,
+        ShadowColor = ShadowColor,
+        ShadowBlur = ShadowBlur,
+        ShadowOffsetX = ShadowOffsetX,
+        ShadowOffsetY = ShadowOffsetY
     };
 
     public void SetFillStyle(object? value)
     {
-        if (CanvasPaintParser.TryCreateBrush(value, FillBrush, out var brush, out var stored) && brush is not null)
+        if (CanvasPaintParser.TryCreatePaint(value, FillPaint, out var paint, out var stored))
         {
-            FillBrush = brush;
+            FillPaint = paint;
             FillStyleValue = stored;
         }
     }
 
     public void SetStrokeStyle(object? value)
     {
-        if (CanvasPaintParser.TryCreateBrush(value, StrokeBrush, out var brush, out var stored) && brush is not null)
+        if (CanvasPaintParser.TryCreatePaint(value, StrokePaint, out var paint, out var stored))
         {
-            StrokeBrush = brush;
+            StrokePaint = paint;
             StrokeStyleValue = stored;
         }
     }
@@ -1664,7 +2676,80 @@ internal sealed class CanvasState
 
     public CanvasStateSnapshot CreateSnapshot(Matrix transform, bool ignoreClip, double globalAlpha) => new(this, transform, ignoreClip, globalAlpha);
 
-    public void UpdateFont(string? value)
+    public CanvasStateSnapshot CreateNativeSnapshot(Matrix transform, bool ignoreClip, double globalAlpha)
+        => new(this, transform, ignoreClip, globalAlpha, deferPortableModel: false);
+
+    internal CanvasStateModel CreatePortableModel(Matrix transform, bool ignoreClip, double globalAlpha)
+        => new()
+        {
+            Transform = ToPortableTransform(transform),
+            FillStyle = FillPaint,
+            StrokeStyle = StrokePaint,
+            GlobalAlpha = Math.Clamp(globalAlpha, 0.0, 1.0),
+            CompositeOperation = ParseCompositeOperation(CompositeOperation),
+            LineWidth = LineWidth,
+            LineCap = LineCap,
+            LineJoin = LineJoin,
+            MiterLimit = MiterLimit,
+            LineDash = LineDash.Length == 0 ? Array.Empty<double>() : LineDash,
+            LineDashOffset = LineDashOffset,
+            Font = Font,
+            TextAlign = TextAlign,
+            TextBaseline = TextBaseline,
+            ImageSmoothingEnabled = ImageSmoothingEnabled,
+            ImageSmoothingQuality = ParseImageSmoothingQuality(ImageSmoothingQuality),
+            Shadow = new CanvasShadowModel(
+                ToPortableColor(CanvasColorParser.ParseColor(ShadowColor, Colors.Transparent)),
+                ShadowBlur,
+                ShadowOffsetX,
+                ShadowOffsetY),
+            // CanvasClipModel instances already own path snapshots. The portable
+            // state may safely share those immutable entries while detaching the
+            // mutable list container.
+            Clips = ignoreClip || Clips.Count == 0
+                ? Array.Empty<CanvasClipModel>()
+                : Clips.ToArray()
+        };
+
+    internal static GraphicsTransform ToPortableTransform(Matrix transform)
+        => new(transform.M11, transform.M12, transform.M21, transform.M22, transform.M31, transform.M32);
+
+    internal static Matrix ToAvaloniaTransform(GraphicsTransform transform)
+        => new(transform.M11, transform.M12, transform.M21, transform.M22, transform.M31, transform.M32);
+
+    internal static HtmlML.Core.HtmlMlColor ToPortableColor(Color color)
+        => new(color.A, color.R, color.G, color.B);
+
+    internal static CanvasCompositeOperation ParseCompositeOperation(string? value)
+        => value?.Trim().ToLowerInvariant() switch
+        {
+            "source-in" => CanvasCompositeOperation.SourceIn,
+            "source-out" => CanvasCompositeOperation.SourceOut,
+            "source-atop" => CanvasCompositeOperation.SourceAtop,
+            "destination-over" => CanvasCompositeOperation.DestinationOver,
+            "destination-in" => CanvasCompositeOperation.DestinationIn,
+            "destination-out" => CanvasCompositeOperation.DestinationOut,
+            "destination-atop" => CanvasCompositeOperation.DestinationAtop,
+            "lighter" => CanvasCompositeOperation.Lighter,
+            "copy" => CanvasCompositeOperation.Copy,
+            "xor" => CanvasCompositeOperation.Xor,
+            "multiply" => CanvasCompositeOperation.Multiply,
+            "screen" => CanvasCompositeOperation.Screen,
+            "overlay" => CanvasCompositeOperation.Overlay,
+            "darken" => CanvasCompositeOperation.Darken,
+            "lighten" => CanvasCompositeOperation.Lighten,
+            _ => CanvasCompositeOperation.SourceOver
+        };
+
+    internal static CanvasImageSmoothingQuality ParseImageSmoothingQuality(string? value)
+        => value switch
+        {
+            "medium" => CanvasImageSmoothingQuality.Medium,
+            "high" => CanvasImageSmoothingQuality.High,
+            _ => CanvasImageSmoothingQuality.Low
+        };
+
+    public void UpdateFont(string? value, CssFontFaceRegistry? fontFaces = null)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -1672,12 +2757,31 @@ internal sealed class CanvasState
         }
 
         Font = value;
-        CanvasFontParser.Apply(this, value);
+        CanvasFontParser.Apply(this, value, fontFaces);
     }
 }
 
-internal sealed class CanvasStateSnapshot
+internal readonly struct CanvasStateSnapshot
 {
+    private static readonly ConcurrentDictionary<string, CanvasFontProjection> s_fontProjections =
+        new(StringComparer.Ordinal);
+    private readonly CanvasStateModel? _model;
+    private readonly CanvasPaintModel _fillPaint;
+    private readonly CanvasPaintModel _strokePaint;
+    private readonly CanvasLineCap _portableLineCap;
+    private readonly CanvasLineJoin _portableLineJoin;
+    private readonly CanvasCompositeOperation _compositeOperation;
+    private readonly bool _imageSmoothingEnabled;
+    private readonly CanvasImageSmoothingQuality _imageSmoothingQuality;
+    private readonly string _font;
+    private readonly Color _shadowColor;
+    private readonly double _shadowBlur;
+    private readonly double _shadowOffsetX;
+    private readonly double _shadowOffsetY;
+    private readonly IReadOnlyList<CanvasClipModel>? _portableClips;
+    private readonly List<CanvasClipModel>? _nativeClips;
+    private readonly int _nativeClipCount;
+
     public CanvasStateSnapshot(CanvasState state)
         : this(state, state.Transform)
     {
@@ -1689,24 +2793,153 @@ internal sealed class CanvasStateSnapshot
     }
 
     public CanvasStateSnapshot(CanvasState state, Matrix transform, bool ignoreClip, double globalAlpha)
+        : this(state, transform, ignoreClip, globalAlpha, deferPortableModel: false)
     {
+    }
+
+    internal CanvasStateSnapshot(
+        CanvasState state,
+        Matrix transform,
+        bool ignoreClip,
+        double globalAlpha,
+        bool deferPortableModel)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        _model = deferPortableModel
+            ? null
+            : state.CreatePortableModel(transform, ignoreClip, globalAlpha);
+        _fillPaint = state.FillPaint;
+        _strokePaint = state.StrokePaint;
+        _portableLineCap = state.LineCap;
+        _portableLineJoin = state.LineJoin;
+        _compositeOperation = CanvasState.ParseCompositeOperation(state.CompositeOperation);
+        _imageSmoothingEnabled = state.ImageSmoothingEnabled;
+        _imageSmoothingQuality = CanvasState.ParseImageSmoothingQuality(state.ImageSmoothingQuality);
+        _font = state.Font;
+        _shadowColor = CanvasColorParser.ParseColor(state.ShadowColor, Colors.Transparent);
+        _shadowBlur = state.ShadowBlur;
+        _shadowOffsetX = state.ShadowOffsetX;
+        _shadowOffsetY = state.ShadowOffsetY;
+        _portableClips = null;
+        _nativeClips = ignoreClip ? null : state.Clips;
+        _nativeClipCount = ignoreClip ? 0 : state.Clips.Count;
         FillBrush = state.FillBrush;
         StrokeBrush = state.StrokeBrush;
         LineWidth = state.LineWidth;
-        LineCap = state.LineCap;
-        LineJoin = state.LineJoin;
+        LineCap = state.LineCap switch
+        {
+            CanvasLineCap.Round => PenLineCap.Round,
+            CanvasLineCap.Square => PenLineCap.Square,
+            _ => PenLineCap.Flat
+        };
+        LineJoin = state.LineJoin switch
+        {
+            CanvasLineJoin.Round => PenLineJoin.Round,
+            CanvasLineJoin.Bevel => PenLineJoin.Bevel,
+            _ => PenLineJoin.Miter
+        };
         MiterLimit = state.MiterLimit;
         GlobalAlpha = Math.Clamp(globalAlpha, 0.0, 1.0);
-        LineDash = state.LineDash.Length == 0 ? Array.Empty<double>() : (double[])state.LineDash.Clone();
+        LineDash = state.LineDash.Length == 0 ? Array.Empty<double>() : state.LineDash;
         LineDashOffset = state.LineDashOffset;
         Transform = transform;
         ClipGeometry = ignoreClip ? null : state.ClipGeometry;
         Typeface = state.Typeface;
         FontSize = state.FontSize;
+        FontWidthScale = state.FontWidthScale;
         TextAlign = state.TextAlign;
         TextBaseline = state.TextBaseline;
     }
 
+    /// <summary>
+    /// Projects a portable retained state into Avalonia resources. Renderers use
+    /// this constructor so the backend model is a cache, never semantic authority.
+    /// </summary>
+    public CanvasStateSnapshot(CanvasStateModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        _model = model;
+        _fillPaint = model.FillStyle;
+        _strokePaint = model.StrokeStyle;
+        _portableLineCap = model.LineCap;
+        _portableLineJoin = model.LineJoin;
+        _compositeOperation = model.CompositeOperation;
+        _imageSmoothingEnabled = model.ImageSmoothingEnabled;
+        _imageSmoothingQuality = model.ImageSmoothingQuality;
+        _font = model.Font;
+        _shadowColor = Color.FromArgb(
+            model.Shadow.Color.A,
+            model.Shadow.Color.R,
+            model.Shadow.Color.G,
+            model.Shadow.Color.B);
+        _shadowBlur = model.Shadow.Blur;
+        _shadowOffsetX = model.Shadow.OffsetX;
+        _shadowOffsetY = model.Shadow.OffsetY;
+        _portableClips = model.Clips;
+        _nativeClips = null;
+        _nativeClipCount = 0;
+        FillBrush = CanvasPaintParser.Project(model.FillStyle);
+        StrokeBrush = CanvasPaintParser.Project(model.StrokeStyle);
+        LineWidth = model.LineWidth;
+        LineCap = model.LineCap switch
+        {
+            CanvasLineCap.Round => PenLineCap.Round,
+            CanvasLineCap.Square => PenLineCap.Square,
+            _ => PenLineCap.Flat
+        };
+        LineJoin = model.LineJoin switch
+        {
+            CanvasLineJoin.Round => PenLineJoin.Round,
+            CanvasLineJoin.Bevel => PenLineJoin.Bevel,
+            _ => PenLineJoin.Miter
+        };
+        MiterLimit = model.MiterLimit;
+        GlobalAlpha = model.GlobalAlpha;
+        LineDash = model.LineDash.Count == 0 ? Array.Empty<double>() : model.LineDash as double[] ?? [.. model.LineDash];
+        LineDashOffset = model.LineDashOffset;
+        Transform = CanvasState.ToAvaloniaTransform(model.Transform);
+        ClipGeometry = ProjectClipGeometry(model.Clips);
+        var font = s_fontProjections.GetOrAdd(
+            model.Font,
+            static value =>
+            {
+                var state = CanvasState.CreateDefault();
+                state.UpdateFont(value);
+                return new CanvasFontProjection(state.Typeface, state.FontSize, state.FontWidthScale);
+            });
+        Typeface = font.Typeface;
+        FontSize = font.Size;
+        FontWidthScale = font.WidthScale;
+        TextAlign = model.TextAlign;
+        TextBaseline = model.TextBaseline;
+    }
+
+    public CanvasStateModel Model
+        => _model ?? new CanvasStateModel
+        {
+            Transform = CanvasState.ToPortableTransform(Transform),
+            FillStyle = _fillPaint,
+            StrokeStyle = _strokePaint,
+            GlobalAlpha = GlobalAlpha,
+            CompositeOperation = _compositeOperation,
+            LineWidth = LineWidth,
+            LineCap = _portableLineCap,
+            LineJoin = _portableLineJoin,
+            MiterLimit = MiterLimit,
+            LineDash = LineDash,
+            LineDashOffset = LineDashOffset,
+            Font = _font,
+            TextAlign = TextAlign,
+            TextBaseline = TextBaseline,
+            ImageSmoothingEnabled = _imageSmoothingEnabled,
+            ImageSmoothingQuality = _imageSmoothingQuality,
+            Shadow = new CanvasShadowModel(
+                CanvasState.ToPortableColor(_shadowColor),
+                _shadowBlur,
+                _shadowOffsetX,
+                _shadowOffsetY),
+            Clips = CapturePortableClips()
+        };
     public IImmutableBrush? FillBrush { get; }
     public IImmutableBrush? StrokeBrush { get; }
     public double LineWidth { get; }
@@ -1720,8 +2953,63 @@ internal sealed class CanvasStateSnapshot
     public Geometry? ClipGeometry { get; }
     public Typeface Typeface { get; }
     public double FontSize { get; }
+    public double FontWidthScale { get; }
     public CanvasTextAlign TextAlign { get; }
     public CanvasTextBaseline TextBaseline { get; }
+
+    private IReadOnlyList<CanvasClipModel> CapturePortableClips()
+    {
+        if (_portableClips is not null)
+        {
+            return _portableClips;
+        }
+        if (_nativeClips is null || _nativeClipCount == 0)
+        {
+            return Array.Empty<CanvasClipModel>();
+        }
+
+        var clips = new CanvasClipModel[_nativeClipCount];
+        _nativeClips.CopyTo(0, clips, 0, _nativeClipCount);
+        return clips;
+    }
+
+    private static Geometry? ProjectClipGeometry(IReadOnlyList<CanvasClipModel> clips)
+    {
+        Geometry? result = null;
+        foreach (var clip in clips)
+        {
+            Geometry geometry = CanvasPathBuilder.BuildGeometry(clip.Path);
+            var transform = CanvasState.ToAvaloniaTransform(clip.Transform);
+            if (!transform.IsIdentity)
+            {
+                geometry.Transform = new MatrixTransform(transform);
+            }
+
+            result = result is null
+                ? geometry
+                : new CombinedGeometry(GeometryCombineMode.Intersect, result, geometry);
+        }
+
+        return result;
+    }
+
+    internal bool HasSameRenderingState(CanvasStateSnapshot other)
+        => Equals(_fillPaint, other._fillPaint)
+           && Equals(_strokePaint, other._strokePaint)
+           && LineWidth.Equals(other.LineWidth)
+           && LineCap == other.LineCap
+           && LineJoin == other.LineJoin
+           && MiterLimit.Equals(other.MiterLimit)
+           && GlobalAlpha.Equals(other.GlobalAlpha)
+           && ReferenceEquals(LineDash, other.LineDash)
+           && LineDashOffset.Equals(other.LineDashOffset)
+           && Transform.Equals(other.Transform)
+           && ReferenceEquals(ClipGeometry, other.ClipGeometry)
+           && Typeface.Equals(other.Typeface)
+           && FontSize.Equals(other.FontSize)
+           && FontWidthScale.Equals(other.FontWidthScale)
+           && TextAlign == other.TextAlign
+           && TextBaseline == other.TextBaseline;
 
     public Pen? CreatePen()
     {
@@ -1744,47 +3032,30 @@ internal sealed class CanvasStateSnapshot
 
         return pen;
     }
-}
 
-internal enum CanvasTextAlign
-{
-    Start,
-    End,
-    Left,
-    Right,
-    Center
-}
-
-internal enum CanvasTextBaseline
-{
-    Alphabetic,
-    Top,
-    Hanging,
-    Middle,
-    Ideographic,
-    Bottom
+    private readonly record struct CanvasFontProjection(Typeface Typeface, double Size, double WidthScale);
 }
 
 internal static class CanvasStrokeParser
 {
-    public static PenLineCap ParseLineCap(string? value, PenLineCap current)
+    public static CanvasLineCap ParseLineCap(string? value, CanvasLineCap current)
     {
         return value?.Trim().ToLowerInvariant() switch
         {
-            "round" => PenLineCap.Round,
-            "square" => PenLineCap.Square,
-            "butt" => PenLineCap.Flat,
+            "round" => CanvasLineCap.Round,
+            "square" => CanvasLineCap.Square,
+            "butt" => CanvasLineCap.Butt,
             _ => current
         };
     }
 
-    public static PenLineJoin ParseLineJoin(string? value, PenLineJoin current)
+    public static CanvasLineJoin ParseLineJoin(string? value, CanvasLineJoin current)
     {
         return value?.Trim().ToLowerInvariant() switch
         {
-            "round" => PenLineJoin.Round,
-            "bevel" => PenLineJoin.Bevel,
-            "miter" => PenLineJoin.Miter,
+            "round" => CanvasLineJoin.Round,
+            "bevel" => CanvasLineJoin.Bevel,
+            "miter" => CanvasLineJoin.Miter,
             _ => current
         };
     }
@@ -1924,6 +3195,11 @@ internal static class CanvasColorParser
             return Colors.Transparent;
         }
 
+        if (CssValueParser.TryParseColor(value, out var functionalColor))
+        {
+            return functionalColor;
+        }
+
         try
         {
             var brush = Brush.Parse(value);
@@ -1947,48 +3223,81 @@ internal static class CanvasColorParser
 
 internal static class CanvasPaintParser
 {
-    public static bool TryCreateBrush(object? value, IImmutableBrush? currentBrush, out IImmutableBrush? brush, out object? stored)
+    private static readonly ConditionalWeakTable<CanvasPaintModel, ProjectedPaint> s_projectedPaints = new();
+
+    public static bool TryCreatePaint(object? value, CanvasPaintModel current, out CanvasPaintModel paint, out object? stored)
     {
         switch (value)
         {
             case null:
-                brush = currentBrush;
+                paint = current;
                 stored = null;
                 return false;
             case string s:
-                brush = CanvasColorParser.Parse(s, currentBrush);
+                var fallback = Project(current) is ImmutableSolidColorBrush solid
+                    ? solid.Color
+                    : Colors.Black;
+                var parsed = CanvasColorParser.ParseColor(s, fallback);
+                paint = new CanvasColorPaintModel(CanvasState.ToPortableColor(parsed));
                 stored = s;
                 return true;
             case CanvasGradient gradient:
-                brush = gradient.ToImmutableBrush();
+                paint = new CanvasGradientPaintModel(gradient.Model);
                 stored = gradient;
                 return true;
             case CanvasPattern pattern:
-                brush = pattern.ToImmutableBrush();
+                paint = pattern.Model;
                 stored = pattern;
-                return brush is not null;
+                return true;
             case IImmutableBrush immutable:
-                brush = immutable;
+                paint = immutable is ImmutableSolidColorBrush immutableSolid
+                    ? new CanvasColorPaintModel(CanvasState.ToPortableColor(immutableSolid.Color))
+                    : new CanvasBackendPaintModel(HtmlML.Core.HtmlMlBackendHandle.Create(immutable));
                 stored = immutable;
                 return true;
             case ISolidColorBrush solidBrush:
-                brush = solidBrush.ToImmutable();
+                paint = new CanvasColorPaintModel(CanvasState.ToPortableColor(solidBrush.Color));
                 stored = solidBrush;
                 return true;
             default:
                 var asString = value?.ToString();
                 if (!string.IsNullOrWhiteSpace(asString))
                 {
-                    brush = CanvasColorParser.Parse(asString, currentBrush);
+                    var currentColor = Project(current) is ImmutableSolidColorBrush currentSolid
+                        ? currentSolid.Color
+                        : Colors.Black;
+                    paint = new CanvasColorPaintModel(CanvasState.ToPortableColor(
+                        CanvasColorParser.ParseColor(asString, currentColor)));
                     stored = asString;
                     return true;
                 }
 
-                brush = currentBrush;
-                stored = currentBrush;
+                paint = current;
+                stored = value;
                 return false;
         }
     }
+
+    public static IImmutableBrush? Project(CanvasPaintModel paint)
+        => s_projectedPaints.GetValue(
+            paint,
+            static model => new ProjectedPaint(ProjectCore(model))).Brush;
+
+    private static IImmutableBrush? ProjectCore(CanvasPaintModel paint)
+        => paint switch
+        {
+            CanvasColorPaintModel color => new ImmutableSolidColorBrush(Color.FromArgb(
+                color.Color.A,
+                color.Color.R,
+                color.Color.G,
+                color.Color.B)),
+            CanvasGradientPaintModel gradient => CanvasGradient.Project(gradient.Gradient),
+            CanvasPatternPaintModel pattern => CanvasPattern.Project(pattern),
+            CanvasBackendPaintModel backend when backend.Brush.TryGet<IImmutableBrush>(out var brush) => brush,
+            _ => null
+        };
+
+    private sealed record ProjectedPaint(IImmutableBrush? Brush);
 }
 
 public sealed class CanvasPattern
@@ -2015,19 +3324,47 @@ public sealed class CanvasPattern
         }
     }
 
+    internal CanvasPatternPaintModel Model => new(
+        HtmlML.Core.HtmlMlBackendHandle.Create(_source),
+        _width,
+        _height,
+        _repetition,
+        new GraphicsTransform(
+            _transform.M11,
+            _transform.M12,
+            _transform.M21,
+            _transform.M22,
+            _transform.M31,
+            _transform.M32));
+
     internal IImmutableBrush ToImmutableBrush()
+        => Project(Model);
+
+    internal static IImmutableBrush Project(CanvasPatternPaintModel model)
     {
-        var brush = new ImageBrush(_source)
+        if (!model.Source.TryGet<IImageBrushSource>(out var source))
+        {
+            return new ImmutableSolidColorBrush(Colors.Transparent);
+        }
+
+        var brush = new ImageBrush(source)
         {
             Stretch = Stretch.None,
-            TileMode = GetTileMode(_repetition),
+            TileMode = GetTileMode(model.Repetition),
             SourceRect = new RelativeRect(new Rect(0, 0, 1, 1), RelativeUnit.Relative),
-            DestinationRect = new RelativeRect(new Rect(0, 0, _width, _height), RelativeUnit.Absolute)
+            DestinationRect = new RelativeRect(new Rect(0, 0, model.Width, model.Height), RelativeUnit.Absolute)
         };
 
-        if (!_transform.IsIdentity)
+        var transform = new Matrix(
+            model.Transform.M11,
+            model.Transform.M12,
+            model.Transform.M21,
+            model.Transform.M22,
+            model.Transform.M31,
+            model.Transform.M32);
+        if (!transform.IsIdentity)
         {
-            brush.Transform = new MatrixTransform(_transform);
+            brush.Transform = new MatrixTransform(transform);
         }
 
         return brush.ToImmutable();
@@ -2047,11 +3384,6 @@ internal static class CanvasMatrixParser
 {
     public static bool TryReadMatrix(object? value, out Matrix matrix)
     {
-        if (value is JsValue jsValue)
-        {
-            value = jsValue.IsObject() ? jsValue.AsObject() : jsValue.ToObject();
-        }
-
         if (value is CanvasDomMatrix domMatrix)
         {
             matrix = new Matrix(domMatrix.a, domMatrix.b, domMatrix.c, domMatrix.d, domMatrix.e, domMatrix.f);
@@ -2109,20 +3441,9 @@ internal static class CanvasMatrixParser
             return false;
         }
 
-        if (value is JsValue jsValue)
-        {
-            value = jsValue.IsObject() ? jsValue.AsObject() : jsValue.ToObject();
-        }
-
         if (value is null)
         {
             return false;
-        }
-
-        if (value is ObjectInstance jsObject)
-        {
-            var property = jsObject.Get(name);
-            return !property.IsUndefined() && !property.IsNull() && TryConvertToDouble(property, out number);
         }
 
         if (value is IDictionary dictionary && dictionary.Contains(name))
@@ -2138,14 +3459,6 @@ internal static class CanvasMatrixParser
     {
         switch (value)
         {
-            case JsValue jsValue:
-                if (jsValue.IsNumber())
-                {
-                    number = jsValue.AsNumber();
-                    return double.IsFinite(number);
-                }
-
-                return TryConvertToDouble(jsValue.ToObject(), out number);
             case double doubleValue:
                 number = doubleValue;
                 return double.IsFinite(number);
@@ -2176,11 +3489,9 @@ internal static class CanvasMatrixParser
     }
 }
 
-internal readonly record struct CanvasGradientStop(double Offset, Color Color);
-
 public abstract class CanvasGradient
 {
-    private readonly List<CanvasGradientStop> _stops = new();
+    private readonly List<HtmlML.Graphics.CanvasGradientStop> _stops = new();
 
     public void addColorStop(double offset, string color)
     {
@@ -2191,23 +3502,69 @@ public abstract class CanvasGradient
 
         var clamped = Math.Clamp(offset, 0.0, 1.0);
         var parsed = CanvasColorParser.ParseColor(color, Colors.Transparent);
-        _stops.Add(new CanvasGradientStop(clamped, parsed));
+        _stops.Add(new HtmlML.Graphics.CanvasGradientStop(
+            clamped,
+            new HtmlML.Core.HtmlMlColor(parsed.A, parsed.R, parsed.G, parsed.B)));
     }
 
-    internal IReadOnlyList<CanvasGradientStop> Stops => _stops;
+    internal IReadOnlyList<HtmlML.Graphics.CanvasGradientStop> Stops => _stops;
 
-    protected IEnumerable<GradientStop> EnumerateStops()
+    internal abstract CanvasGradientModel Model { get; }
+
+    internal static IImmutableBrush Project(CanvasGradientModel model)
     {
-        if (_stops.Count == 0)
+        ArgumentNullException.ThrowIfNull(model);
+        switch (model)
+        {
+            case CanvasLinearGradientModel linear:
+                var linearBrush = new LinearGradientBrush
+                {
+                    StartPoint = new RelativePoint(new Point(linear.Start.X, linear.Start.Y), RelativeUnit.Absolute),
+                    EndPoint = new RelativePoint(new Point(linear.End.X, linear.End.Y), RelativeUnit.Absolute),
+                    SpreadMethod = GradientSpreadMethod.Pad
+                };
+                linearBrush.GradientStops.Clear();
+                foreach (var stop in EnumerateStops(linear))
+                {
+                    linearBrush.GradientStops.Add(stop);
+                }
+                return new ImmutableLinearGradientBrush(linearBrush);
+
+            case CanvasRadialGradientModel radial:
+                var radialBrush = new RadialGradientBrush
+                {
+                    GradientOrigin = new RelativePoint(new Point(radial.StartCenter.X, radial.StartCenter.Y), RelativeUnit.Absolute),
+                    Center = new RelativePoint(new Point(radial.EndCenter.X, radial.EndCenter.Y), RelativeUnit.Absolute),
+                    RadiusX = new RelativeScalar(radial.EndRadius, RelativeUnit.Absolute),
+                    RadiusY = new RelativeScalar(radial.EndRadius, RelativeUnit.Absolute),
+                    SpreadMethod = GradientSpreadMethod.Pad
+                };
+                radialBrush.GradientStops.Clear();
+                foreach (var stop in EnumerateStops(radial))
+                {
+                    radialBrush.GradientStops.Add(stop);
+                }
+                return new ImmutableRadialGradientBrush(radialBrush);
+
+            default:
+                throw new NotSupportedException($"Unsupported Canvas gradient model {model.GetType().Name}.");
+        }
+    }
+
+    protected static IEnumerable<GradientStop> EnumerateStops(CanvasGradientModel model)
+    {
+        if (model.Stops.Count == 0)
         {
             yield return new GradientStop(Colors.Transparent, 0);
             yield return new GradientStop(Colors.Transparent, 1);
             yield break;
         }
 
-        foreach (var stop in _stops)
+        foreach (var stop in model.Stops)
         {
-            yield return new GradientStop(stop.Color, stop.Offset);
+            yield return new GradientStop(
+                Color.FromArgb(stop.Color.A, stop.Color.R, stop.Color.G, stop.Color.B),
+                stop.Offset);
         }
     }
 
@@ -2229,21 +3586,13 @@ public sealed class CanvasLinearGradient : CanvasGradient
         _y1 = y1;
     }
 
+    internal override CanvasGradientModel Model => new CanvasLinearGradientModel(
+        new HtmlML.Core.HtmlMlPoint(_x0, _y0),
+        new HtmlML.Core.HtmlMlPoint(_x1, _y1),
+        [.. Stops]);
+
     internal override IImmutableBrush ToImmutableBrush()
-    {
-        var brush = new LinearGradientBrush
-        {
-            StartPoint = new RelativePoint(new Point(_x0, _y0), RelativeUnit.Absolute),
-            EndPoint = new RelativePoint(new Point(_x1, _y1), RelativeUnit.Absolute),
-            SpreadMethod = GradientSpreadMethod.Pad
-        };
-        brush.GradientStops.Clear();
-        foreach (var stop in EnumerateStops())
-        {
-            brush.GradientStops.Add(stop);
-        }
-        return new ImmutableLinearGradientBrush(brush);
-    }
+        => Project(Model);
 }
 
 public sealed class CanvasRadialGradient : CanvasGradient
@@ -2265,28 +3614,20 @@ public sealed class CanvasRadialGradient : CanvasGradient
         _r1 = Math.Max(0, r1);
     }
 
+    internal override CanvasGradientModel Model => new CanvasRadialGradientModel(
+        new HtmlML.Core.HtmlMlPoint(_x0, _y0),
+        _r0,
+        new HtmlML.Core.HtmlMlPoint(_x1, _y1),
+        _r1,
+        [.. Stops]);
+
     internal override IImmutableBrush ToImmutableBrush()
-    {
-        var brush = new RadialGradientBrush
-        {
-            GradientOrigin = new RelativePoint(new Point(_x0, _y0), RelativeUnit.Absolute),
-            Center = new RelativePoint(new Point(_x1, _y1), RelativeUnit.Absolute),
-            RadiusX = new RelativeScalar(_r1, RelativeUnit.Absolute),
-            RadiusY = new RelativeScalar(_r1, RelativeUnit.Absolute),
-            SpreadMethod = GradientSpreadMethod.Pad
-        };
-        brush.GradientStops.Clear();
-        foreach (var stop in EnumerateStops())
-        {
-            brush.GradientStops.Add(stop);
-        }
-        return new ImmutableRadialGradientBrush(brush);
-    }
+        => Project(Model);
 }
 
 internal static class CanvasFontParser
 {
-    public static void Apply(CanvasState state, string font)
+    public static void Apply(CanvasState state, string font, CssFontFaceRegistry? fontFaces = null)
     {
         if (state is null)
         {
@@ -2300,7 +3641,7 @@ internal static class CanvasFontParser
 
         var tokens = Tokenize(font);
         double size = state.FontSize;
-        string family = state.Typeface.FontFamily.Name;
+        FontFamily family = state.Typeface.FontFamily;
         FontStyle style = state.Typeface.Style;
         FontWeight weight = state.Typeface.Weight;
         var sizeIndex = -1;
@@ -2344,13 +3685,25 @@ internal static class CanvasFontParser
             }
             else if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericWeight))
             {
-                weight = numericWeight >= 600 ? FontWeight.Bold : FontWeight.Normal;
+                weight = (FontWeight)Math.Clamp(numericWeight, 1, 1000);
             }
         }
 
         if (sizeIndex >= 0 && sizeIndex + 1 < tokens.Count)
         {
-            family = NormalizeFamily(JoinTokens(tokens, sizeIndex + 1));
+            var familyStart = sizeIndex + 1;
+            if (familyStart + 1 < tokens.Count && tokens[familyStart] == "/")
+            {
+                familyStart += 2;
+            }
+            var resolution = CssFontResolver.Resolve(
+                JoinTokens(tokens, familyStart),
+                fontFaces,
+                style,
+                weight,
+                FontStretch.Normal);
+            family = resolution.Family;
+            state.FontWidthScale = resolution.ResolveWidthScale(size, weight);
         }
 
         state.FontSize = size;
@@ -2451,159 +3804,165 @@ internal static class CanvasFontParser
         return builder.ToString();
     }
 
-    private static string NormalizeFamily(string value)
+}
+
+/// <summary>
+/// Retained browser Path2D data. SVG path strings are parsed by Avalonia's
+/// geometry parser while imperative path calls share the canvas path builder.
+/// </summary>
+public sealed class CanvasPath2D
+{
+    private readonly CanvasPathBuilder _builder;
+
+    public CanvasPath2D(object? pathInfo = null)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (pathInfo is string pathData && !string.IsNullOrWhiteSpace(pathData))
         {
-            return value;
+            _builder = new CanvasPathBuilder(new CanvasPathModel(pathData));
         }
-
-        var families = new List<string>();
-        var start = 0;
-        var quote = '\0';
-
-        for (var index = 0; index < value.Length; index++)
+        else if (TryResolve(pathInfo, out var source))
         {
-            var c = value[index];
-            if (quote != '\0')
-            {
-                if (c == quote)
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (c is '\'' or '"')
-            {
-                quote = c;
-                continue;
-            }
-
-            if (c == ',')
-            {
-                AddFamily(value[start..index], families);
-                start = index + 1;
-            }
+            _builder = new CanvasPathBuilder(source.Model.Snapshot());
         }
-
-        AddFamily(value[start..], families);
-        return families.Count == 0 ? value.Trim() : string.Join(", ", families);
+        else
+        {
+            _builder = new CanvasPathBuilder();
+        }
     }
 
-    private static void AddFamily(string value, ICollection<string> families)
+    internal CanvasPathModel Model => _builder.Model;
+
+    public void closePath() => _builder.ClosePath();
+    public void moveTo(double x, double y) => _builder.MoveTo(x, y);
+    public void lineTo(double x, double y) => _builder.LineTo(x, y);
+    public void bezierCurveTo(double cp1x, double cp1y, double cp2x, double cp2y, double x, double y)
+        => _builder.CubicBezierTo(cp1x, cp1y, cp2x, cp2y, x, y);
+    public void quadraticCurveTo(double cpx, double cpy, double x, double y)
+        => _builder.QuadraticBezierTo(cpx, cpy, x, y);
+    public void arc(double x, double y, double radius, double startAngle, double endAngle, bool counterClockwise = false)
+        => _builder.Arc(x, y, radius, startAngle, endAngle, counterClockwise);
+    public void arcTo(double x1, double y1, double x2, double y2, double radius)
+        => _builder.ArcTo(x1, y1, x2, y2, radius);
+    public void rect(double x, double y, double width, double height)
+        => _builder.Rect(x, y, width, height);
+
+    public void addPath(object? path, double a, double b, double c, double d, double e, double f)
     {
-        var family = value.Trim();
-        if (family.Length >= 2 &&
-            ((family[0] == '"' && family[^1] == '"') || (family[0] == '\'' && family[^1] == '\'')))
+        if (!TryResolve(path, out var source)
+            || !double.IsFinite(a)
+            || !double.IsFinite(b)
+            || !double.IsFinite(c)
+            || !double.IsFinite(d)
+            || !double.IsFinite(e)
+            || !double.IsFinite(f))
         {
-            family = family[1..^1].Trim();
+            return;
         }
 
-        if (family.Length > 0)
+        _builder.Model.AddPart(source.Model, new GraphicsTransform(a, b, c, d, e, f));
+    }
+
+    internal Geometry BuildGeometry() => CanvasPathBuilder.BuildGeometry(Model);
+
+    internal static bool TryResolve(object? value, [NotNullWhen(true)] out CanvasPath2D? path)
+    {
+        if (value is CanvasPath2D nativePath)
         {
-            families.Add(family);
+            path = nativePath;
+            return true;
         }
+
+        if (value is IDictionary<string, object?> genericDictionary
+            && genericDictionary.TryGetValue("__htmlMlNativePath2D", out var genericNative)
+            && genericNative is CanvasPath2D genericDictionaryPath)
+        {
+            path = genericDictionaryPath;
+            return true;
+        }
+
+        if (value is IDictionary dictionary
+            && dictionary.Contains("__htmlMlNativePath2D")
+            && dictionary["__htmlMlNativePath2D"] is CanvasPath2D dictionaryPath)
+        {
+            path = dictionaryPath;
+            return true;
+        }
+
+        path = null;
+        return false;
     }
 }
 
 internal sealed class CanvasPathBuilder
 {
-    private readonly List<ICanvasPathSegment> _segments = new();
+    private CanvasPathModel _model;
 
-    public bool IsEmpty => _segments.Count == 0;
+    internal CanvasPathBuilder(CanvasPathModel? model = null)
+    {
+        _model = model ?? new CanvasPathModel();
+    }
 
-    public void Clear() => _segments.Clear();
+    public bool IsEmpty => _model.Commands.Count == 0
+                           && _model.SvgPathData is null
+                           && _model.Parts.Count == 0;
 
-    public void ClosePath() => _segments.Add(new ClosePathSegment());
+    internal CanvasPathModel Model => _model;
 
-    public void MoveTo(double x, double y) => _segments.Add(new MoveToSegment(new Point(x, y)));
+    internal static Geometry BuildGeometry(CanvasPathModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        // Geometry projection is read-only. Retained commands and clip entries
+        // already own detached path snapshots, so cloning the complete path a
+        // second time here only adds hot-frame allocation.
+        return new CanvasPathBuilder(model).BuildGeometry();
+    }
 
-    public void LineTo(double x, double y) => _segments.Add(new LineToSegment(new Point(x, y)));
+    public void Clear() => _model = new CanvasPathModel();
+
+    public void ClosePath() => _model.Add(new CanvasPathCommand(CanvasPathCommandKind.ClosePath));
+
+    public void MoveTo(double x, double y)
+        => _model.Add(new CanvasPathCommand(CanvasPathCommandKind.MoveTo, x, y));
+
+    public void LineTo(double x, double y)
+        => _model.Add(new CanvasPathCommand(CanvasPathCommandKind.LineTo, x, y));
 
     public void CubicBezierTo(double cp1x, double cp1y, double cp2x, double cp2y, double x, double y)
-        => _segments.Add(new CubicBezierSegment(new Point(cp1x, cp1y), new Point(cp2x, cp2y), new Point(x, y)));
+        => _model.Add(new CanvasPathCommand(
+            CanvasPathCommandKind.CubicBezierTo,
+            cp1x,
+            cp1y,
+            cp2x,
+            cp2y,
+            x,
+            y));
 
     public void QuadraticBezierTo(double cpx, double cpy, double x, double y)
-        => _segments.Add(new QuadraticBezierSegment(new Point(cpx, cpy), new Point(x, y)));
+        => _model.Add(new CanvasPathCommand(CanvasPathCommandKind.QuadraticBezierTo, cpx, cpy, x, y));
 
     public void Arc(double x, double y, double radius, double startAngle, double endAngle, bool counterClockwise)
-        => _segments.Add(new ArcSegment(new Point(x, y), radius, startAngle, endAngle, counterClockwise));
+        => _model.Add(new CanvasPathCommand(
+            CanvasPathCommandKind.Arc,
+            x,
+            y,
+            startAngle,
+            endAngle,
+            Radius: radius,
+            Flag: counterClockwise));
 
     public void ArcTo(double x1, double y1, double x2, double y2, double radius)
-        => _segments.Add(new ArcToSegment(new Point(x1, y1), new Point(x2, y2), radius));
+        => _model.Add(new CanvasPathCommand(
+            CanvasPathCommandKind.ArcTo,
+            x1,
+            y1,
+            x2,
+            y2,
+            Radius: radius));
 
     public void Rect(double x, double y, double width, double height)
-        => _segments.Add(new RectSegment(new Rect(x, y, width, height)));
+        => _model.Add(new CanvasPathCommand(CanvasPathCommandKind.Rect, x, y, width, height));
 
-    public StreamGeometry BuildGeometry()
-    {
-        var geometry = new StreamGeometry();
-        using (var ctx = geometry.Open())
-        {
-            var current = new Point();
-            var figureStart = new Point();
-            var figureOpen = false;
-
-            foreach (var segment in _segments)
-            {
-                segment.Apply(ctx, ref current, ref figureStart, ref figureOpen);
-            }
-
-            if (figureOpen)
-            {
-                ctx.EndFigure(false);
-            }
-        }        return geometry;
-    }
-}
-
-internal interface ICanvasPathSegment
-{
-    void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen);
-}
-
-internal sealed class MoveToSegment : ICanvasPathSegment
-{
-    private readonly Point _point;
-
-    public MoveToSegment(Point point)
-    {
-        _point = point;
-    }
-
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        if (figureOpen)
-        {
-            context.EndFigure(false);
-        }
-
-        context.BeginFigure(_point, true);
-        figureOpen = true;
-        figureStart = _point;
-        currentPoint = _point;
-    }
-}
-
-internal sealed class LineToSegment : ICanvasPathSegment
-{
-    private readonly Point _point;
-
-    public LineToSegment(Point point)
-    {
-        _point = point;
-    }
-
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        EnsureFigure(context, ref currentPoint, ref figureStart, ref figureOpen);
-        context.LineTo(_point);
-        currentPoint = _point;
-    }
-
-    internal static void EnsureFigure(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
+    private static void EnsureFigure(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
     {
         if (!figureOpen)
         {
@@ -2612,246 +3971,393 @@ internal sealed class LineToSegment : ICanvasPathSegment
             figureOpen = true;
         }
     }
-}
-
-internal sealed class CubicBezierSegment : ICanvasPathSegment
-{
-    private readonly Point _control1;
-    private readonly Point _control2;
-    private readonly Point _point;
-
-    public CubicBezierSegment(Point control1, Point control2, Point point)
-    {
-        _control1 = control1;
-        _control2 = control2;
-        _point = point;
-    }
-
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        LineToSegment.EnsureFigure(context, ref currentPoint, ref figureStart, ref figureOpen);
-        context.CubicBezierTo(_control1, _control2, _point);
-        currentPoint = _point;
-    }
-}
-
-internal sealed class QuadraticBezierSegment : ICanvasPathSegment
-{
-    private readonly Point _control;
-    private readonly Point _point;
-
-    public QuadraticBezierSegment(Point control, Point point)
-    {
-        _control = control;
-        _point = point;
-    }
-
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        LineToSegment.EnsureFigure(context, ref currentPoint, ref figureStart, ref figureOpen);
-        context.QuadraticBezierTo(_control, _point);
-        currentPoint = _point;
-    }
-}
-
-internal sealed class ArcToSegment : ICanvasPathSegment
-{
-    private readonly Point _corner;
-    private readonly Point _target;
-    private readonly double _radius;
-
-    public ArcToSegment(Point corner, Point target, double radius)
-    {
-        _corner = corner;
-        _target = target;
-        _radius = Math.Max(0, radius);
-    }
-
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        LineToSegment.EnsureFigure(context, ref currentPoint, ref figureStart, ref figureOpen);
-
-        var v1X = currentPoint.X - _corner.X;
-        var v1Y = currentPoint.Y - _corner.Y;
-        var v2X = _target.X - _corner.X;
-        var v2Y = _target.Y - _corner.Y;
-        var len1 = Math.Sqrt(v1X * v1X + v1Y * v1Y);
-        var len2 = Math.Sqrt(v2X * v2X + v2Y * v2Y);
-
-        if (_radius <= 0 || len1 <= double.Epsilon || len2 <= double.Epsilon)
-        {
-            context.LineTo(_corner);
-            currentPoint = _corner;
-            return;
-        }
-
-        var dot = ((v1X * v2X) + (v1Y * v2Y)) / (len1 * len2);
-        dot = Math.Clamp(dot, -1, 1);
-        var angle = Math.Acos(dot);
-        if (angle <= double.Epsilon || Math.Abs(Math.PI - angle) <= double.Epsilon)
-        {
-            context.LineTo(_corner);
-            currentPoint = _corner;
-            return;
-        }
-
-        var tangentDistance = _radius / Math.Tan(angle / 2);
-        if (!double.IsFinite(tangentDistance) || tangentDistance <= 0)
-        {
-            context.LineTo(_corner);
-            currentPoint = _corner;
-            return;
-        }
-
-        tangentDistance = Math.Min(tangentDistance, Math.Min(len1, len2));
-        var tangent1 = new Point(
-            _corner.X + (v1X / len1 * tangentDistance),
-            _corner.Y + (v1Y / len1 * tangentDistance));
-        var tangent2 = new Point(
-            _corner.X + (v2X / len2 * tangentDistance),
-            _corner.Y + (v2Y / len2 * tangentDistance));
-
-        context.LineTo(tangent1);
-        context.QuadraticBezierTo(_corner, tangent2);
-        currentPoint = tangent2;
-    }
-}
-
-internal sealed class ArcSegment : ICanvasPathSegment
-{
-    private readonly Point _center;
-    private readonly double _radius;
-    private readonly double _startAngle;
-    private readonly double _endAngle;
-    private readonly bool _counterClockwise;
-
-    public ArcSegment(Point center, double radius, double startAngle, double endAngle, bool counterClockwise)
-    {
-        _center = center;
-        _radius = Math.Abs(radius);
-        _startAngle = startAngle;
-        _endAngle = endAngle;
-        _counterClockwise = counterClockwise;
-    }
-
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        if (_radius <= 0)
-        {
-            return;
-        }
-
-        const double twoPi = Math.PI * 2;
-        var sweep = _endAngle - _startAngle;
-        if (!_counterClockwise && sweep >= twoPi)
-        {
-            sweep = twoPi;
-        }
-        else if (_counterClockwise && sweep <= -twoPi)
-        {
-            sweep = -twoPi;
-        }
-        else if (!_counterClockwise && sweep < 0)
-        {
-            sweep += twoPi;
-        }
-        else if (_counterClockwise && sweep > 0)
-        {
-            sweep -= twoPi;
-        }
-
-        if (Math.Abs(sweep) <= double.Epsilon)
-        {
-            return;
-        }
-
-        var segments = Math.Max(1, (int)Math.Ceiling(Math.Abs(sweep) / (Math.PI / 2)));
-        var step = sweep / segments;
-        var angle = _startAngle;
-        var startPoint = GetPoint(angle);
-
-        if (!figureOpen)
-        {
-            context.BeginFigure(startPoint, true);
-            figureStart = startPoint;
-            figureOpen = true;
-        }
-        else if (!AreClose(currentPoint, startPoint))
-        {
-            context.LineTo(startPoint);
-        }
-
-        currentPoint = startPoint;
-
-        for (int i = 0; i < segments; i++)
-        {
-            var nextAngle = angle + step;
-            var endPoint = GetPoint(nextAngle);
-            var k = 4.0 / 3.0 * Math.Tan(step / 4.0);
-            var control1 = new Point(
-                currentPoint.X - _radius * k * Math.Sin(angle),
-                currentPoint.Y + _radius * k * Math.Cos(angle));
-            var control2 = new Point(
-                endPoint.X + _radius * k * Math.Sin(nextAngle),
-                endPoint.Y - _radius * k * Math.Cos(nextAngle));
-
-            context.CubicBezierTo(control1, control2, endPoint);
-            currentPoint = endPoint;
-            angle = nextAngle;
-        }
-    }
-
-    private Point GetPoint(double angle)
-        => new(
-            _center.X + _radius * Math.Cos(angle),
-            _center.Y + _radius * Math.Sin(angle));
 
     private static bool AreClose(Point a, Point b)
         => Math.Abs(a.X - b.X) < 0.001 && Math.Abs(a.Y - b.Y) < 0.001;
-}
 
-internal sealed class RectSegment : ICanvasPathSegment
-{
-    private readonly Rect _rect;
-
-    public RectSegment(Rect rect)
+    public Geometry BuildGeometry()
     {
-        _rect = rect;
-    }
-
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        if (_rect.Width <= 0 || _rect.Height <= 0)
+        Geometry? result = null;
+        if (_model.SvgPathData is { } pathData)
         {
-            return;
+            try
+            {
+                result = Geometry.Parse(pathData);
+            }
+            catch
+            {
+                // Browser Path2D construction is permissive for invalid path data.
+            }
         }
 
-        var p1 = _rect.TopLeft;
-        var p2 = _rect.TopRight;
-        var p3 = _rect.BottomRight;
-        var p4 = _rect.BottomLeft;
+        if (_model.Commands.Count > 0)
+        {
+            var commandGeometry = BuildCommandGeometry();
+            result = result is null
+                ? commandGeometry
+                : new CombinedGeometry(GeometryCombineMode.Union, result, commandGeometry);
+        }
 
-        context.BeginFigure(p1, true);
-        context.LineTo(p2);
-        context.LineTo(p3);
-        context.LineTo(p4);
+        foreach (var part in _model.Parts)
+        {
+            var geometry = BuildGeometry(part.Path).Clone();
+            var transform = CanvasState.ToAvaloniaTransform(part.Transform);
+            if (!transform.IsIdentity)
+            {
+                geometry.Transform = new MatrixTransform(transform);
+            }
+
+            result = result is null
+                ? geometry
+                : new CombinedGeometry(GeometryCombineMode.Union, result, geometry);
+        }
+
+        return result ?? new StreamGeometry();
+    }
+
+    private StreamGeometry BuildCommandGeometry()
+    {
+        var geometry = new StreamGeometry();
+        using (var ctx = geometry.Open())
+        {
+            if (TryBuildVisuallyCircularRoundedRect(ctx))
+            {
+                return geometry;
+            }
+
+            var current = new Point();
+            var figureStart = new Point();
+            var figureOpen = false;
+
+            foreach (var cmd in _model.Commands)
+            {
+                switch (cmd.Kind)
+                {
+                    case CanvasPathCommandKind.MoveTo:
+                        {
+                            if (figureOpen)
+                            {
+                                ctx.EndFigure(false);
+                            }
+                            var pt = new Point(cmd.X1, cmd.Y1);
+                            ctx.BeginFigure(pt, true);
+                            figureOpen = true;
+                            figureStart = pt;
+                            current = pt;
+                        }
+                        break;
+
+                    case CanvasPathCommandKind.LineTo:
+                        {
+                            var pt = new Point(cmd.X1, cmd.Y1);
+                            EnsureFigure(ctx, ref current, ref figureStart, ref figureOpen);
+                            ctx.LineTo(pt);
+                            current = pt;
+                        }
+                        break;
+
+                    case CanvasPathCommandKind.CubicBezierTo:
+                        {
+                            var cp1 = new Point(cmd.X1, cmd.Y1);
+                            var cp2 = new Point(cmd.X2, cmd.Y2);
+                            var pt = new Point(cmd.X3, cmd.Y3);
+                            EnsureFigure(ctx, ref current, ref figureStart, ref figureOpen);
+                            ctx.CubicBezierTo(cp1, cp2, pt);
+                            current = pt;
+                        }
+                        break;
+
+                    case CanvasPathCommandKind.QuadraticBezierTo:
+                        {
+                            var cp = new Point(cmd.X1, cmd.Y1);
+                            var pt = new Point(cmd.X2, cmd.Y2);
+                            EnsureFigure(ctx, ref current, ref figureStart, ref figureOpen);
+                            ctx.QuadraticBezierTo(cp, pt);
+                            current = pt;
+                        }
+                        break;
+
+                    case CanvasPathCommandKind.ArcTo:
+                        {
+                            var corner = new Point(cmd.X1, cmd.Y1);
+                            var target = new Point(cmd.X2, cmd.Y2);
+                            var radius = Math.Max(0, cmd.Radius);
+
+                            EnsureFigure(ctx, ref current, ref figureStart, ref figureOpen);
+
+                            var v1X = current.X - corner.X;
+                            var v1Y = current.Y - corner.Y;
+                            var v2X = target.X - corner.X;
+                            var v2Y = target.Y - corner.Y;
+                            var len1 = Math.Sqrt(v1X * v1X + v1Y * v1Y);
+                            var len2 = Math.Sqrt(v2X * v2X + v2Y * v2Y);
+
+                            if (radius <= 0 || len1 <= double.Epsilon || len2 <= double.Epsilon)
+                            {
+                                ctx.LineTo(corner);
+                                current = corner;
+                                break;
+                            }
+
+                            var dot = ((v1X * v2X) + (v1Y * v2Y)) / (len1 * len2);
+                            dot = Math.Clamp(dot, -1, 1);
+                            var angle = Math.Acos(dot);
+                            if (angle <= double.Epsilon || Math.Abs(Math.PI - angle) <= double.Epsilon)
+                            {
+                                ctx.LineTo(corner);
+                                current = corner;
+                                break;
+                            }
+
+                            var tangentDistance = radius / Math.Tan(angle / 2);
+                            if (!double.IsFinite(tangentDistance) || tangentDistance <= 0)
+                            {
+                                ctx.LineTo(corner);
+                                current = corner;
+                                break;
+                            }
+
+                            var tangent1 = new Point(
+                                corner.X + (v1X / len1 * tangentDistance),
+                                corner.Y + (v1Y / len1 * tangentDistance));
+                            var tangent2 = new Point(
+                                corner.X + (v2X / len2 * tangentDistance),
+                                corner.Y + (v2Y / len2 * tangentDistance));
+
+                            var incomingX = corner.X - current.X;
+                            var incomingY = corner.Y - current.Y;
+                            var outgoingX = target.X - corner.X;
+                            var outgoingY = target.Y - corner.Y;
+                            var cross = incomingX * outgoingY - incomingY * outgoingX;
+                            if (Math.Abs(cross) <= double.Epsilon)
+                            {
+                                ctx.LineTo(corner);
+                                current = corner;
+                                break;
+                            }
+
+                            ctx.LineTo(tangent1);
+                            ctx.ArcTo(
+                                tangent2,
+                                new Size(radius, radius),
+                                0,
+                                false,
+                                cross > 0 ? SweepDirection.Clockwise : SweepDirection.CounterClockwise);
+                            current = tangent2;
+                        }
+                        break;
+
+                    case CanvasPathCommandKind.Arc:
+                        {
+                            var center = new Point(cmd.X1, cmd.Y1);
+                            var radius = Math.Abs(cmd.Radius);
+                            var startAngle = cmd.X2;
+                            var endAngle = cmd.Y2;
+                            var counterClockwise = cmd.Flag;
+
+                            if (radius <= 0)
+                            {
+                                break;
+                            }
+
+                            const double twoPi = Math.PI * 2;
+                            var sweep = endAngle - startAngle;
+                            if (!counterClockwise && sweep >= twoPi)
+                            {
+                                sweep = twoPi;
+                            }
+                            else if (counterClockwise && sweep <= -twoPi)
+                            {
+                                sweep = -twoPi;
+                            }
+                            else if (!counterClockwise && sweep < 0)
+                            {
+                                sweep += twoPi;
+                            }
+                            else if (counterClockwise && sweep > 0)
+                            {
+                                sweep -= twoPi;
+                            }
+
+                            if (Math.Abs(sweep) <= double.Epsilon)
+                            {
+                                break;
+                            }
+
+                            var segments = Math.Max(1, (int)Math.Ceiling(Math.Abs(sweep) / (Math.PI / 2)));
+                            var step = sweep / segments;
+                            var angle = startAngle;
+
+                            Func<double, Point> getPoint = a => new Point(
+                                center.X + radius * Math.Cos(a),
+                                center.Y + radius * Math.Sin(a));
+
+                            var startPoint = getPoint(angle);
+
+                            if (!figureOpen)
+                            {
+                                ctx.BeginFigure(startPoint, true);
+                                figureStart = startPoint;
+                                figureOpen = true;
+                            }
+                            else if (!AreClose(current, startPoint))
+                            {
+                                ctx.LineTo(startPoint);
+                            }
+
+                            current = startPoint;
+
+                            for (int i = 0; i < segments; i++)
+                            {
+                                var nextAngle = angle + step;
+                                var endPoint = getPoint(nextAngle);
+                                var k = 4.0 / 3.0 * Math.Tan(step / 4.0);
+                                var control1 = new Point(
+                                    current.X - radius * k * Math.Sin(angle),
+                                    current.Y + radius * k * Math.Cos(angle));
+                                var control2 = new Point(
+                                    endPoint.X + radius * k * Math.Sin(nextAngle),
+                                    endPoint.Y - radius * k * Math.Cos(nextAngle));
+
+                                ctx.CubicBezierTo(control1, control2, endPoint);
+                                current = endPoint;
+                                angle = nextAngle;
+                            }
+                        }
+                        break;
+
+                    case CanvasPathCommandKind.Rect:
+                        {
+                            var r = new Rect(cmd.X1, cmd.Y1, cmd.X2, cmd.Y2);
+                            if (r.Width <= 0 || r.Height <= 0)
+                            {
+                                break;
+                            }
+
+                            var p1 = r.TopLeft;
+                            var p2 = r.TopRight;
+                            var p3 = r.BottomRight;
+                            var p4 = r.BottomLeft;
+
+                            ctx.BeginFigure(p1, true);
+                            ctx.LineTo(p2);
+                            ctx.LineTo(p3);
+                            ctx.LineTo(p4);
+                            ctx.EndFigure(true);
+
+                            figureOpen = false;
+                            current = p1;
+                            figureStart = p1;
+                        }
+                        break;
+
+                    case CanvasPathCommandKind.ClosePath:
+                        {
+                            if (figureOpen)
+                            {
+                                ctx.EndFigure(true);
+                                figureOpen = false;
+                                current = figureStart;
+                            }
+                        }
+                        break;
+                }
+            }
+
+            if (figureOpen)
+            {
+                ctx.EndFigure(false);
+            }
+        }
+        return geometry;
+    }
+
+    private bool TryBuildVisuallyCircularRoundedRect(StreamGeometryContext context)
+    {
+        // Chromium's antialiasing makes a square rounded rectangle with only a
+        // one-pixel radius deficit read as a circle. Skia retains the resulting
+        // two-pixel axial segments much more distinctly at high DPI, which is
+        // especially visible around small canvas badges. Canonicalize only the
+        // tightly constrained four-arc shape; normal rounded rectangles keep
+        // their exact Canvas2D geometry.
+        var commands = _model.Commands;
+        if (commands.Count != 10
+            || commands[0].Kind != CanvasPathCommandKind.MoveTo
+            || commands[1].Kind != CanvasPathCommandKind.LineTo
+            || commands[2].Kind != CanvasPathCommandKind.ArcTo
+            || commands[3].Kind != CanvasPathCommandKind.LineTo
+            || commands[4].Kind != CanvasPathCommandKind.ArcTo
+            || commands[5].Kind != CanvasPathCommandKind.LineTo
+            || commands[6].Kind != CanvasPathCommandKind.ArcTo
+            || commands[7].Kind != CanvasPathCommandKind.LineTo
+            || commands[8].Kind != CanvasPathCommandKind.ArcTo
+            || commands[9].Kind != CanvasPathCommandKind.ClosePath)
+        {
+            return false;
+        }
+
+        const double tolerance = 0.001;
+        var topRight = commands[2];
+        var bottomRight = commands[4];
+        var bottomLeft = commands[6];
+        var topLeft = commands[8];
+        var left = topLeft.X1;
+        var top = topLeft.Y1;
+        var right = topRight.X1;
+        var bottom = bottomRight.Y1;
+        var width = right - left;
+        var height = bottom - top;
+        var radius = topRight.Radius;
+
+        static bool Close(double first, double second)
+            => Math.Abs(first - second) <= tolerance;
+
+        if (width <= 0
+            || height <= 0
+            || !Close(width, height)
+            || radius <= 0
+            || radius > width / 2 + tolerance
+            || width - radius * 2 > 2 + tolerance
+            || !Close(bottomRight.X1, right)
+            || !Close(bottomLeft.X1, left)
+            || !Close(bottomLeft.Y1, bottom)
+            || !Close(topRight.Y1, top)
+            || !Close(topLeft.X1, left)
+            || !Close(topLeft.Y1, top)
+            || !Close(bottomRight.Radius, radius)
+            || !Close(bottomLeft.Radius, radius)
+            || !Close(topLeft.Radius, radius)
+            || !Close(commands[0].X1, left + radius)
+            || !Close(commands[0].Y1, top)
+            || !Close(commands[1].X1, right - radius)
+            || !Close(commands[1].Y1, top)
+            || !Close(topRight.X2, right)
+            || !Close(topRight.Y2, top + radius)
+            || !Close(commands[3].X1, right)
+            || !Close(commands[3].Y1, bottom - radius)
+            || !Close(bottomRight.X2, right - radius)
+            || !Close(bottomRight.Y2, bottom)
+            || !Close(commands[5].X1, left + radius)
+            || !Close(commands[5].Y1, bottom)
+            || !Close(bottomLeft.X2, left)
+            || !Close(bottomLeft.Y2, bottom - radius)
+            || !Close(commands[7].X1, left)
+            || !Close(commands[7].Y1, top + radius)
+            || !Close(topLeft.X2, left + radius)
+            || !Close(topLeft.Y2, top))
+        {
+            return false;
+        }
+
+        var center = new Point((left + right) / 2, (top + bottom) / 2);
+        var circleRadius = width / 2;
+        var arcSize = new Size(circleRadius, circleRadius);
+        context.BeginFigure(new Point(center.X, top), true);
+        context.ArcTo(new Point(right, center.Y), arcSize, 0, false, SweepDirection.Clockwise);
+        context.ArcTo(new Point(center.X, bottom), arcSize, 0, false, SweepDirection.Clockwise);
+        context.ArcTo(new Point(left, center.Y), arcSize, 0, false, SweepDirection.Clockwise);
+        context.ArcTo(new Point(center.X, top), arcSize, 0, false, SweepDirection.Clockwise);
         context.EndFigure(true);
-
-        figureOpen = false;
-        currentPoint = p1;
-        figureStart = p1;
-    }
-}
-
-internal sealed class ClosePathSegment : ICanvasPathSegment
-{
-    public void Apply(StreamGeometryContext context, ref Point currentPoint, ref Point figureStart, ref bool figureOpen)
-    {
-        if (figureOpen)
-        {
-            context.EndFigure(true);
-            figureOpen = false;
-            currentPoint = figureStart;
-        }
+        return true;
     }
 }

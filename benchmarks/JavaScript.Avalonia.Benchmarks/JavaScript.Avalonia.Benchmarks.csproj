@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HtmlML.Backend.Avalonia\HtmlML.Backend.Avalonia.csproj" />
+    <ProjectReference Include="..\..\src\JavaScript.Avalonia.ClearScript\JavaScript.Avalonia.ClearScript.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="Avalonia.Skia" />
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+  <Import Project="..\..\build\HtmlMlClearScriptV8Native.targets" />
+</Project>

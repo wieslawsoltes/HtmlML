@@ -25,7 +25,10 @@ internal static class CanvasContextBridge
         public CanvasAttachment(Control target)
         {
             _target = target ?? throw new ArgumentNullException(nameof(target));
-            _surface = new CanvasDrawingSurface();
+            // DOM canvases are now real drawing controls in the visual tree.
+            // Existing arbitrary controls retain the adorner compatibility
+            // path, but must not be used for DOM-created <canvas> elements.
+            _surface = target as CanvasDrawingSurface ?? new CanvasDrawingSurface();
             _context = _surface.Context;
 
             EnsureInteractiveTarget();
@@ -83,6 +86,8 @@ internal static class CanvasContextBridge
 
         private bool UsesNativeOpenGlTarget => ReferenceEquals(_openGlSurface, _target) || _target is CanvasOpenGlDrawingSurface;
 
+        private bool UsesInTreeCanvasSurface => ReferenceEquals(_surface, _target);
+
         private static bool IsAttached(Visual visual) => visual.GetVisualRoot() is not null;
 
         private void EnsureInteractiveTarget()
@@ -132,7 +137,7 @@ internal static class CanvasContextBridge
 
         private void AttachToLayer()
         {
-            if (UsesNativeOpenGlTarget)
+            if (UsesNativeOpenGlTarget || UsesInTreeCanvasSurface)
             {
                 return;
             }
@@ -150,7 +155,27 @@ internal static class CanvasContextBridge
 
             AdornerLayer.SetAdornedElement(_surface, _target);
             AdornerLayer.SetIsClipEnabled(_surface, true);
-            layer.Children.Add(_surface);
+
+            // Respect z-index for chart layers (axes, crosshair, plot overlays).
+            // AdornerLayer paints in Children order (later on top) and also honors ZIndex on its children.
+            int insertAt = layer.Children.Count;
+            var targetZ = _target.GetValue(Canvas.ZIndexProperty);
+            if (targetZ is int tz)
+            {
+                _surface.SetValue(Canvas.ZIndexProperty, tz);
+                // Insert before the first existing child that has a strictly higher z (so higher z end up later).
+                for (int i = 0; i < layer.Children.Count; i++)
+                {
+                    var ez = layer.Children[i].GetValue(Canvas.ZIndexProperty);
+                    if (ez is int ezv && ezv > tz)
+                    {
+                        insertAt = i;
+                        break;
+                    }
+                }
+            }
+            layer.Children.Insert(insertAt, _surface);
+
             _layer = layer;
             _surface.InvalidateVisual();
 
@@ -240,7 +265,23 @@ internal static class CanvasContextBridge
 
             AdornerLayer.SetAdornedElement(surface, _target);
             AdornerLayer.SetIsClipEnabled(surface, true);
-            layer.Children.Add(surface);
+
+            int insertAt = layer.Children.Count;
+            var targetZ2 = _target.GetValue(Canvas.ZIndexProperty);
+            if (targetZ2 is int tz2)
+            {
+                surface.SetValue(Canvas.ZIndexProperty, tz2);
+                for (int i = 0; i < layer.Children.Count; i++)
+                {
+                    var ez = layer.Children[i].GetValue(Canvas.ZIndexProperty);
+                    if (ez is int ezv && ezv > tz2)
+                    {
+                        insertAt = i;
+                        break;
+                    }
+                }
+            }
+            layer.Children.Insert(insertAt, surface);
         }
     }
 
@@ -283,6 +324,42 @@ internal static class CanvasContextBridge
 
         surface = null;
         return false;
+    }
+
+    internal static bool TryGetVirtualSize(Control control, out double width, out double height)
+    {
+        if (control is not null && s_attachments.TryGetValue(control, out var attachment))
+        {
+            width = attachment.Surface.VirtualWidth;
+            height = attachment.Surface.VirtualHeight;
+            return true;
+        }
+
+        width = 0;
+        height = 0;
+        return false;
+    }
+
+    internal static void SetVirtualSize(Control control, double? width = null, double? height = null)
+    {
+        if (control is null)
+        {
+            return;
+        }
+
+        var attachment = s_attachments.GetValue(control, static c => new CanvasAttachment(c));
+        if (width is { } w && double.IsFinite(w) && w >= 0)
+        {
+            attachment.Surface.VirtualWidth = w;
+        }
+
+        if (height is { } h && double.IsFinite(h) && h >= 0)
+        {
+            attachment.Surface.VirtualHeight = h;
+        }
+
+        attachment.Reset2D();
+        attachment.Surface.InvalidateCanvasVisual();
     }
 
     internal static void Reset2D(Control control)
