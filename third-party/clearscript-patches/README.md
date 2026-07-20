@@ -73,10 +73,10 @@ for every RID and could silently bypass this patch outside the one local output 
 was overwritten. Every native binary must now be supplied explicitly.
 
 The source dependencies are registered as `third-party/clearscript` and
-`third-party/v8` submodules. The local ClearScript `htmlml/7.5.1` branch contains the
-trusted context patch; the local V8 `htmlml/clearscript-7.5.1` branch contains
-ClearScript's compatibility patchset at revision `14.7.173.23`. Their `.gitmodules`
-URLs remain the official upstream URLs until the HtmlML fork remotes are assigned.
+`third-party/v8` submodules. The HtmlML-owned ClearScript fork publishes the
+`htmlml/7.5.1` branch containing the trusted-context and optional typed-ABI commits;
+Microsoft's repository remains its upstream. V8 stays pinned to upstream revision
+`14.7.173.23`, with ClearScript's matching compatibility patchset applied by the build.
 
 For macOS and Linux, initialize the submodules and build from the ClearScript branch.
 The first RID downloads the tested V8 build dependencies; later RIDs reuse that
