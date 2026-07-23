@@ -37,6 +37,14 @@ if ([string]::IsNullOrWhiteSpace($V8Root)) {
     $depotTools = Join-Path $V8Workspace "depot_tools"
     $V8Root = Join-Path $V8Workspace "v8"
     New-Item -ItemType Directory -Force -Path $V8Workspace | Out-Null
+    # depot_tools may run without a persistent global Git configuration on
+    # hosted Windows runners. Force LF checkouts for the pinned V8 sources so
+    # the upstream ClearScript patches apply identically on every platform.
+    $env:GIT_CONFIG_COUNT = "2"
+    $env:GIT_CONFIG_KEY_0 = "core.autocrlf"
+    $env:GIT_CONFIG_VALUE_0 = "false"
+    $env:GIT_CONFIG_KEY_1 = "core.eol"
+    $env:GIT_CONFIG_VALUE_1 = "lf"
     if (-not (Test-Path (Join-Path $depotTools ".git"))) {
         & git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git $depotTools
         if ($LASTEXITCODE -ne 0) { throw "Failed to clone depot_tools." }
@@ -62,13 +70,13 @@ if ([string]::IsNullOrWhiteSpace($V8Root)) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to synchronize V8 $v8Revision." }
 
     function Apply-PatchOnce([string] $Checkout, [string] $PatchPath) {
-        & git -C $Checkout apply --check $PatchPath 2>$null
+        & git -C $Checkout apply --check --ignore-space-change $PatchPath
         if ($LASTEXITCODE -eq 0) {
-            & git -C $Checkout apply $PatchPath
+            & git -C $Checkout apply --ignore-space-change $PatchPath
             if ($LASTEXITCODE -ne 0) { throw "Failed to apply V8 patch '$PatchPath'." }
             return
         }
-        & git -C $Checkout apply --reverse --check $PatchPath 2>$null
+        & git -C $Checkout apply --reverse --check --ignore-space-change $PatchPath
         if ($LASTEXITCODE -ne 0) {
             throw "Cannot apply or recognize V8 patch '$PatchPath' in '$Checkout'."
         }
@@ -77,7 +85,7 @@ if ([string]::IsNullOrWhiteSpace($V8Root)) {
     Apply-PatchOnce (Join-Path $V8Root "build") (Join-Path $repoRoot "third-party/clearscript/V8/BuildPatch.txt")
     Apply-PatchOnce (Join-Path $V8Root "third_party/icu") (Join-Path $repoRoot "third-party/clearscript/V8/ICUPatch.txt")
 
-    $gnArgs = 'fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false is_official_build=true symbol_level=0 target_cpu="{0}" use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string="-HtmlML" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu="{0}"' -f $cpu
+    $gnArgs = 'chrome_pgo_phase=0 fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false is_official_build=true symbol_level=0 target_cpu="{0}" use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string="-HtmlML" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu="{0}"' -f $cpu
     Push-Location $V8Root
     try {
         & gn.bat gen "out/$cpu/Release" "--args=$gnArgs"
