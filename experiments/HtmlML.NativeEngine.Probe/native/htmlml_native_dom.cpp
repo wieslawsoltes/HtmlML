@@ -1,6 +1,7 @@
 #include "htmlml_native_dom.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cctype>
