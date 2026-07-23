@@ -60,6 +60,9 @@ if [[ -z "$v8_root" ]]; then
     git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$depot_tools"
   fi
   export PATH="$depot_tools:$PATH"
+  if [[ ! -f "$depot_tools/python3_bin_reldir.txt" ]]; then
+    "$depot_tools/ensure_bootstrap"
+  fi
   export DEPOT_TOOLS_UPDATE=0
 
   if [[ ! -f "$v8_workspace/.gclient" ]]; then
