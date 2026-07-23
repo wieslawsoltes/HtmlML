@@ -42,6 +42,11 @@ if ([string]::IsNullOrWhiteSpace($V8Root)) {
         if ($LASTEXITCODE -ne 0) { throw "Failed to clone depot_tools." }
     }
     $env:Path = "$depotTools;$env:Path"
+    $depotToolsGit = Join-Path $depotTools "git.bat"
+    if (-not (Test-Path $depotToolsGit)) {
+        & (Join-Path $depotTools "bootstrap/win_tools.bat")
+        if ($LASTEXITCODE -ne 0) { throw "Failed to bootstrap depot_tools for Windows." }
+    }
     $env:DEPOT_TOOLS_UPDATE = "0"
     $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
 
