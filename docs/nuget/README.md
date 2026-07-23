@@ -25,5 +25,12 @@ The package line is prerelease. Managed packages in one release must use the sam
 version. Native applications must select the runtime package matching their explicit
 `RuntimeIdentifier`.
 
+The release workflow caches a minimal pinned V8 SDK independently for each RID. The
+cache contains only the V8 headers, monolithic library, ICU data, and licenses needed
+to link HtmlML's native bridge. Its key includes the hosted-runner image, ClearScript
+revision, V8 build scripts, and HtmlML compatibility patches. Consequently, ordinary
+HtmlML changes rebuild and relink only the native bridge; V8 is rebuilt whenever any
+input capable of changing its ABI or binary output changes.
+
 Documentation, compatibility policy, source, and issue tracking are available from
 the [HtmlML repository](https://github.com/wieslawsoltes/HtmlML).

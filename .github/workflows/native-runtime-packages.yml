@@ -91,12 +91,18 @@ jobs:
         include:
         - os: macos-latest
           rid: osx-arm64
+          cpu: arm64
+          monolith: libv8_monolith.a
           script: unix
         - os: ubuntu-latest
           rid: linux-x64
+          cpu: x64
+          monolith: libv8_monolith.a
           script: unix
         - os: windows-latest
           rid: win-x64
+          cpu: x64
+          monolith: v8_monolith.lib
           script: windows
     runs-on: ${{ matrix.os }}
     steps:
@@ -110,21 +116,48 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         global-json-file: global.json
+    - id: v8-cache-key
+      name: Resolve pinned V8 SDK cache identity
+      shell: bash
+      run: |
+        echo "image-version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+        echo "clearscript-revision=$(git -C third-party/clearscript rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+    - id: v8-cache
+      name: Restore pinned V8 SDK
+      uses: actions/cache@v4
+      with:
+        path: |
+          artifacts/native-engine-v8/${{ matrix.rid }}/v8/include
+          artifacts/native-engine-v8/${{ matrix.rid }}/v8/out/${{ matrix.cpu }}/Release/obj/${{ matrix.monolith }}
+          artifacts/native-engine-v8/${{ matrix.rid }}/v8/out/${{ matrix.cpu }}/Release/icudtl.dat
+          artifacts/native-engine-v8/${{ matrix.rid }}/v8/LICENSE
+          artifacts/native-engine-v8/${{ matrix.rid }}/v8/third_party/icu/LICENSE
+        key: htmlml-v8-sdk-v1-${{ matrix.rid }}-${{ steps.v8-cache-key.outputs.image-version }}-${{ steps.v8-cache-key.outputs.clearscript-revision }}-${{ hashFiles('scripts/build-native-engine-runtime.sh', 'scripts/build-native-engine-runtime.ps1', 'packaging/HtmlML.NativeEngine.Runtime/patches/**', 'third-party/clearscript/V8/*.txt') }}
     - name: Build, pack, and test Unix runtime
       if: matrix.script == 'unix'
       shell: bash
       run: |
+        v8_root=
+        if [[ '${{ steps.v8-cache.outputs.cache-hit }}' == true ]]; then
+          v8_root="$GITHUB_WORKSPACE/artifacts/native-engine-v8/${{ matrix.rid }}/v8"
+        fi
         scripts/build-native-engine-runtime.sh \
           --rid '${{ matrix.rid }}' \
           --package-version '${{ needs.metadata.outputs.package-version }}' \
+          --v8-root "$v8_root" \
           --output "$GITHUB_WORKSPACE/artifacts/nuget-packages"
     - name: Build, pack, and test Windows runtime
       if: matrix.script == 'windows'
       shell: pwsh
       run: |
+        $v8Root = ""
+        if ('${{ steps.v8-cache.outputs.cache-hit }}' -eq 'true') {
+          $v8Root = "$env:GITHUB_WORKSPACE/artifacts/native-engine-v8/${{ matrix.rid }}/v8"
+        }
         ./scripts/build-native-engine-runtime.ps1 `
           -Rid '${{ matrix.rid }}' `
           -PackageVersion '${{ needs.metadata.outputs.package-version }}' `
+          -V8Root $v8Root `
           -Output "$env:GITHUB_WORKSPACE/artifacts/nuget-packages"
     - name: Upload verified RID package
       uses: actions/upload-artifact@v4
