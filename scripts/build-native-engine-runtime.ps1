@@ -82,12 +82,13 @@ if ([string]::IsNullOrWhiteSpace($V8Root)) {
         }
     }
     Apply-PatchOnce $V8Root (Join-Path $repoRoot "third-party/clearscript/V8/V8Patch.txt")
+    Apply-PatchOnce $V8Root (Join-Path $repoRoot "packaging/HtmlML.NativeEngine.Runtime/patches/V8ToolchainPatch.txt")
     Apply-PatchOnce (Join-Path $V8Root "build") (Join-Path $repoRoot "third-party/clearscript/V8/BuildPatch.txt")
     Apply-PatchOnce (Join-Path $V8Root "third_party/icu") (Join-Path $repoRoot "third-party/clearscript/V8/ICUPatch.txt")
 
     # Backslash-escaped quotes survive PowerShell's native argument marshalling
     # and reach GN as string delimiters (the form used by ClearScript itself).
-    $gnArgs = 'chrome_pgo_phase=0 fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false symbol_level=0 target_cpu=\"{0}\" use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string=\"-HtmlML\" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu=\"{0}\"' -f $cpu
+    $gnArgs = 'chrome_pgo_phase=0 fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false symbol_level=0 target_cpu=\"{0}\" treat_warnings_as_errors=false use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string=\"-HtmlML\" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu=\"{0}\"' -f $cpu
     Push-Location $V8Root
     try {
         & gn.bat gen "out/$cpu/Release" "--args=$gnArgs"

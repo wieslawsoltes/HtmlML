@@ -87,6 +87,7 @@ if [[ -z "$v8_root" ]]; then
     fi
   }
   apply_patch_once "$v8_root" "$repo_root/third-party/clearscript/V8/V8Patch.txt"
+  apply_patch_once "$v8_root" "$repo_root/packaging/HtmlML.NativeEngine.Runtime/patches/V8ToolchainPatch.txt"
   apply_patch_once "$v8_root/build" "$repo_root/third-party/clearscript/V8/BuildPatch.txt"
   apply_patch_once "$v8_root/third_party/icu" "$repo_root/third-party/clearscript/V8/ICUPatch.txt"
 
@@ -94,7 +95,7 @@ if [[ -z "$v8_root" ]]; then
     "$v8_root/build/linux/sysroot_scripts/install-sysroot.py" --arch="$cpu"
   fi
 
-  gn_args="chrome_pgo_phase=0 fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false symbol_level=0 target_cpu=\"$cpu\" use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string=\"-HtmlML\" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu=\"$cpu\""
+  gn_args="chrome_pgo_phase=0 fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false symbol_level=0 target_cpu=\"$cpu\" treat_warnings_as_errors=false use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string=\"-HtmlML\" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu=\"$cpu\""
   (
     cd "$v8_root"
     gn gen "out/$cpu/Release" --args="$gn_args"
