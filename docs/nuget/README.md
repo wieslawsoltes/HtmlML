@@ -17,16 +17,15 @@ The complete release inventory is:
   `HtmlML.Backend.Avalonia`, `JavaScript.Avalonia.ClearScript`, `HtmlML.Sdk`,
   and `HtmlML.Sdk.Avalonia`;
 - project templates: `HtmlML.Templates`;
-- native runtimes: `HtmlML.NativeEngine.Runtime.osx-arm64`,
-  `HtmlML.NativeEngine.Runtime.win-x64`.
+- native runtimes: `HtmlML.NativeEngine.Runtime.osx-arm64`.
 
 The package line is prerelease. Managed packages in one release must use the same
 version. Native applications must select the runtime package matching their explicit
 `RuntimeIdentifier`.
 
-`linux-x64` publishing is temporarily deferred while the pinned V8 monolith is moved
-to a faster, linker-compatible build lane. Linux remains a source-build target but is
-not part of the current NuGet release inventory.
+`win-x64` and `linux-x64` publishing are temporarily deferred while their pinned V8
+builds move to faster, independently validated lanes. Both remain source-build
+targets but are not part of the current NuGet release inventory.
 
 The release workflow caches a minimal pinned V8 SDK independently for each RID. The
 cache contains only the V8 headers, monolithic library, ICU data, and licenses needed
