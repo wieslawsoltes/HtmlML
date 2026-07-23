@@ -125,9 +125,11 @@ engine; for example, an Avalonia host using the native engine on macOS ARM64 use
 </ItemGroup>
 ```
 
-Use `linux-x64` or `win-x64` in the runtime package ID for those published RIDs and
-set the application's matching `RuntimeIdentifier`. The runtime package copies the
-native module, ICU data, and version/ABI manifest to build and publish output.
+Use `win-x64` in the runtime package ID for the published Windows RID and set the
+application's matching `RuntimeIdentifier`. The runtime package copies the native
+module, ICU data, and version/ABI manifest to build and publish output. `linux-x64`
+publishing is temporarily deferred while its pinned V8 build moves to a faster,
+linker-compatible lane.
 
 ## Using HtmlML
 

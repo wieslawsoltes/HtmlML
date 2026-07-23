@@ -79,7 +79,14 @@ else()
 endif()
 
 if(MSVC)
-    target_compile_options(htmlml_native_engine PRIVATE /W4 /permissive- /GR- /wd4996)
+    # MSVC reports the historical C++98 value through __cplusplus unless this
+    # conformance switch is enabled. V8 checks __cplusplus directly when
+    # enforcing its C++20 embedder requirement.
+    target_compile_options(htmlml_native_engine PRIVATE
+        /W4 /permissive- /GR- /wd4996 /Zc:__cplusplus)
+    if(TARGET htmlml_native_engine_tests)
+        target_compile_options(htmlml_native_engine_tests PRIVATE /Zc:__cplusplus)
+    endif()
 else()
     target_compile_options(htmlml_native_engine PRIVATE
         -Wall -Wextra -Wpedantic -fno-rtti -Wno-deprecated-declarations)
