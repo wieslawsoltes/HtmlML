@@ -7,5 +7,13 @@
   "shortName": "htmlml-component-host",
   "sourceName": "HtmlMLComponentHost",
   "preferNameDirectory": true,
+  "symbols": {
+    "htmlmlVersion": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "11.3.4-alpha.3",
+      "replaces": "HTMLML_PACKAGE_VERSION"
+    }
+  },
   "primaryOutputs": [{ "path": "HtmlMLComponentHost.csproj" }]
 }

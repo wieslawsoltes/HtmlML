@@ -18,8 +18,13 @@ if ([string]::IsNullOrWhiteSpace($Output)) {
 }
 $cpu = if ($Rid -eq "win-arm64") { "arm64" } else { "x64" }
 if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
-    [xml] $buildProperties = Get-Content (Join-Path $repoRoot "Directory.Build.props")
-    $PackageVersion = $buildProperties.SelectSingleNode("/Project/PropertyGroup/VersionPrefix").InnerText
+    $versionOutput = & dotnet msbuild `
+        (Join-Path $repoRoot "src/HtmlML.Core/HtmlML.Core.csproj") `
+        -getProperty:PackageVersion -nologo
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to evaluate the HtmlML package version."
+    }
+    $PackageVersion = ($versionOutput | Select-Object -Last 1).Trim()
 }
 if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
     throw "Unable to resolve the native runtime package version."

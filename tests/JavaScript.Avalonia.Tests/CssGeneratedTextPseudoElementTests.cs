@@ -23,7 +23,7 @@ public sealed class CssGeneratedTextPseudoElementTests
         var style = HostTestUtilities.GetElement(document.createElement("style"));
         style.textContent = """
             html, body { margin: 0; }
-            #generated { width: 100px; }
+            #generated { font-size: 16px; line-height: 20px; width: 100px; }
             #generated::before { content: "Filler text"; display: block; }
             """;
         document.head.appendChild(style);

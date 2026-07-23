@@ -1,9 +1,11 @@
 <Project>
+  <Import Project="..\Directory.Build.props" />
   <PropertyGroup>
     <RepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\'))</RepositoryRoot>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <PackageOutputPath Condition="'$(PackageOutputPath)' == ''">$(RepositoryRoot)artifacts\runtime-packages\</PackageOutputPath>
-    <HtmlMlPackageVersion Condition="'$(HtmlMlPackageVersion)' == ''">11.3.6</HtmlMlPackageVersion>
+    <HtmlMlPackageVersion Condition="'$(HtmlMlPackageVersion)' == '' and '$(VersionSuffix)' != ''">$(VersionPrefix)-$(VersionSuffix)</HtmlMlPackageVersion>
+    <HtmlMlPackageVersion Condition="'$(HtmlMlPackageVersion)' == ''">$(VersionPrefix)</HtmlMlPackageVersion>
   </PropertyGroup>
 
   <ItemGroup>

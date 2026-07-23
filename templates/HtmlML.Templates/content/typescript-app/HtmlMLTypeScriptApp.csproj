@@ -10,8 +10,9 @@
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" Version="11.3.4" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.4" />
-    <PackageReference Include="HtmlML.Sdk" Version="11.3.4" />
-    <PackageReference Include="HtmlML.Sdk.Avalonia" Version="11.3.4" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
+    <PackageReference Include="HtmlML.Sdk" Version="HTMLML_PACKAGE_VERSION" />
+    <PackageReference Include="HtmlML.Sdk.Avalonia" Version="HTMLML_PACKAGE_VERSION" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Component\**\*" CopyToOutputDirectory="PreserveNewest" />

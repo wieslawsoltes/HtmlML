@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup Condition="'$(IsPackable)' == 'true' and '$(PackageReadmeFile)' == ''">
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <HtmlMlUsesSharedPackageReadme>true</HtmlMlUsesSharedPackageReadme>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(HtmlMlUsesSharedPackageReadme)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)docs\nuget\README.md"
+          Pack="true"
+          PackagePath="README.md"
+          Condition="Exists('$(MSBuildThisFileDirectory)docs\nuget\README.md')" />
+  </ItemGroup>
+</Project>

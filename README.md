@@ -1,11 +1,11 @@
 # HtmlML
 
-[![HtmlML NuGet](https://img.shields.io/nuget/vpre/HtmlML.svg)](https://www.nuget.org/packages/HtmlML/) [![JavaScript.Avalonia NuGet](https://img.shields.io/nuget/vpre/JavaScript.Avalonia.svg)](https://www.nuget.org/packages/JavaScript.Avalonia/)
+[![HtmlML NuGet](https://img.shields.io/nuget/vpre/HtmlML.svg)](https://www.nuget.org/packages/HtmlML/) [![HtmlML Backend NuGet](https://img.shields.io/nuget/vpre/HtmlML.Backend.Avalonia.svg)](https://www.nuget.org/packages/HtmlML.Backend.Avalonia/)
 
 HtmlML brings HTML-inspired markup and V8 scripting capabilities to [Avalonia](https://avaloniaui.net/). The repository contains reusable markup, browser-services, and runtime libraries:
 
 - **HtmlML** – a markup layer that renders HTML-like tags inside Avalonia applications, complete with styling and canvas support.
-- **JavaScript.Avalonia** – engine-neutral DOM, browser, event, canvas, and layout services for any Avalonia `TopLevel`.
+- **HtmlML.Backend.Avalonia** – DOM, browser, event, canvas, layout, and presentation services for Avalonia.
 - **JavaScript.Avalonia.ClearScript** – the ClearScript/V8 execution adapter, module loader, virtual-iframe runtime, and compilation cache.
 - **HtmlML.Sdk** – versioned component manifests, compatibility checks, offline assets, lifecycle diagnostics, and the capability-based host bridge.
 - **HtmlML.Sdk.Avalonia** – the XAML-first packaged React/TypeScript component host.
@@ -115,17 +115,19 @@ native V8 package for their target RID.
 
 ### Consuming the libraries
 
-NuGet packages are not yet published. To reference the projects locally:
+The current package line is prerelease. Reference the packages needed by the selected
+engine; for example, an Avalonia host using the native engine on macOS ARM64 uses:
 
 ```xml
 <ItemGroup>
-  <ProjectReference Include="..\src\HtmlML\HtmlML.csproj" />
-  <ProjectReference Include="..\src\HtmlML.Backend.Avalonia\HtmlML.Backend.Avalonia.csproj" />
-  <ProjectReference Include="..\src\JavaScript.Avalonia.ClearScript\JavaScript.Avalonia.ClearScript.csproj" />
+  <PackageReference Include="HtmlML.Backend.Avalonia" Version="11.3.4-alpha.3" />
+  <PackageReference Include="HtmlML.NativeEngine.Runtime.osx-arm64" Version="11.3.4-alpha.3" />
 </ItemGroup>
 ```
 
-For the Avalonia presentation layer, reference `HtmlML.Backend.Avalonia` directly.
+Use `linux-x64` or `win-x64` in the runtime package ID for those published RIDs and
+set the application's matching `RuntimeIdentifier`. The runtime package copies the
+native module, ICU data, and version/ABI manifest to build and publish output.
 
 ## Using HtmlML
 

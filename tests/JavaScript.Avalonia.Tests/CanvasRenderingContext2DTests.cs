@@ -993,7 +993,10 @@ public class CanvasRenderingContext2DTests
         Assert.Equal(14, command.Snapshot.FontSize);
         Assert.Equal(FontStyle.Italic, command.Snapshot.Typeface.Style);
         Assert.Equal(FontWeight.Bold, command.Snapshot.Typeface.Weight);
-        Assert.Contains("Menlo", command.Snapshot.Typeface.FontFamily.Name, StringComparison.OrdinalIgnoreCase);
+        Assert.False(string.IsNullOrWhiteSpace(command.Snapshot.Typeface.FontFamily.Name));
+        Assert.Equal(
+            new[] { "Menlo", "Monaco", "Courier New", "monospace" },
+            CssFontResolver.ParseFamilyList("Menlo, Monaco, \"Courier New\", monospace"));
     }
 
     [AvaloniaFact]

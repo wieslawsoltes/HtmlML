@@ -7,5 +7,13 @@
   "shortName": "htmlml-typescript",
   "sourceName": "HtmlMLTypeScriptApp",
   "preferNameDirectory": true,
+  "symbols": {
+    "htmlmlVersion": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "11.3.4-alpha.3",
+      "replaces": "HTMLML_PACKAGE_VERSION"
+    }
+  },
   "primaryOutputs": [{ "path": "HtmlMLTypeScriptApp.csproj" }]
 }

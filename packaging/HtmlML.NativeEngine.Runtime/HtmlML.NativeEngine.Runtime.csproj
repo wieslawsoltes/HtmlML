@@ -13,7 +13,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>htmlml;dom;css;v8;native;runtime</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <HtmlMlNativeEngineAbiVersion>1</HtmlMlNativeEngineAbiVersion>
+    <HtmlMlNativeEngineAbiVersion>2</HtmlMlNativeEngineAbiVersion>
     <HtmlMlNativeEngineV8Revision>14.7.173.23</HtmlMlNativeEngineV8Revision>
     <HtmlMlNativeEngineSupportedRids>osx-arm64;osx-x64;linux-arm64;linux-x64;win-arm64;win-x64</HtmlMlNativeEngineSupportedRids>
     <HtmlMlNativeEngineExpectedFileName Condition="$([System.String]::Copy('$(HtmlMlNativeEngineRid)').StartsWith('osx-'))">libhtmlml_native_engine.dylib</HtmlMlNativeEngineExpectedFileName>

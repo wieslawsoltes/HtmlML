@@ -78,6 +78,7 @@ public sealed class CssAbsoluteInlineStaticPositionSpikeTests
                 position: absolute;
                 width: 10px;
             }
+            .token { display: inline-block; width: 5px; }
             """;
         document.head.appendChild(style);
 
@@ -114,6 +115,7 @@ public sealed class CssAbsoluteInlineStaticPositionSpikeTests
             html, body { height: 50px; margin: 0; padding: 0; width: 120px; }
             html { font-size: 10px; line-height: 1; }
             .abspos { height: 10px; position: absolute; width: 10px; }
+            .token { display: inline-block; width: 5px; }
             """;
         document.head.appendChild(style);
         var body = HostTestUtilities.GetElement(document.body);
@@ -121,14 +123,14 @@ public sealed class CssAbsoluteInlineStaticPositionSpikeTests
               <div>
                 <span>
                   <span style="margin-right: -10px;">
-                    x<span class="abspos"></span>
+                    <span class="token">x</span><span class="abspos"></span>
                   </span>
                 </span>
               </div>
               <div>
                 <span>
                   <span style="margin-right: -10px;">
-                    x<div class="abspos"></div>
+                    <span class="token">x</span><div class="abspos"></div>
                   </span>
                 </span>
               </div>
@@ -303,7 +305,8 @@ public sealed class CssAbsoluteInlineStaticPositionSpikeTests
         var outer = Append(document, "span", null, row);
         var negative = Append(document, "span", null, outer);
         negative.style.setProperty("margin-right", "-10px");
-        negative.appendChild(Assert.IsAssignableFrom<AvaloniaDomElement>(document.createTextNode("x")));
+        var token = Append(document, "span", "token", negative);
+        token.textContent = "x";
         return Append(document, absoluteTag, "abspos", negative);
     }
 

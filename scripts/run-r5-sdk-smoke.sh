@@ -7,6 +7,11 @@ artifacts="${HTMLML_R5_ARTIFACTS:-$repo_root/TestResults/R5}"
 feed="$artifacts/feed"
 generated="$artifacts/generated"
 cli_home="$artifacts/dotnet-home"
+package_version="$(
+  dotnet msbuild "$repo_root/src/HtmlML.Core/HtmlML.Core.csproj" \
+    -getProperty:PackageVersion -nologo |
+    tail -n 1 | tr -d '\r'
+)"
 
 rm -rf "$artifacts"
 mkdir -p "$feed" "$generated" "$cli_home"
@@ -30,7 +35,7 @@ for project in "${projects[@]}"; do
 done
 
 export DOTNET_CLI_HOME="$cli_home"
-dotnet new install "$feed/HtmlML.Templates.11.3.4.nupkg"
+dotnet new install "$feed/HtmlML.Templates.$package_version.nupkg"
 
 cat > "$generated/NuGet.config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
@@ -46,7 +51,7 @@ EOF
 templates=(htmlml-component-host htmlml-hybrid htmlml-typescript)
 for template in "${templates[@]}"; do
   output="$generated/$template"
-  dotnet new "$template" -n R5Smoke -o "$output"
+  dotnet new "$template" -n R5Smoke -o "$output" --htmlmlVersion "$package_version"
   npm install --prefix "$output/web" --no-package-lock "$repo_root/tooling/htmlml"
   npm run build --prefix "$output/web"
   if grep -q 'process\.env\.NODE_ENV' "$output/Component/dist/main.js"; then

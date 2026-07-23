@@ -1,14 +1,10 @@
-name: Native runtime packages
+name: NuGet packages
 
 on:
   workflow_dispatch:
     inputs:
-      package-version:
-        description: NuGet package version (defaults to Directory.Build.props)
-        required: false
-        type: string
       publish:
-        description: Publish verified packages to NuGet.org
+        description: Publish the verified repository version to NuGet.org
         required: true
         default: false
         type: boolean
@@ -27,29 +23,67 @@ jobs:
       publish: ${{ steps.version.outputs.publish }}
     steps:
     - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
     - id: version
-      name: Resolve package version
+      name: Resolve and validate package version
       shell: bash
       env:
-        REQUESTED_VERSION: ${{ inputs.package-version }}
         REQUESTED_PUBLISH: ${{ inputs.publish }}
       run: |
-        version="$REQUESTED_VERSION"
-        publish="$REQUESTED_PUBLISH"
+        version="$(
+          dotnet msbuild src/HtmlML.Core/HtmlML.Core.csproj \
+            -getProperty:PackageVersion -nologo |
+            tail -n 1 | tr -d '\r'
+        )"
+        publish="${REQUESTED_PUBLISH:-false}"
         if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-          version="${GITHUB_REF_NAME#v}"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "$tag_version" != "$version" ]]; then
+            echo "Tag version '$tag_version' does not match repository PackageVersion '$version'." >&2
+            exit 1
+          fi
           publish=true
-        elif [[ -z "$version" ]]; then
-          version="$(sed -n 's:.*<VersionPrefix>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)"
         fi
         if [[ -z "$version" ]]; then
-          echo "Unable to resolve a package version." >&2
+          echo "Unable to resolve the repository package version." >&2
           exit 1
         fi
         echo "package-version=$version" >> "$GITHUB_OUTPUT"
-        echo "publish=${publish:-false}" >> "$GITHUB_OUTPUT"
+        echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
-  build:
+  managed:
+    name: Pack managed packages
+    needs: metadata
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
+    - name: Pack and verify managed packages
+      shell: bash
+      run: |
+        scripts/pack-managed-packages.sh \
+          --package-version '${{ needs.metadata.outputs.package-version }}' \
+          --output "$GITHUB_WORKSPACE/artifacts/nuget-packages"
+    - name: Upload managed packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: managed-${{ needs.metadata.outputs.package-version }}
+        path: |
+          artifacts/nuget-packages/*.nupkg
+          artifacts/nuget-packages/*.snupkg
+          artifacts/nuget-packages/managed-packages.json
+        if-no-files-found: error
+
+  native:
+    name: Build ${{ matrix.rid }}
     needs: metadata
     strategy:
       fail-fast: false
@@ -64,10 +98,11 @@ jobs:
         - os: windows-latest
           rid: win-x64
           script: windows
-    name: Build ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     - name: Initialize reviewed V8 patch inputs
       shell: bash
       run: git submodule update --init third-party/clearscript
@@ -82,7 +117,7 @@ jobs:
         scripts/build-native-engine-runtime.sh \
           --rid '${{ matrix.rid }}' \
           --package-version '${{ needs.metadata.outputs.package-version }}' \
-          --output "$GITHUB_WORKSPACE/artifacts/native-engine-runtime"
+          --output "$GITHUB_WORKSPACE/artifacts/nuget-packages"
     - name: Build, pack, and test Windows runtime
       if: matrix.script == 'windows'
       shell: pwsh
@@ -90,43 +125,137 @@ jobs:
         ./scripts/build-native-engine-runtime.ps1 `
           -Rid '${{ matrix.rid }}' `
           -PackageVersion '${{ needs.metadata.outputs.package-version }}' `
-          -Output "$env:GITHUB_WORKSPACE/artifacts/native-engine-runtime"
+          -Output "$env:GITHUB_WORKSPACE/artifacts/nuget-packages"
     - name: Upload verified RID package
       uses: actions/upload-artifact@v4
       with:
-        name: native-runtime-${{ matrix.rid }}-${{ needs.metadata.outputs.package-version }}
-        path: artifacts/native-engine-runtime/*.nupkg
+        name: native-${{ matrix.rid }}-${{ needs.metadata.outputs.package-version }}
+        path: artifacts/nuget-packages/*.nupkg
         if-no-files-found: error
 
-  publish:
-    needs: [metadata, build]
-    if: needs.metadata.outputs.publish == 'true'
+  package-set:
+    name: Verify release package set
+    needs: [metadata, managed, native]
     runs-on: ubuntu-latest
-    environment: nuget.org
     steps:
     - uses: actions/checkout@v4
-    - name: Download verified RID packages
+    - name: Download managed packages
       uses: actions/download-artifact@v4
       with:
-        pattern: native-runtime-*-${{ needs.metadata.outputs.package-version }}
-        path: artifacts/native-engine-runtime
+        name: managed-${{ needs.metadata.outputs.package-version }}
+        path: artifacts/nuget-packages
+    - name: Download native packages
+      uses: actions/download-artifact@v4
+      with:
+        pattern: native-*-${{ needs.metadata.outputs.package-version }}
+        path: artifacts/nuget-packages
         merge-multiple: true
+    - name: Verify versions, dependencies, symbols, and package inventory
+      shell: bash
+      run: |
+        python3 scripts/verify-release-packages.py \
+          artifacts/nuget-packages \
+          --version '${{ needs.metadata.outputs.package-version }}' \
+          --output artifacts/nuget-packages/release-packages.json
+        shasum -a 256 \
+          artifacts/nuget-packages/*.nupkg \
+          artifacts/nuget-packages/*.snupkg \
+          > artifacts/nuget-packages/packages.sha256
+    - name: Upload complete verified package set
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-${{ needs.metadata.outputs.package-version }}
+        path: |
+          artifacts/nuget-packages/*.nupkg
+          artifacts/nuget-packages/*.snupkg
+          artifacts/nuget-packages/*.json
+          artifacts/nuget-packages/packages.sha256
+        if-no-files-found: error
+
+  consumer:
+    name: Package consumer ${{ matrix.rid }}
+    needs: [metadata, package-set]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: macos-latest
+          rid: osx-arm64
+        - os: ubuntu-latest
+          rid: linux-x64
+        - os: windows-latest
+          rid: win-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
         global-json-file: global.json
-    - name: Publish to NuGet.org
-      env:
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+    - name: Download verified package set
+      uses: actions/download-artifact@v4
+      with:
+        name: release-${{ needs.metadata.outputs.package-version }}
+        path: artifacts/nuget-packages
+    - name: Restore clean package consumer
       shell: bash
       run: |
-        if [[ -z "$NUGET_API_KEY" ]]; then
-          echo "The nuget.org environment must define the NUGET_API_KEY secret." >&2
+        dotnet restore tests/HtmlML.Runtime.PackageSmoke/HtmlML.Runtime.PackageSmoke.csproj \
+          -p:RuntimeIdentifier='${{ matrix.rid }}' \
+          -p:HtmlMlPackageVersion='${{ needs.metadata.outputs.package-version }}' \
+          --configfile tests/HtmlML.Runtime.PackageSmoke/NuGet.config
+    - name: Build and run clean package consumer
+      shell: bash
+      run: |
+        dotnet run \
+          --project tests/HtmlML.Runtime.PackageSmoke/HtmlML.Runtime.PackageSmoke.csproj \
+          -c Release \
+          -r '${{ matrix.rid }}' \
+          --no-restore \
+          -p:HtmlMlPackageVersion='${{ needs.metadata.outputs.package-version }}'
+
+  publish:
+    name: Publish to NuGet.org
+    needs: [metadata, consumer]
+    if: needs.metadata.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment: nuget.org
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      NUGET_USER: ${{ secrets.NUGET_USER }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Download verified package set
+      uses: actions/download-artifact@v4
+      with:
+        name: release-${{ needs.metadata.outputs.package-version }}
+        path: artifacts/nuget-packages
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
+    - id: trusted-publishing
+      name: Exchange GitHub identity for a temporary NuGet API key
+      if: env.NUGET_API_KEY == '' && env.NUGET_USER != ''
+      uses: NuGet/login@v1
+      with:
+        user: ${{ env.NUGET_USER }}
+    - name: Publish packages and symbols
+      env:
+        TRUSTED_PUBLISHING_API_KEY: ${{ steps.trusted-publishing.outputs.NUGET_API_KEY }}
+      shell: bash
+      run: |
+        api_key="${NUGET_API_KEY:-$TRUSTED_PUBLISHING_API_KEY}"
+        if [[ -z "$api_key" ]]; then
+          echo "Configure either NUGET_API_KEY or NUGET_USER in the nuget.org environment." >&2
           exit 1
         fi
-        for package in artifacts/native-engine-runtime/*.nupkg; do
+        for package in artifacts/nuget-packages/*.nupkg; do
           dotnet nuget push "$package" \
-            --api-key "$NUGET_API_KEY" \
+            --api-key "$api_key" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
         done

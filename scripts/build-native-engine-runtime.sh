@@ -34,7 +34,11 @@ case "$rid" in
 esac
 
 if [[ -z "$package_version" ]]; then
-  package_version="$(sed -n 's:.*<VersionPrefix>\([^<]*\)</VersionPrefix>.*:\1:p' "$repo_root/Directory.Build.props" | head -1)"
+  package_version="$(
+    dotnet msbuild "$repo_root/src/HtmlML.Core/HtmlML.Core.csproj" \
+      -getProperty:PackageVersion -nologo |
+      tail -n 1 | tr -d '\r'
+  )"
 fi
 if [[ -z "$package_version" ]]; then
   echo "Unable to resolve the native runtime package version." >&2
@@ -95,6 +99,7 @@ if [[ -z "$v8_root" ]]; then
   )
 fi
 
+v8_root="$(cd "$v8_root" && pwd)"
 v8_monolith="$v8_root/out/$cpu/Release/obj/libv8_monolith.a"
 icu_data="$v8_root/out/$cpu/Release/icudtl.dat"
 v8_license="$v8_root/LICENSE"
@@ -120,6 +125,7 @@ if [[ ! -f "$native_path" ]]; then
 fi
 
 mkdir -p "$output_dir"
+output_dir="$(cd "$output_dir" && pwd)"
 pack_args=(
   "$repo_root/packaging/HtmlML.NativeEngine.Runtime/HtmlML.NativeEngine.Runtime.csproj"
   -c Release

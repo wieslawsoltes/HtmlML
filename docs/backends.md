@@ -129,8 +129,19 @@ gaps are not hidden by package publication.
 
 ## Publishing
 
-The `Native runtime packages` GitHub Actions workflow can be run manually without
-publishing, or with its `publish` input enabled. Tags named `vVERSION` build and publish
-that version after every RID lane succeeds. Configure the `nuget.org` GitHub environment
-with a `NUGET_API_KEY` secret and any required release reviewers. Publishing uses
-`--skip-duplicate`, but a package version is still immutable after it reaches NuGet.org.
+The `NuGet packages` GitHub Actions workflow packs all twelve managed/template packages,
+builds the native runtime for macOS ARM64, Linux x64, and Windows x64, verifies the
+complete package graph, then builds and executes a clean combined consumer on every RID.
+Manual runs can stop after verification. A tag named `vVERSION` publishes only when
+`VERSION` exactly matches the repository `PackageVersion`.
+
+Configure the protected `nuget.org` GitHub environment with either:
+
+- `NUGET_USER` and a matching nuget.org trusted-publishing policy for repository
+  `wieslawsoltes/HtmlML`, workflow `native-runtime-packages.yml`, environment
+  `nuget.org`; or
+- the legacy `NUGET_API_KEY` secret.
+
+Trusted publishing uses a short-lived GitHub OIDC credential. Publishing uses
+`--skip-duplicate`, but every NuGet package version remains immutable after it reaches
+NuGet.org.
