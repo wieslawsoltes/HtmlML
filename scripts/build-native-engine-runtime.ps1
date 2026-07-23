@@ -87,7 +87,7 @@ if ([string]::IsNullOrWhiteSpace($V8Root)) {
 
     # Backslash-escaped quotes survive PowerShell's native argument marshalling
     # and reach GN as string delimiters (the form used by ClearScript itself).
-    $gnArgs = 'chrome_pgo_phase=0 fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false is_official_build=true symbol_level=0 target_cpu=\"{0}\" use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string=\"-HtmlML\" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu=\"{0}\"' -f $cpu
+    $gnArgs = 'chrome_pgo_phase=0 fatal_linker_warnings=false is_cfi=false is_component_build=false is_debug=false symbol_level=0 target_cpu=\"{0}\" use_clang_modules=false use_custom_libcxx=false use_thin_lto=false v8_embedder_string=\"-HtmlML\" v8_enable_fuzztest=false v8_enable_pointer_compression=false v8_enable_31bit_smis_on_64bit_arch=false v8_enable_temporal_support=false v8_monolithic=true v8_use_external_startup_data=false v8_target_cpu=\"{0}\"' -f $cpu
     Push-Location $V8Root
     try {
         & gn.bat gen "out/$cpu/Release" "--args=$gnArgs"
