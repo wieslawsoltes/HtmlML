@@ -37,10 +37,17 @@ public sealed class CssFlexBaselineTests
             var timelineRect = timeline.getBoundingClientRect();
             var dayRect = day.getBoundingClientRect();
             var trackRect = track.getBoundingClientRect();
+            var dayBaseline = CssLayoutPanel.ResolveFirstBaseline(
+                day.Control,
+                dayRect.width,
+                dayRect.height);
             Assert.Equal(15, timelineRect.height, 6);
             Assert.Equal(timelineRect.top, dayRect.top, 6);
+            Assert.True(dayBaseline.HasValue);
             Assert.InRange(
-                Math.Abs(trackRect.top - (timelineRect.top + 6)),
+                Math.Abs(
+                    (trackRect.top + trackRect.height) -
+                    (dayRect.top + dayBaseline.Value)),
                 0,
                 .6);
         }

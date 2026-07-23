@@ -133,7 +133,7 @@ internal static class CssCustomPropertyPerformanceProbe
             var expectedAnchor = (iterations + 19).ToString();
             var consumerTransform = document.getComputedStyle(variableConsumer!)
                 .getPropertyValue("transform");
-            var expectedTransform = $"translateX({expectedLeft})";
+            var expectedTransform = $"matrix(1, 0, 0, 1, {iterations + 19}, 0)";
             var nativeTransform = variableConsumer!.Control.RenderTransform as TranslateTransform;
             var passiveAnchor = document.getComputedStyle(passiveDescendant!)
                 .getPropertyValue("--ui-lib-positioner-anchor-left");
