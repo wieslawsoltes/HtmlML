@@ -1,3 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 *.patch -whitespace
+
+# These files are compared or applied byte-for-byte on every build host.
+tests/WebPlatformSubset/upstream/** text eol=lf
+third-party/clearscript/V8/*.txt text eol=lf
