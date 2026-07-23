@@ -389,10 +389,21 @@ public sealed class CssMeasurementEngine
             inlineHeight = 0;
         }
 
-        foreach (var child in root.Children.Where(static child =>
-                     child.Style.Display != CssLayoutDisplay.None
-                     && !IsNonRenderedTableTrack(child.Style.Display)))
+        var flow = root.Children.Where(static child =>
+                (child.Style.Display != CssLayoutDisplay.None || child.IsCollapsibleWhitespace)
+                && !IsNonRenderedTableTrack(child.Style.Display))
+            .ToArray();
+        for (var childIndex = 0; childIndex < flow.Length; childIndex++)
         {
+            var child = flow[childIndex];
+            if (child.IsCollapsibleWhitespace)
+            {
+                if (HasInlineContentOnBothSides(flow, childIndex))
+                {
+                    inlineWidth += child.CollapsedWhitespaceWidth;
+                }
+                continue;
+            }
             if (child.ForcesLineBreak)
             {
                 FlushInlineLine();

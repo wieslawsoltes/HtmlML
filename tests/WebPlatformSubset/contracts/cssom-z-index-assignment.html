@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSSOM z-index assignment survives connection and recascade</title>
+<style>
+  #target { z-index: 7; }
+</style>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const target = document.createElement("div");
+  target.id = "target";
+  target.style.position = "absolute";
+  target.style.zIndex = 1000;
+  document.body.appendChild(target);
+
+  test("numeric IDL assignment serializes as an authored integer", () => {
+    assert(target.style.zIndex === "1000",
+      `authored zIndex became ${JSON.stringify(target.style.zIndex)}`);
+    assert(target.style.getPropertyValue("z-index") === "1000",
+      `authored z-index became ${JSON.stringify(
+        target.style.getPropertyValue("z-index"))}`);
+  });
+
+  test("an inline z-index survives connection and stylesheet recascade", () => {
+    assert(getComputedStyle(target).zIndex === "1000",
+      `computed z-index became ${JSON.stringify(getComputedStyle(target).zIndex)}`);
+  });
+
+  test("kebab-case mutation and removal update cascade precedence", () => {
+    target.style.setProperty("z-index", "-2");
+    assert(target.style.zIndex === "-2",
+      `mutated authored z-index became ${JSON.stringify(target.style.zIndex)}`);
+    assert(getComputedStyle(target).zIndex === "-2",
+      `mutated computed z-index became ${JSON.stringify(
+        getComputedStyle(target).zIndex)}`);
+    target.style.removeProperty("z-index");
+    assert(target.style.zIndex === "",
+      `removed authored z-index became ${JSON.stringify(target.style.zIndex)}`);
+    assert(getComputedStyle(target).zIndex === "7",
+      `stylesheet z-index did not resume: ${JSON.stringify(
+        getComputedStyle(target).zIndex)}`);
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    cssText: target.style.cssText,
+    computedZIndex: getComputedStyle(target).zIndex
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

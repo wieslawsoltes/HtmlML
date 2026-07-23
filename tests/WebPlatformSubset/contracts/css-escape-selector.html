@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS.escape identifier serialization and selector resolution</title>
+<body>
+<div id="escape-root"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("CSS.escape is exposed as a callable CSS namespace method", () => {
+    assert(typeof CSS === "object" && CSS !== null, "CSS namespace is not exposed");
+    assert(typeof CSS.escape === "function", "CSS.escape is not callable");
+  });
+
+  test("escaped punctuation and leading digits resolve arbitrary element IDs", () => {
+    const root = document.getElementById("escape-root");
+    const ids = ["0/my/id", "-1-start", "space id", "hash#id", "safe_identifier"];
+    for (const id of ids) {
+      const node = document.createElement("div");
+      node.id = id;
+      root.appendChild(node);
+      const escaped = CSS.escape(id);
+      assert(root.querySelector(`#${escaped}`) === node,
+        `escaped selector ${escaped} did not resolve ID ${id}`);
+    }
+  });
+
+  test("CSS.escape follows identifier serialization edge cases", () => {
+    assert(CSS.escape(0) === "\\30 ", `numeric zero serialized as ${CSS.escape(0)}`);
+    assert(CSS.escape("a\0b") === "a�b", `NULL serialized as ${CSS.escape("a\0b")}`);
+    assert(CSS.escape("--safe") === "--safe", `safe identifier serialized as ${CSS.escape("--safe")}`);
+    assert(CSS.escape("-") === "\\-", `single hyphen serialized as ${CSS.escape("-")}`);
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

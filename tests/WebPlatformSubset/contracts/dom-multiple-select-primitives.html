@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Multiple select state primitives</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function equal(actual, expected, message) {
+    if (!Object.is(actual, expected)) throw new Error(`${message}: expected ${expected}, got ${actual}`);
+  }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("multiple select reflects its browser type", () => {
+    const select = document.createElement("select");
+    select.multiple = true;
+    equal(select.type, "select-multiple", "multiple select type");
+  });
+
+  test("multiple select retains more than one selected option", () => {
+    const select = document.createElement("select");
+    select.multiple = true;
+    select.innerHTML = `<option value="a">A</option><option value="b">B</option><option value="c">C</option>`;
+    document.body.appendChild(select);
+    select.options[1].selected = true;
+    select.options[2].selected = true;
+    equal(Array.from(select.options).filter(option => option.selected).map(option => option.value).join(","),
+      "b,c", "selected option values");
+    equal(select.selectedIndex, 1, "first selected index");
+    equal(select.value, "b", "first selected value");
+  });
+
+  test("single select still enforces exclusive option selection", () => {
+    const select = document.createElement("select");
+    select.innerHTML = `<option value="a">A</option><option value="b">B</option>`;
+    document.body.appendChild(select);
+    select.options[0].selected = true;
+    select.options[1].selected = true;
+    assert(!select.options[0].selected && select.options[1].selected,
+      "single select retained multiple selected options");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOM tree mutation removes vacated layout and paint reference</title>
+<style>
+  html, body { margin: 0; background: #fff; }
+  #chart { width: 320px; border: 4px solid #111; }
+  #target { box-sizing: border-box; height: 80px; position: relative; background: #cde; }
+  #study { position: absolute; inset: 20px 30px; background: #06c; }
+</style>
+<div id="chart"><div id="target"><div id="study"></div></div></div>

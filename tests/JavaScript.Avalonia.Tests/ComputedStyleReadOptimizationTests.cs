@@ -173,6 +173,111 @@ public sealed class ComputedStyleReadOptimizationTests
         }
     }
 
+    [AvaloniaFact]
+    [Trait("Runtime", "V8Native")]
+    public void V8ComputedStyleSeparatesMethodFallbackFromNamedProperties()
+    {
+        var nativePath = Environment.GetEnvironmentVariable("HTMLML_CLEARSCRIPT_NATIVE");
+        if (string.IsNullOrWhiteSpace(nativePath) || !File.Exists(nativePath))
+        {
+            return;
+        }
+
+        var root = new CssLayoutPanel { Width = 320, Height = 180 };
+        var window = new Window { Width = 320, Height = 180, Content = root };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        using var host = new AvaloniaBrowserHost(window);
+        using var runtime = new ClearScriptV8Runtime(host);
+        try
+        {
+            var result = Convert.ToString(runtime.Engine.Evaluate("""
+                (() => {
+                  const target = document.createElement('div');
+                  target.style.setProperty('color', 'rgb(1, 2, 3)');
+                  target.style.setProperty('--present-token', 'value');
+                  document.body.appendChild(target);
+                  const computed = getComputedStyle(target);
+                  return JSON.stringify([
+                    computed.getPropertyValue('x-fake'),
+                    typeof computed.xFake,
+                    typeof computed['x-fake'],
+                    'xFake' in computed,
+                    computed.color,
+                    computed['font-size'] === computed.getPropertyValue('font-size'),
+                    'color' in computed,
+                    computed.getPropertyValue('--present-token').trim(),
+                    typeof computed['--present-token']
+                  ]);
+                })()
+                """));
+
+            Assert.Equal(
+                """["","undefined","undefined",false,"rgb(1, 2, 3)",true,true,"value","undefined"]""",
+                result);
+            Assert.Empty(host.JavaScriptExceptionDiagnostics);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
+    [AvaloniaFact]
+    [Trait("Runtime", "V8Native")]
+    public void V8ComputedStyleSnapshotTracksDetachAndReattachLifecycle()
+    {
+        var nativePath = Environment.GetEnvironmentVariable("HTMLML_CLEARSCRIPT_NATIVE");
+        if (string.IsNullOrWhiteSpace(nativePath) || !File.Exists(nativePath))
+        {
+            return;
+        }
+
+        var root = new CssLayoutPanel { Width = 320, Height = 180 };
+        var window = new Window { Width = 320, Height = 180, Content = root };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        using var host = new AvaloniaBrowserHost(window);
+        using var runtime = new ClearScriptV8Runtime(host);
+        try
+        {
+            var result = Convert.ToString(runtime.Engine.Evaluate("""
+                (() => {
+                  const style = document.createElement('style');
+                  style.textContent = '.cascade-hidden { display: none; }';
+                  document.head.appendChild(style);
+                  const target = document.createElement('div');
+                  target.className = 'cascade-hidden';
+                  document.body.appendChild(target);
+                  const connected = getComputedStyle(target).display;
+                  target.remove();
+                  const detached = getComputedStyle(target).display;
+                  target.style.display = '';
+                  document.body.appendChild(target);
+                  const reattached = getComputedStyle(target).display;
+                  return JSON.stringify([
+                    connected,
+                    detached,
+                    target.style.display,
+                    reattached,
+                    target.getClientRects().length
+                  ]);
+                })()
+                """));
+
+            Assert.Equal("""["none","","","none",0]""", result);
+            Assert.Empty(host.JavaScriptExceptionDiagnostics);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
     private static CrossGenerationProbeResult RunCrossGenerationProbe(bool enableStateReuse)
     {
         var root = new CssLayoutPanel { Width = 320, Height = 180 };

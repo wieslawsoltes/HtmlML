@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Positioned generated box geometry, rounding, and stacking</title>
+<style>
+  html,
+  body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: white;
+  }
+
+  .stage {
+    position: relative;
+    width: 180px;
+    height: 120px;
+    overflow: hidden;
+    background: rgb(255, 0, 0);
+  }
+
+  .stage::before {
+    content: "";
+    position: absolute;
+    top: 20px;
+    left: 30px;
+    z-index: 2;
+    width: 90px;
+    height: 50px;
+    border-radius: 12px;
+    background: rgb(0, 192, 0);
+  }
+
+  .occluder {
+    position: absolute;
+    top: 30px;
+    left: 40px;
+    z-index: 1;
+    width: 90px;
+    height: 50px;
+    background: rgb(0, 0, 192);
+  }
+</style>
+<div class="stage"><div class="occluder"></div></div>

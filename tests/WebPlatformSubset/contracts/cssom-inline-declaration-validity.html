@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSSOM inline declaration validity and disconnected resolution</title>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  test("supported CSS properties and JavaScript expandos remain distinct", () => {
+    const style = document.createElement("div").style;
+    assert("position" in style && "backgroundAttachment" in style
+      && "gridArea" in style && "fillOpacity" in style && "order" in style,
+      "supported CSS IDL attributes were absent");
+    assert(!("WebkitFakeProperty" in style) && style.WebkitFakeProperty === undefined,
+      "an unsupported prefixed property was exposed as CSS");
+    style.applicationState = "ready";
+    assert(style.applicationState === "ready",
+      "an ordinary JavaScript expando was not retained");
+    assert(style.getPropertyValue("application-state") === "",
+      "an expando leaked into the CSS declaration block");
+  });
+
+  test("invalid declarations preserve the previous authored value", () => {
+    const style = document.createElement("div").style;
+    style.position = "absolute";
+    style.position = "not-a-position";
+    assert(style.position === "absolute", `invalid position replaced the value: ${style.position}`);
+    style.position = " ";
+    assert(style.position === "absolute", `CSS whitespace cleared the value: ${style.position}`);
+    style.fontSize = "27px";
+    style.fontSize = "2";
+    assert(style.fontSize === "27px", `unitless font size replaced the value: ${style.fontSize}`);
+    style.letterSpacing = "2px";
+    style.letterSpacing = "3";
+    assert(style.letterSpacing === "2px",
+      `unitless letter spacing replaced the value: ${style.letterSpacing}`);
+  });
+
+  test("an empty value removes an authored declaration", () => {
+    const style = document.createElement("div").style;
+    style.position = "absolute";
+    style.position = "";
+    assert(style.position === "" && style.getPropertyValue("position") === "",
+      "empty-string removal did not clear the declaration");
+  });
+
+  test("disconnected resolved style is empty while inline style remains authored", () => {
+    const element = document.createElement("div");
+    element.style.cssText = "position:absolute;width:33.3px;height:8px";
+    const computed = getComputedStyle(element);
+    assert(computed.position === "" && computed.width === "" && computed.height === "",
+      `disconnected resolved style was not empty: ${computed.position}/${computed.width}/${computed.height}`);
+    assert(element.style.position === "absolute"
+      && element.style.width === "33.3px" && element.style.height === "8px",
+      "authored inline declarations were not retained on a disconnected element");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

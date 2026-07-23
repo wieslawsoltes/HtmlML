@@ -5,12 +5,58 @@ using Avalonia.Input;
 using Avalonia.Input.Raw;
 using Avalonia.Threading;
 using HtmlML.Core;
+using System.Net;
+using System.Net.Http.Headers;
 using Xunit;
 
 namespace JavaScript.Avalonia.Tests;
 
 public sealed class HostServiceSeamTests
 {
+    [Fact]
+    public void HttpResourceFreshnessHonorsOriginPolicyAndBoundedValidatorHeuristics()
+    {
+        var now = DateTimeOffset.UtcNow;
+        using var explicitResponse = new HttpResponseMessage(HttpStatusCode.OK);
+        explicitResponse.Headers.Date = now - TimeSpan.FromSeconds(10);
+        explicitResponse.Headers.CacheControl = new CacheControlHeaderValue
+        {
+            MaxAge = TimeSpan.FromMinutes(2)
+        };
+        var explicitPolicy = AvaloniaResourceLoader.ReadHttpCachePolicy(
+            explicitResponse,
+            now - TimeSpan.FromDays(30));
+
+        Assert.True(explicitPolicy.IsCacheable);
+        Assert.InRange(
+            explicitPolicy.FreshUntil!.Value,
+            now + TimeSpan.FromSeconds(100),
+            now + TimeSpan.FromSeconds(115));
+
+        using var noStoreResponse = new HttpResponseMessage(HttpStatusCode.OK);
+        noStoreResponse.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+        var noStorePolicy = AvaloniaResourceLoader.ReadHttpCachePolicy(noStoreResponse, now);
+        Assert.False(noStorePolicy.IsCacheable);
+        Assert.Null(noStorePolicy.FreshUntil);
+
+        using var revalidateResponse = new HttpResponseMessage(HttpStatusCode.OK);
+        revalidateResponse.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+        var revalidatePolicy = AvaloniaResourceLoader.ReadHttpCachePolicy(revalidateResponse, now);
+        Assert.True(revalidatePolicy.IsCacheable);
+        Assert.Null(revalidatePolicy.FreshUntil);
+
+        using var validatorOnlyResponse = new HttpResponseMessage(HttpStatusCode.OK);
+        validatorOnlyResponse.Headers.Date = now;
+        var heuristicPolicy = AvaloniaResourceLoader.ReadHttpCachePolicy(
+            validatorOnlyResponse,
+            now - TimeSpan.FromDays(30));
+        Assert.True(heuristicPolicy.IsCacheable);
+        Assert.InRange(
+            heuristicPolicy.FreshUntil!.Value,
+            now + TimeSpan.FromMinutes(59),
+            now + TimeSpan.FromMinutes(61));
+    }
+
     [AvaloniaFact]
     public void PublicHostConstructorExposesPortableServicesAndOpaqueHandles()
     {

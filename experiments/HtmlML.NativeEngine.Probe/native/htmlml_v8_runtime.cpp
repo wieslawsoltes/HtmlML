@@ -9,12 +9,15 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <future>
 #include <fstream>
 #include <cstring>
 #include <iomanip>
@@ -24,7 +27,9 @@
 #include <stdexcept>
 #include <sstream>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -121,12 +126,27 @@ enum inline_style_property : uint64_t {
     inline_flex_wrap = 1U << 24U,
     inline_flex_shrink = 1U << 25U,
     inline_align_self = 1U << 26U,
-    inline_min_max_size = 1U << 27U,
+    inline_min_width = 1U << 27U,
     inline_justify_content = 1U << 28U,
     inline_box_sizing = 1U << 29U,
     inline_border_radius = 1U << 30U,
     inline_transform = 1ULL << 31U,
-    inline_white_space = 1ULL << 32U
+    inline_white_space = 1ULL << 32U,
+    inline_min_height = 1ULL << 33U,
+    inline_max_width = 1ULL << 34U,
+    inline_max_height = 1ULL << 35U,
+    inline_gap = 1ULL << 36U,
+    inline_box_shadow = 1ULL << 37U,
+    inline_transform_origin = 1ULL << 38U,
+    inline_svg_fill = 1ULL << 39U,
+    inline_svg_stroke = 1ULL << 40U,
+    inline_cursor = 1ULL << 41U,
+    inline_letter_spacing = 1ULL << 42U,
+    inline_word_spacing = 1ULL << 43U,
+    inline_z_index = 1ULL << 44U,
+    inline_float = 1ULL << 45U,
+    inline_border = 1ULL << 46U,
+    inline_flex_basis = 1ULL << 47U
 };
 
 std::once_flag v8_initialize_once;
@@ -177,17 +197,497 @@ display_mode default_display_for_tag(std::string_view tag)
         != non_rendered_tags.end()) {
         return display_mode::none;
     }
+    if (tag == "table") return display_mode::table;
+    if (tag == "thead") return display_mode::table_header_group;
+    if (tag == "tbody") return display_mode::table_row_group;
+    if (tag == "tfoot") return display_mode::table_footer_group;
+    if (tag == "tr") return display_mode::table_row;
+    if (tag == "td" || tag == "th") return display_mode::table_cell;
+    if (tag == "colgroup") return display_mode::table_column_group;
+    if (tag == "col") return display_mode::table_column;
+    if (tag == "caption") return display_mode::table_caption;
+    if (tag == "li") return display_mode::list_item;
     // Compact HTML UA defaults. Component libraries rely on phrasing elements (most
     // visibly the dialog submit-button span) remaining inline when no author
     // display declaration is present.
-    constexpr std::array<std::string_view, 31> inline_tags{
-        "a", "abbr", "b", "button", "cite", "code", "em", "i", "img",
-        "input", "kbd", "label", "mark", "q", "s", "samp", "select",
-        "small", "span", "strong", "sub", "sup", "svg", "textarea", "time",
-        "u", "var", "path", "use", "circle", "rect"};
+    constexpr std::array<std::string_view, 25> inline_tags{
+        "a", "abbr", "b", "cite", "code", "em", "i", "kbd", "label",
+        "mark", "q", "s", "samp", "small", "span", "strong", "sub", "sup",
+        "svg", "time", "u", "var", "path", "use", "circle"};
+    constexpr std::array<std::string_view, 6> inline_block_tags{
+        "button", "img", "input", "rect", "select", "textarea"};
+    if (std::find(inline_block_tags.begin(), inline_block_tags.end(), tag)
+        != inline_block_tags.end()) {
+        return display_mode::inline_block;
+    }
     return std::find(inline_tags.begin(), inline_tags.end(), tag) != inline_tags.end()
-        ? display_mode::inline_block
+        ? display_mode::inline_flow
         : display_mode::block;
+}
+
+display_mode parse_display_mode(std::string_view value)
+{
+    if (value == "flex") return display_mode::flex;
+    if (value == "inline-flex") return display_mode::inline_flex;
+    if (value == "grid") return display_mode::grid;
+    if (value == "inline-grid") return display_mode::inline_grid;
+    if (value == "table") return display_mode::table;
+    if (value == "inline-table") return display_mode::inline_table;
+    if (value == "table-row-group") return display_mode::table_row_group;
+    if (value == "table-header-group") return display_mode::table_header_group;
+    if (value == "table-footer-group") return display_mode::table_footer_group;
+    if (value == "table-row") return display_mode::table_row;
+    if (value == "table-cell") return display_mode::table_cell;
+    if (value == "table-column-group") return display_mode::table_column_group;
+    if (value == "table-column") return display_mode::table_column;
+    if (value == "table-caption") return display_mode::table_caption;
+    if (value == "contents") return display_mode::contents;
+    if (value == "inline") return display_mode::inline_flow;
+    if (value == "inline-block") return display_mode::inline_block;
+    if (value == "list-item") return display_mode::list_item;
+    if (value == "none") return display_mode::none;
+    return display_mode::block;
+}
+
+std::string_view display_mode_name(display_mode value)
+{
+    switch (value) {
+    case display_mode::flex: return "flex";
+    case display_mode::inline_flex: return "inline-flex";
+    case display_mode::grid: return "grid";
+    case display_mode::inline_grid: return "inline-grid";
+    case display_mode::table: return "table";
+    case display_mode::inline_table: return "inline-table";
+    case display_mode::table_row_group: return "table-row-group";
+    case display_mode::table_header_group: return "table-header-group";
+    case display_mode::table_footer_group: return "table-footer-group";
+    case display_mode::table_row: return "table-row";
+    case display_mode::table_cell: return "table-cell";
+    case display_mode::table_column_group: return "table-column-group";
+    case display_mode::table_column: return "table-column";
+    case display_mode::table_caption: return "table-caption";
+    case display_mode::contents: return "contents";
+    case display_mode::inline_flow: return "inline";
+    case display_mode::inline_block: return "inline-block";
+    case display_mode::list_item: return "list-item";
+    case display_mode::none: return "none";
+    case display_mode::block:
+    default: return "block";
+    }
+}
+
+overflow_mode parse_overflow_mode(std::string_view value)
+{
+    if (value == "hidden") return overflow_mode::hidden;
+    if (value == "clip") return overflow_mode::clip;
+    if (value == "auto") return overflow_mode::automatic;
+    if (value == "scroll") return overflow_mode::scroll;
+    return overflow_mode::visible;
+}
+
+std::pair<overflow_mode, overflow_mode> computed_overflow(const node_style& style)
+{
+    auto x = style.overflow_x;
+    auto y = style.overflow_y;
+    const auto neither_visible_nor_clip = [](overflow_mode value) {
+        return value != overflow_mode::visible && value != overflow_mode::clip;
+    };
+    if (x == overflow_mode::visible && neither_visible_nor_clip(y)) x = overflow_mode::automatic;
+    else if (x == overflow_mode::clip && neither_visible_nor_clip(y)) x = overflow_mode::hidden;
+    if (y == overflow_mode::visible && neither_visible_nor_clip(x)) y = overflow_mode::automatic;
+    else if (y == overflow_mode::clip && neither_visible_nor_clip(x)) y = overflow_mode::hidden;
+    return {x, y};
+}
+
+void refresh_overflow_state(node_style& style)
+{
+    const auto [x, y] = computed_overflow(style);
+    style.clip = x != overflow_mode::visible || y != overflow_mode::visible;
+    style.scroll_x_enabled = x == overflow_mode::automatic || x == overflow_mode::scroll;
+    style.scroll_y_enabled = y == overflow_mode::automatic || y == overflow_mode::scroll;
+}
+
+display_mode default_display_for_node(const dom_node& node)
+{
+    if (node.tag == "input") {
+        const auto type = node.attributes.find("type");
+        if (type != node.attributes.end()) {
+            auto value = type->second;
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            if (value == "hidden") return display_mode::none;
+        }
+    }
+    return default_display_for_tag(node.tag);
+}
+
+float inherited_font_size(const dom_node& node)
+{
+    for (auto* parent = node.parent; parent != nullptr; parent = parent->parent) {
+        if (parent->style.font_size >= 0) return parent->style.font_size;
+    }
+    return 14.0F;
+}
+
+std::string resolved_font_family(const dom_node& node)
+{
+    for (auto* current = &node; current != nullptr; current = current->parent) {
+        if (!current->style.font_family.empty()) return current->style.font_family;
+    }
+    return "sans-serif";
+}
+
+int32_t resolved_font_weight(const dom_node& node)
+{
+    for (auto* current = &node; current != nullptr; current = current->parent) {
+        if (current->style.font_weight > 0) return current->style.font_weight;
+    }
+    return 400;
+}
+
+float resolved_letter_spacing(const dom_node& node)
+{
+    for (auto* current = &node; current != nullptr; current = current->parent) {
+        if (current->style.letter_spacing_specified) return current->style.letter_spacing;
+    }
+    return 0;
+}
+
+float resolved_word_spacing(const dom_node& node)
+{
+    for (auto* current = &node; current != nullptr; current = current->parent) {
+        if (current->style.word_spacing_specified) return current->style.word_spacing;
+    }
+    return 0;
+}
+
+float resolved_declared_font_size(const dom_node& node, const std::string& value)
+{
+    if (value == "inherit" || value == "unset") return -1.0F;
+    if (value == "initial" || value == "revert") return 14.0F;
+    const auto parsed = native_document::parse_length(value);
+    if (parsed.unit == length_unit::em) {
+        return std::max(0.0F, parsed.value * inherited_font_size(node));
+    }
+    if (parsed.unit == length_unit::rem) {
+        auto* root = &node;
+        while (root->parent != nullptr) root = root->parent;
+        const auto root_size = root->style.font_size >= 0 ? root->style.font_size : 14.0F;
+        return std::max(0.0F, parsed.value * root_size);
+    }
+    if (parsed.unit == length_unit::percent) {
+        return std::max(0.0F,
+            parsed.value * inherited_font_size(node) / 100.0F + parsed.pixel_offset);
+    }
+    return std::max(0.0F, parsed.value);
+}
+
+float resolved_declared_line_height(
+    const dom_node& node,
+    const std::string& value,
+    float font_size)
+{
+    if (value == "normal" || value == "inherit" || value == "unset") return -1.0F;
+    if (value == "initial" || value == "revert") return -1.0F;
+    const auto parsed = native_document::parse_length(value);
+    if (parsed.unit == length_unit::em) {
+        return std::max(0.0F, parsed.value * font_size);
+    }
+    if (parsed.unit == length_unit::rem) {
+        auto* root = &node;
+        while (root->parent != nullptr) root = root->parent;
+        const auto root_size = root->style.font_size >= 0 ? root->style.font_size : 14.0F;
+        return std::max(0.0F, parsed.value * root_size);
+    }
+    if (parsed.unit == length_unit::percent) {
+        return std::max(0.0F,
+            parsed.value * font_size / 100.0F + parsed.pixel_offset);
+    }
+    const auto parsed_value = std::max(0.0F, parsed.value);
+    const auto has_explicit_unit = std::any_of(
+        value.begin(),
+        value.end(),
+        [](unsigned char character) { return std::isalpha(character) || character == '%'; });
+    return !has_explicit_unit && parsed_value <= 4.0F
+        ? parsed_value * font_size
+        : parsed_value;
+}
+
+struct parsed_font_shorthand final {
+    float font_size{14.0F};
+    float line_height{-1.0F};
+    int32_t font_weight{400};
+    std::string font_family;
+    bool complete{true};
+};
+
+std::optional<parsed_font_shorthand> parse_font_shorthand(
+    const dom_node& node,
+    const std::string& value)
+{
+    const auto lowercase = [](std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        return text;
+    };
+    std::istringstream stream(value);
+    std::vector<std::string> tokens;
+    for (std::string token; stream >> token;) tokens.push_back(std::move(token));
+    if (tokens.empty()) return std::nullopt;
+
+    const auto looks_like_size = [](std::string_view token) {
+        if (token == "xx-small" || token == "x-small" || token == "small"
+            || token == "medium" || token == "large" || token == "x-large"
+            || token == "xx-large" || token == "smaller" || token == "larger") {
+            return true;
+        }
+        const auto slash = token.find('/');
+        if (slash != std::string_view::npos) token = token.substr(0, slash);
+        return !token.empty()
+            && (std::isdigit(static_cast<unsigned char>(token.front()))
+                || token.front() == '.');
+    };
+
+    auto size_index = tokens.size();
+    for (size_t index = 0; index < tokens.size(); ++index) {
+        if (looks_like_size(tokens[index])) {
+            size_index = index;
+            break;
+        }
+    }
+    if (size_index == tokens.size()) return std::nullopt;
+
+    parsed_font_shorthand result;
+    for (size_t index = 0; index < size_index; ++index) {
+        const auto token = lowercase(tokens[index]);
+        if (token == "bold" || token == "bolder") result.font_weight = 700;
+        else if (token == "normal") continue;
+        else if (token.size() == 3U && token.front() >= '1' && token.front() <= '9'
+            && token[1] == '0' && token[2] == '0') {
+            result.font_weight = std::atoi(token.c_str());
+        } else {
+            // Style, stretch, and variant tokens are accepted so their size,
+            // line-height, weight, and family companions still take effect,
+            // but those additional font axes are not represented natively.
+            result.complete = false;
+        }
+    }
+
+    auto size_token = tokens[size_index];
+    std::string line_height_token;
+    if (const auto slash = size_token.find('/'); slash != std::string::npos) {
+        line_height_token = size_token.substr(slash + 1U);
+        size_token.resize(slash);
+    }
+    const auto size_keyword = lowercase(size_token);
+    if (size_keyword == "medium") result.font_size = 14.0F;
+    else if (size_keyword == "small") result.font_size = 12.0F;
+    else if (size_keyword == "large") result.font_size = 18.0F;
+    else if (size_keyword == "x-small") result.font_size = 10.0F;
+    else if (size_keyword == "xx-small") result.font_size = 9.0F;
+    else if (size_keyword == "x-large") result.font_size = 24.0F;
+    else if (size_keyword == "xx-large") result.font_size = 32.0F;
+    else if (size_keyword == "smaller") result.font_size = inherited_font_size(node) * 0.8F;
+    else if (size_keyword == "larger") result.font_size = inherited_font_size(node) * 1.2F;
+    else result.font_size = resolved_declared_font_size(node, size_token);
+
+    auto family_index = size_index + 1U;
+    if (line_height_token.empty() && family_index < tokens.size()
+        && tokens[family_index] == "/") {
+        ++family_index;
+        if (family_index < tokens.size()) line_height_token = tokens[family_index++];
+    }
+    if (!line_height_token.empty()) {
+        result.line_height = resolved_declared_line_height(
+            node,
+            line_height_token,
+            result.font_size);
+    }
+    for (auto index = family_index; index < tokens.size(); ++index) {
+        if (!result.font_family.empty()) result.font_family.push_back(' ');
+        result.font_family += tokens[index];
+    }
+    if (result.font_family.empty()) return std::nullopt;
+    return result;
+}
+
+std::string serialize_overflow_mode(overflow_mode value)
+{
+    switch (value) {
+    case overflow_mode::hidden: return "hidden";
+    case overflow_mode::clip: return "clip";
+    case overflow_mode::automatic: return "auto";
+    case overflow_mode::scroll: return "scroll";
+    default: return "visible";
+    }
+}
+
+std::string serialize_css_number(double value)
+{
+    if (std::abs(value) < 0.0000001) value = 0;
+    std::ostringstream stream;
+    stream << std::setprecision(8) << value;
+    return stream.str();
+}
+
+std::string canonical_css_property_name(std::string_view name)
+{
+    if (name.starts_with("--")) return std::string(name);
+    if (name == "cssFloat") return "float";
+    std::string result;
+    result.reserve(name.size() + 4U);
+    for (const auto character : name) {
+        if (std::isupper(static_cast<unsigned char>(character))) {
+            result.push_back('-');
+            result.push_back(static_cast<char>(std::tolower(
+                static_cast<unsigned char>(character))));
+        } else {
+            result.push_back(character);
+        }
+    }
+    return result;
+}
+
+std::string css_property_idl_name(std::string_view name)
+{
+    if (name == "float") return "cssFloat";
+    if (name.find('-') == std::string_view::npos) return std::string(name);
+    std::string result;
+    result.reserve(name.size());
+    auto uppercase_next = false;
+    for (const auto character : name) {
+        if (character == '-') {
+            uppercase_next = true;
+            continue;
+        }
+        result.push_back(uppercase_next
+            ? static_cast<char>(std::toupper(static_cast<unsigned char>(character)))
+            : character);
+        uppercase_next = false;
+    }
+    return result;
+}
+
+bool valid_cssom_declaration_value(std::string_view property_name, std::string_view value)
+{
+    if (property_name.starts_with("--") || value.empty()) return true;
+
+    const auto first = value.find_first_not_of(" \t\r\n\f\v");
+    if (first == std::string_view::npos) return false;
+    const auto last = value.find_last_not_of(" \t\r\n\f\v");
+    const auto trimmed = value.substr(first, last - first + 1U);
+    const auto canonical_name = canonical_css_property_name(property_name);
+    auto normalized_value = std::string(trimmed);
+    std::transform(
+        normalized_value.begin(), normalized_value.end(), normalized_value.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+
+    if (normalized_value == "inherit" || normalized_value == "initial"
+        || normalized_value == "revert" || normalized_value == "revert-layer"
+        || normalized_value == "unset" || normalized_value.find("var(") != std::string::npos
+        || normalized_value.find("calc(") != std::string::npos
+        || normalized_value.find("min(") != std::string::npos
+        || normalized_value.find("max(") != std::string::npos
+        || normalized_value.find("clamp(") != std::string::npos) {
+        return true;
+    }
+
+    if (canonical_name == "position") {
+        return normalized_value == "static" || normalized_value == "relative"
+            || normalized_value == "absolute" || normalized_value == "fixed"
+            || normalized_value == "sticky" || normalized_value == "-webkit-sticky";
+    }
+
+    if (canonical_name == "font-size") {
+        static constexpr std::array<std::string_view, 10> keywords{
+            "xx-small", "x-small", "small", "medium", "large", "x-large",
+            "xx-large", "xxx-large", "larger", "smaller"};
+        if (std::find(keywords.begin(), keywords.end(), normalized_value) != keywords.end()) {
+            return true;
+        }
+    } else if (canonical_name == "letter-spacing" && normalized_value == "normal") {
+        return true;
+    } else if (canonical_name != "letter-spacing") {
+        return true;
+    }
+
+    char* end = nullptr;
+    const auto numeric_text = std::string(normalized_value);
+    const auto parsed = std::strtod(numeric_text.c_str(), &end);
+    return end == nullptr || *end != '\0' || !std::isfinite(parsed) || parsed == 0.0;
+}
+
+bool is_css_whitespace(unsigned char character)
+{
+    return character == '\t' || character == '\n' || character == '\f'
+        || character == '\r' || character == ' ';
+}
+
+bool valid_custom_property_name(std::string_view name)
+{
+    if (!name.starts_with("--") || name.size() <= 2U) return false;
+    return std::none_of(name.begin(), name.end(), [](unsigned char character) {
+        return character <= 0x20U || character == 0x7FU;
+    });
+}
+
+bool has_multiple_grid_columns(std::string_view value)
+{
+    auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos) return false;
+    value.remove_prefix(first);
+    if (value.starts_with("repeat(")) {
+        const auto count_start = value.find_first_of("0123456789", 7U);
+        if (count_start != std::string_view::npos) {
+            const auto count_end = value.find_first_not_of("0123456789", count_start);
+            const auto count_text = value.substr(count_start, count_end - count_start);
+            int count = 0;
+            const auto result = std::from_chars(
+                count_text.data(), count_text.data() + count_text.size(), count);
+            if (result.ec == std::errc{} && count > 1) return true;
+        }
+    }
+
+    size_t track_count = 0;
+    size_t token_start = std::string_view::npos;
+    int parenthesis_depth = 0;
+    int bracket_depth = 0;
+    auto finish_token = [&](size_t end) {
+        if (token_start == std::string_view::npos) return;
+        const auto token = value.substr(token_start, end - token_start);
+        if (!token.empty() && token.front() != '[') ++track_count;
+        token_start = std::string_view::npos;
+    };
+    for (size_t index = 0; index <= value.size(); ++index) {
+        const auto character = index < value.size() ? value[index] : ' ';
+        if (character == '(') ++parenthesis_depth;
+        else if (character == ')' && parenthesis_depth > 0) --parenthesis_depth;
+        else if (character == '[') ++bracket_depth;
+        else if (character == ']' && bracket_depth > 0) --bracket_depth;
+        const auto separator = parenthesis_depth == 0 && bracket_depth == 0
+            && std::isspace(static_cast<unsigned char>(character));
+        if (!separator && token_start == std::string_view::npos) token_start = index;
+        if (separator) finish_token(index);
+    }
+    return track_count > 1U;
+}
+
+std::vector<css_length> parse_simple_grid_tracks(const std::string& value)
+{
+    std::istringstream stream(value);
+    std::vector<css_length> tracks;
+    for (std::string token; stream >> token;) {
+        if (token == "none") return {};
+        if (token.find_first_of("([") != std::string::npos
+            || token.ends_with("fr") || token == "auto"
+            || token == "min-content" || token == "max-content") {
+            return {};
+        }
+        tracks.push_back(native_document::parse_length(token));
+    }
+    return tracks;
 }
 
 void initialize_v8_process()
@@ -217,10 +717,136 @@ std::string to_utf8(v8::Isolate* isolate, v8::Local<v8::Value> value)
     return *text == nullptr ? std::string{} : std::string(*text, text.length());
 }
 
+// Web IDL DOMString preserves every UTF-16 code unit, including unpaired
+// surrogates.  V8's Utf8Value deliberately replaces those code units, which
+// makes a lone surrogate alias U+FFFD in attributes and selector matching.
+// Store DOM strings as WTF-8 so the native tree remains byte-oriented without
+// losing the original JavaScript string.
+std::string to_wtf8(v8::Isolate* isolate, v8::Local<v8::Value> value)
+{
+    auto local_context = isolate->GetCurrentContext();
+    v8::Local<v8::String> text;
+    if (!value->ToString(local_context).ToLocal(&text)) return {};
+    std::string result(text->Utf8LengthV2(isolate), '\0');
+    const auto written = text->WriteUtf8V2(
+        isolate,
+        result.data(),
+        result.size(),
+        v8::String::WriteFlags::kNone);
+    result.resize(written);
+    return result;
+}
+
 v8::Local<v8::String> js_string(v8::Isolate* isolate, const char* value)
 {
     return v8::String::NewFromUtf8(isolate, value, v8::NewStringType::kNormal)
         .ToLocalChecked();
+}
+
+v8::Local<v8::String> js_dom_string(v8::Isolate* isolate, std::string_view value)
+{
+    std::vector<uint16_t> units;
+    units.reserve(value.size());
+    for (size_t index = 0; index < value.size();) {
+        const auto first = static_cast<uint8_t>(value[index]);
+        uint32_t codepoint = 0xfffdU;
+        size_t length = 1U;
+        uint32_t minimum = 0U;
+        if (first < 0x80U) {
+            codepoint = first;
+        } else if ((first & 0xe0U) == 0xc0U) {
+            codepoint = first & 0x1fU;
+            length = 2U;
+            minimum = 0x80U;
+        } else if ((first & 0xf0U) == 0xe0U) {
+            codepoint = first & 0x0fU;
+            length = 3U;
+            minimum = 0x800U;
+        } else if ((first & 0xf8U) == 0xf0U) {
+            codepoint = first & 0x07U;
+            length = 4U;
+            minimum = 0x10000U;
+        }
+        auto valid = length > 1U && index + length <= value.size();
+        for (size_t offset = 1U; valid && offset < length; ++offset) {
+            const auto continuation = static_cast<uint8_t>(value[index + offset]);
+            valid = (continuation & 0xc0U) == 0x80U;
+            if (valid) codepoint = (codepoint << 6U) | (continuation & 0x3fU);
+        }
+        if (length == 1U && first < 0x80U) {
+            valid = true;
+        } else if (!valid || codepoint < minimum || codepoint > 0x10ffffU) {
+            codepoint = 0xfffdU;
+            length = 1U;
+        }
+        if (codepoint <= 0xffffU) {
+            // Deliberately retain surrogate code points decoded from WTF-8.
+            units.push_back(static_cast<uint16_t>(codepoint));
+        } else {
+            codepoint -= 0x10000U;
+            units.push_back(static_cast<uint16_t>(0xd800U + (codepoint >> 10U)));
+            units.push_back(static_cast<uint16_t>(0xdc00U + (codepoint & 0x3ffU)));
+        }
+        index += length;
+    }
+    return v8::String::NewFromTwoByte(
+        isolate,
+        units.data(),
+        v8::NewStringType::kNormal,
+        static_cast<int>(units.size())).ToLocalChecked();
+}
+
+void install_navigator(
+    v8::Isolate* isolate,
+    v8::Local<v8::Context> context,
+    v8::Local<v8::Object> global)
+{
+#if defined(__APPLE__)
+    constexpr auto platform = "MacIntel";
+    constexpr auto user_agent_platform = "Macintosh; Intel Mac OS X 10_15_7";
+    constexpr auto client_platform = "macOS";
+#elif defined(_WIN32)
+    constexpr auto platform = "Win32";
+    constexpr auto user_agent_platform = "Windows NT 10.0; Win64; x64";
+    constexpr auto client_platform = "Windows";
+#else
+    constexpr auto platform = "Linux x86_64";
+    constexpr auto user_agent_platform = "X11; Linux x86_64";
+    constexpr auto client_platform = "Linux";
+#endif
+    const auto user_agent = std::string("Mozilla/5.0 (") + user_agent_platform
+        + ") AppleWebKit/537.36 (KHTML, like Gecko) HtmlML.Native/V8";
+    auto navigator = v8::Object::New(isolate);
+    navigator->Set(
+        context,
+        js_string(isolate, "userAgent"),
+        js_string(isolate, user_agent.c_str())).Check();
+    navigator->Set(
+        context,
+        js_string(isolate, "platform"),
+        js_string(isolate, platform)).Check();
+    navigator->Set(
+        context,
+        js_string(isolate, "language"),
+        js_string(isolate, "en-US")).Check();
+    navigator->Set(
+        context,
+        js_string(isolate, "maxTouchPoints"),
+        v8::Integer::New(isolate, 0)).Check();
+    auto user_agent_data = v8::Object::New(isolate);
+    user_agent_data->Set(
+        context,
+        js_string(isolate, "platform"),
+        js_string(isolate, client_platform)).Check();
+    user_agent_data->Set(
+        context,
+        js_string(isolate, "mobile"),
+        v8::False(isolate)).Check();
+    navigator->Set(
+        context,
+        js_string(isolate, "userAgentData"),
+        user_agent_data).Check();
+    global->Set(context, js_string(isolate, "navigator"), navigator).Check();
 }
 
 constexpr std::array<uint32_t, 64> sha256_round_constants{
@@ -325,11 +951,28 @@ std::array<uint8_t, 32> compilation_key_digest(
     const std::string& document_name,
     const std::string& source)
 {
+    // Cached V8 data is only reusable under the native embedder contract that
+    // produced it. Bump this identity whenever runtime bootstrap semantics or
+    // compile flags change in a way that can invalidate accepted cached data.
+    constexpr std::string_view runtime_identity = "htmlml-native-engine-abi-2-v8-cache-2";
     std::vector<uint8_t> value;
-    value.reserve(document_name.size() + source.size() + 1U);
+    value.reserve(runtime_identity.size() + document_name.size() + source.size() + 2U);
+    value.insert(value.end(), runtime_identity.begin(), runtime_identity.end());
+    value.push_back(0U);
     value.insert(value.end(), document_name.begin(), document_name.end());
     value.push_back(0U);
     value.insert(value.end(), source.begin(), source.end());
+    return sha256(value.data(), value.size());
+}
+
+std::array<uint8_t, 32> resource_key_digest(uint32_t kind, const std::string& url)
+{
+    std::vector<uint8_t> value;
+    value.reserve(sizeof(kind) + url.size());
+    for (size_t offset = 0U; offset < sizeof(kind); ++offset) {
+        value.push_back(static_cast<uint8_t>(kind >> (offset * 8U)));
+    }
+    value.insert(value.end(), url.begin(), url.end());
     return sha256(value.data(), value.size());
 }
 
@@ -340,6 +983,204 @@ uint64_t current_process_id() noexcept
 #else
     return static_cast<uint64_t>(getpid());
 #endif
+}
+
+float resolve_connected_css_length(
+    const dom_node& context,
+    css_length length,
+    float percentage_reference)
+{
+    auto* root = &context;
+    while (root->parent != nullptr) root = root->parent;
+    const auto font_size = context.style.font_size >= 0
+        ? context.style.font_size : inherited_font_size(context);
+    const auto root_font_size = root->style.font_size >= 0
+        ? root->style.font_size : 14.0F;
+    switch (length.unit) {
+    case length_unit::pixels:
+        return length.value;
+    case length_unit::percent:
+        return percentage_reference * length.value / 100.0F + length.pixel_offset;
+    case length_unit::em:
+        return length.value * font_size;
+    case length_unit::rem:
+        return length.value * root_font_size;
+    case length_unit::viewport_width:
+        return root->layout.width * length.value / 100.0F;
+    case length_unit::viewport_height:
+        return root->layout.height * length.value / 100.0F;
+    case length_unit::automatic:
+    case length_unit::max_content:
+    case length_unit::min_content:
+    case length_unit::fit_content:
+    default:
+        return 0.0F;
+    }
+}
+
+struct connected_containing_box final {
+    float padding_width{0};
+    float padding_height{0};
+    float content_width{0};
+    float content_height{0};
+};
+
+connected_containing_box connected_box_for(const dom_node& node)
+{
+    const auto width = std::max(0.0F, node.layout.width);
+    const auto height = std::max(0.0F, node.layout.height);
+    const auto border_left = resolve_connected_css_length(
+        node, node.style.border_left_width, width);
+    const auto border_right = resolve_connected_css_length(
+        node, node.style.border_right_width, width);
+    const auto border_top = resolve_connected_css_length(
+        node, node.style.border_top_width, width);
+    const auto border_bottom = resolve_connected_css_length(
+        node, node.style.border_bottom_width, width);
+    const auto padding_width = std::max(0.0F, width - border_left - border_right);
+    const auto padding_height = std::max(0.0F, height - border_top - border_bottom);
+    const auto padding_left = resolve_connected_css_length(
+        node, node.style.padding_left, padding_width);
+    const auto padding_right = resolve_connected_css_length(
+        node, node.style.padding_right, padding_width);
+    const auto padding_top = resolve_connected_css_length(
+        node, node.style.padding_top, padding_width);
+    const auto padding_bottom = resolve_connected_css_length(
+        node, node.style.padding_bottom, padding_width);
+    return {
+        padding_width,
+        padding_height,
+        std::max(0.0F, padding_width - padding_left - padding_right),
+        std::max(0.0F, padding_height - padding_top - padding_bottom)};
+}
+
+bool has_display_none_ancestor(const dom_node& node)
+{
+    for (auto* current = &node; current != nullptr; current = current->parent) {
+        if (current->style.display == display_mode::none) return true;
+    }
+    return false;
+}
+
+float connected_computed_dimension(
+    const dom_node& node,
+    css_length specified,
+    bool horizontal)
+{
+    if (has_display_none_ancestor(node)) {
+        switch (specified.unit) {
+        case length_unit::pixels:
+        case length_unit::em:
+        case length_unit::rem:
+        case length_unit::viewport_width:
+        case length_unit::viewport_height:
+            // display:none suppresses box generation, not the computed value of
+            // an independently resolvable declaration. Percentage and intrinsic
+            // values still require a real formatting context and remain on the
+            // normal used-value path below.
+            return std::max(
+                0.0F,
+                resolve_connected_css_length(node, specified, 0.0F));
+        default:
+            break;
+        }
+    }
+    const auto box = connected_box_for(node);
+    if (node.style.border_box) {
+        return horizontal ? node.layout.width : node.layout.height;
+    }
+    return horizontal ? box.content_width : box.content_height;
+}
+
+const dom_node* positioned_containing_node(const dom_node& node)
+{
+    if (node.style.position == position_mode::fixed) {
+        auto* root = &node;
+        while (root->parent != nullptr) root = root->parent;
+        return root;
+    }
+    if (node.style.position == position_mode::absolute) {
+        for (auto* ancestor = node.parent; ancestor != nullptr; ancestor = ancestor->parent) {
+            if (ancestor->style.position != position_mode::normal
+                || ancestor->parent == nullptr) {
+                return ancestor;
+            }
+        }
+    }
+    return node.parent;
+}
+
+bool try_connected_used_geometry_value(
+    const dom_node& node,
+    std::string_view canonical_name,
+    float& value)
+{
+    const auto* containing_node = positioned_containing_node(node);
+    if (containing_node == nullptr) return false;
+    const auto containing = connected_box_for(*containing_node);
+    const auto positioned = node.style.position == position_mode::absolute
+        || node.style.position == position_mode::fixed;
+    const auto inset_width = positioned
+        ? containing.padding_width : containing.content_width;
+    const auto inset_height = positioned
+        ? containing.padding_height : containing.content_height;
+
+    const css_length* inset = nullptr;
+    float inset_reference = inset_width;
+    if (canonical_name == "left" || canonical_name == "inset-inline-start") {
+        inset = &node.style.left;
+    } else if (canonical_name == "right" || canonical_name == "inset-inline-end") {
+        inset = &node.style.right;
+    } else if (canonical_name == "top" || canonical_name == "inset-block-start") {
+        inset = &node.style.top;
+        inset_reference = inset_height;
+    } else if (canonical_name == "bottom" || canonical_name == "inset-block-end") {
+        inset = &node.style.bottom;
+        inset_reference = inset_height;
+    }
+    if (inset != nullptr) {
+        if (inset->unit == length_unit::automatic) return false;
+        value = resolve_connected_css_length(node, *inset, inset_reference);
+        return true;
+    }
+
+    const auto horizontal_margin = canonical_name == "margin-left"
+        || canonical_name == "margin-right";
+    const auto vertical_margin = canonical_name == "margin-top"
+        || canonical_name == "margin-bottom";
+    if (!horizontal_margin && !vertical_margin) return false;
+    const auto* margin = canonical_name == "margin-left" ? &node.style.margin_left
+        : canonical_name == "margin-right" ? &node.style.margin_right
+        : canonical_name == "margin-top" ? &node.style.margin_top
+        : &node.style.margin_bottom;
+    const auto automatic = canonical_name == "margin-left" ? node.style.margin_left_auto
+        : canonical_name == "margin-right" ? node.style.margin_right_auto
+        : canonical_name == "margin-top" ? node.style.margin_top_auto
+        : node.style.margin_bottom_auto;
+    if (!automatic) {
+        // CSS percentage margins, including block-axis margins, resolve
+        // against the containing block's inline size.
+        value = resolve_connected_css_length(node, *margin, containing.content_width);
+        return true;
+    }
+    if (!horizontal_margin) {
+        value = 0.0F;
+        return true;
+    }
+    const auto fixed_left = node.style.margin_left_auto
+        ? 0.0F
+        : resolve_connected_css_length(
+            node, node.style.margin_left, containing.content_width);
+    const auto fixed_right = node.style.margin_right_auto
+        ? 0.0F
+        : resolve_connected_css_length(
+            node, node.style.margin_right, containing.content_width);
+    const auto remaining = std::max(
+        0.0F,
+        containing.content_width - node.layout.width - fixed_left - fixed_right);
+    value = node.style.margin_left_auto && node.style.margin_right_auto
+        ? remaining * 0.5F : remaining;
+    return true;
 }
 
 } // namespace
@@ -359,6 +1200,7 @@ struct v8_dom_runtime::implementation final {
         v8::Global<v8::Context> context;
         v8::Global<v8::Function> callback;
         std::vector<v8::Global<v8::Value>> arguments;
+        double animation_timestamp_ms{-1};
     };
 
     struct pending_promise_rejection final {
@@ -379,9 +1221,24 @@ struct v8_dom_runtime::implementation final {
         bool important{false};
     };
 
+    struct compiled_css_selector final {
+        std::vector<std::string> compounds;
+        std::vector<char> combinators;
+    };
+
     struct css_rule final {
         std::string selector;
+        compiled_css_selector compiled_selector;
         std::vector<css_declaration> declarations;
+        std::vector<std::string> media_queries;
+        uint32_t stylesheet_owner_id{0};
+        uint32_t specificity{0};
+        bool media_matches{true};
+    };
+
+    struct css_opacity_keyframes final {
+        std::vector<node_style::opacity_keyframe> opacity_stops;
+        std::vector<node_style::rotation_keyframe> rotation_stops;
     };
 
     struct connected_resource_task final {
@@ -395,6 +1252,11 @@ struct v8_dom_runtime::implementation final {
         v8::Global<v8::Function> callback;
         std::vector<dom_node*> nodes;
         std::unordered_map<uint32_t, std::pair<float, float>> delivered_sizes;
+    };
+
+    struct session_storage_state final {
+        std::vector<std::string> keys;
+        std::unordered_map<std::string, std::string> values;
     };
 
     struct canvas_path_segment final {
@@ -455,23 +1317,64 @@ struct v8_dom_runtime::implementation final {
 
     struct compilation_cache_entry final {
         v8::Global<v8::UnboundScript> script;
+        std::array<uint8_t, 32> key_digest{};
         size_t source_bytes{0};
+    };
+
+    struct cached_text_resource final {
+        std::string content;
+        std::string entity_tag;
+        int64_t last_modified_unix_seconds{0};
+        int64_t fresh_until_unix_seconds{0};
+    };
+
+    struct process_resource_cache_entry final {
+        cached_text_resource resource;
+        size_t bytes{0};
+        uint64_t access{0};
+    };
+
+    struct prefetched_resource final {
+        resource_response response;
+        cached_text_resource cached;
+        bool loaded{false};
+        bool has_cached{false};
+        bool from_fresh_cache{false};
     };
 
     implementation(
         native_document& document_value,
-        std::function<std::pair<float, float>()> viewport_provider_value,
-        std::string compilation_cache_directory_value)
+        std::function<v8_dom_runtime::viewport_metrics()> viewport_provider_value,
+        std::string compilation_cache_directory_value,
+        resource_loader resource_loader_value)
         : document(document_value)
         , viewport_provider(std::move(viewport_provider_value))
+        , load_resource_callback(std::move(resource_loader_value))
         , compilation_cache_directory(std::move(compilation_cache_directory_value))
         , profile_bindings(std::getenv("HTMLML_PROBE_PROFILE_BINDINGS") != nullptr)
         , profile_startup(std::getenv("HTMLML_PROBE_PROFILE_STARTUP") != nullptr)
+        , profile_css(std::getenv("HTMLML_PROBE_PROFILE_CSS") != nullptr)
     {
+        if (profile_startup) {
+            startup_profile_started = std::chrono::steady_clock::now();
+        }
     }
 
     ~implementation()
     {
+        if (isolate != nullptr && !compilation_cache_directory.empty()) {
+            v8::Isolate::Scope isolate_scope(isolate);
+            v8::HandleScope handle_scope(isolate);
+            for (auto& [key, entry] : compilation_cache) {
+                static_cast<void>(key);
+                if (entry.source_bytes < minimum_hot_cache_source_bytes) continue;
+                const auto script = entry.script.Get(isolate);
+                if (script.IsEmpty()) continue;
+                std::unique_ptr<v8::ScriptCompiler::CachedData> generated(
+                    v8::ScriptCompiler::CreateCodeCache(script));
+                if (generated) write_compilation_cache(entry.key_digest, *generated);
+            }
+        }
         resize_listeners.clear();
         timers.clear();
         pending_promise_rejections.clear();
@@ -487,6 +1390,7 @@ struct v8_dom_runtime::implementation final {
         frame_event_listener_once.clear();
         actual_frame_windows.clear();
         actual_frame_documents.clear();
+        provisional_frame_bodies.clear();
         canvas_contexts.clear();
         canvas_states.clear();
         for (auto& [key, entry] : compilation_cache) {
@@ -496,8 +1400,10 @@ struct v8_dom_runtime::implementation final {
         compilation_cache.clear();
         compilation_cache_order.clear();
         computed_style_wrappers.clear();
+        class_list_wrappers.clear();
         style_wrappers.clear();
         node_wrappers.clear();
+        dom_implementation_object.Reset();
         document_object.Reset();
         style_template.Reset();
         frame_document_template.Reset();
@@ -523,6 +1429,453 @@ struct v8_dom_runtime::implementation final {
         return static_cast<implementation*>(isolate->GetData(0));
     }
 
+    struct feature_observation final {
+        std::string category;
+        std::string feature;
+        std::string classification;
+        std::string semantic_slice;
+        std::string source;
+        std::atomic<uint64_t> count{0};
+
+        feature_observation(
+            std::string category_value,
+            std::string feature_value,
+            std::string classification_value,
+            std::string semantic_slice_value,
+            std::string source_value)
+            : category(std::move(category_value)),
+              feature(std::move(feature_value)),
+              classification(std::move(classification_value)),
+              semantic_slice(std::move(semantic_slice_value)),
+              source(std::move(source_value))
+        {
+        }
+
+        feature_observation(const feature_observation&) = delete;
+        feature_observation& operator=(const feature_observation&) = delete;
+    };
+
+    struct feature_decision final {
+        implementation& owner;
+        std::string category;
+        std::string feature;
+        std::string classification{"supported"};
+        std::string semantic_slice;
+        std::string source;
+
+        feature_decision(
+            implementation& owner_value,
+            std::string category_value,
+            std::string feature_value,
+            std::string source_value)
+            : owner(owner_value),
+              category(std::move(category_value)),
+              feature(std::move(feature_value)),
+              source(std::move(source_value))
+        {
+        }
+
+        feature_decision(const feature_decision&) = delete;
+        feature_decision& operator=(const feature_decision&) = delete;
+
+        ~feature_decision()
+        {
+            owner.record_feature(
+                std::move(category),
+                std::move(feature),
+                std::move(classification),
+                std::move(semantic_slice),
+                std::move(source));
+        }
+    };
+
+    struct composition_feature final {
+        std::string_view category;
+        std::string_view feature;
+    };
+
+    struct composition_detector final {
+        std::string_view id;
+        std::string_view category;
+        std::vector<composition_feature> features;
+    };
+
+    static const std::vector<composition_detector>& composition_detectors()
+    {
+        static const std::vector<composition_detector> detectors{
+            {
+                "css-transform-origin-independent-cascade",
+                "css-computed-style",
+                {{"css", "property:transform"}, {"css", "property:transform-origin"}}
+            },
+            {
+                "css-transform-transition",
+                "css-computed-style-temporal",
+                {{"css", "property:transform"}, {"css", "property:transition"}}
+            },
+            {
+                "css-shadow-radius-overflow",
+                "css-computed-style-subtree",
+                {
+                    {"css", "property:box-shadow"},
+                    {"css", "property:border-radius"},
+                    {"css", "property:overflow"}
+                }
+            },
+            {
+                "css-flex-overflow-constrained-size",
+                "css-computed-style",
+                {
+                    {"css", "property:display"},
+                    {"css", "property:overflow"},
+                    {"css", "property:height"}
+                }
+            },
+            {
+                "css-grid-gap-positioning",
+                "css-computed-style-subtree",
+                {
+                    {"css", "property:grid-template-columns"},
+                    {"css", "property:gap"},
+                    {"css", "property:position"}
+                }
+            },
+            {
+                "css-custom-property-to-paint",
+                "css-value-resolution",
+                {
+                    {"css", "custom-property"},
+                    {"css", "function:var"},
+                    {"css", "paint-property"}
+                }
+            },
+            {
+                "dom-insertbefore-self-reference",
+                "dom-tree-mutation",
+                {
+                    {"dom", "method:Node.insertBefore"},
+                    {"dom", "insertBefore:self-reference"}
+                }
+            }
+        };
+        return detectors;
+    }
+
+    void record_composition(std::string_view id, uint32_t node_id)
+    {
+        std::lock_guard lock(feature_observation_mutex);
+        composition_observed_nodes[std::string(id)].insert(node_id);
+    }
+
+    static bool nonzero_length(const css_length& value)
+    {
+        return std::abs(value.value) > 0.000001F
+            || std::abs(value.pixel_offset) > 0.000001F;
+    }
+
+    static bool has_rounded_corner(const node_style& style)
+    {
+        return nonzero_length(style.border_top_left_radius)
+            || nonzero_length(style.border_top_right_radius)
+            || nonzero_length(style.border_bottom_right_radius)
+            || nonzero_length(style.border_bottom_left_radius);
+    }
+
+    static bool has_constrained_size(const node_style& style)
+    {
+        return nonzero_length(style.width) || nonzero_length(style.height)
+            || nonzero_length(style.min_width) || nonzero_length(style.min_height)
+            || nonzero_length(style.max_width) || nonzero_length(style.max_height);
+    }
+
+    static bool has_nonvisible_overflow(const node_style& style)
+    {
+        return style.overflow_x != overflow_mode::visible
+            || style.overflow_y != overflow_mode::visible;
+    }
+
+    void detect_css_compositions(dom_node& node)
+    {
+        if (node.style.transform_specified && node.style.transform_origin_specified) {
+            record_composition("css-transform-origin-independent-cascade", node.id);
+        }
+        if (node.style.transform_specified
+            && node.style.transform_transition.duration_ms > 0) {
+            record_composition("css-transform-transition", node.id);
+        }
+        if (node.style.opacity_transition.duration_ms > 0) {
+            record_composition("css-opacity-transition", node.id);
+        }
+        if (node.style.color_transition.duration_ms > 0) {
+            record_composition("css-color-transition", node.id);
+        }
+        if (node.style.box_shadow_present && has_rounded_corner(node.style)) {
+            auto clipped = has_nonvisible_overflow(node.style);
+            // A shadow is also affected by clipping established on an ancestor.
+            // Bound the walk so this remains a local CSS composition detector,
+            // rather than claiming whole-document paint-order completeness.
+            auto* ancestor = node.parent;
+            for (size_t depth = 0; !clipped && ancestor != nullptr && depth < 4U;
+                 ++depth, ancestor = ancestor->parent) {
+                clipped = has_nonvisible_overflow(ancestor->style);
+            }
+            if (clipped) record_composition("css-shadow-radius-overflow", node.id);
+        }
+        if (node.style.display == display_mode::flex && has_constrained_size(node.style)
+            && has_nonvisible_overflow(node.style)) {
+            record_composition("css-flex-overflow-constrained-size", node.id);
+        }
+
+        const auto grid_with_gap = [](const dom_node& candidate) {
+            return candidate.style.display == display_mode::grid
+                && !candidate.style.grid_template_columns.empty()
+                && (nonzero_length(candidate.style.row_gap)
+                    || nonzero_length(candidate.style.column_gap));
+        };
+        if (grid_with_gap(node)) {
+            const auto positioned_child = std::any_of(
+                node.children.begin(), node.children.end(), [](const auto* child) {
+                    return child != nullptr
+                        && child->style.position != position_mode::normal;
+                });
+            if (node.style.position != position_mode::normal || positioned_child) {
+                record_composition("css-grid-gap-positioning", node.id);
+            }
+        } else if (node.style.position != position_mode::normal
+            && node.parent != nullptr && grid_with_gap(*node.parent)) {
+            record_composition("css-grid-gap-positioning", node.parent->id);
+        }
+    }
+
+    static bool is_paint_property(std::string_view name)
+    {
+        return name == "background" || name == "background-color" || name == "color"
+            || name == "fill" || name == "stroke"
+            || name == "box-shadow" || name == "border" || name == "border-color"
+            || name == "border-left" || name == "border-top" || name == "border-right"
+            || name == "border-bottom" || name == "border-left-color"
+            || name == "border-top-color" || name == "border-right-color"
+            || name == "border-bottom-color" || name == "outline"
+            || name == "outline-color";
+    }
+
+    static std::string resolved_cursor(dom_node& node)
+    {
+        for (auto* current = &node; current != nullptr; current = current->parent) {
+            if (!current->style.cursor.empty()
+                && current->style.cursor != "inherit"
+                && current->style.cursor != "unset") return current->style.cursor;
+        }
+        return "auto";
+    }
+
+    static uint32_t cursor_kind_for(dom_node& node)
+    {
+        const auto value = lower_html_name(resolved_cursor(node));
+        if (value == "pointer" || value == "hand") return HTMLML_CURSOR_POINTER;
+        if (value == "text" || value == "vertical-text") return HTMLML_CURSOR_TEXT;
+        if (value == "crosshair") return HTMLML_CURSOR_CROSSHAIR;
+        if (value == "wait" || value == "progress") return HTMLML_CURSOR_WAIT;
+        if (value == "move" || value == "grab" || value == "grabbing"
+            || value == "all-scroll") return HTMLML_CURSOR_MOVE;
+        if (value == "not-allowed" || value == "no-drop") return HTMLML_CURSOR_NOT_ALLOWED;
+        if (value == "help") return HTMLML_CURSOR_HELP;
+        return HTMLML_CURSOR_DEFAULT;
+    }
+
+    void record_feature(
+        std::string category,
+        std::string feature,
+        std::string classification,
+        std::string semantic_slice = {},
+        std::string source = {})
+    {
+        const auto key = category + '\x1f' + feature + '\x1f' + classification
+            + '\x1f' + semantic_slice + '\x1f' + source;
+        if (const auto cached = feature_observation_writer_cache.find(key);
+            cached != feature_observation_writer_cache.end()) {
+            cached->second->count.fetch_add(1U, std::memory_order_relaxed);
+            return;
+        }
+        std::lock_guard lock(feature_observation_mutex);
+        auto [entry, inserted] = feature_observations.try_emplace(
+            key,
+            std::move(category),
+            std::move(feature),
+            std::move(classification),
+            std::move(semantic_slice),
+            std::move(source));
+        static_cast<void>(inserted);
+        feature_observation_writer_cache.emplace(key, &entry->second);
+        entry->second.count.fetch_add(1U, std::memory_order_relaxed);
+    }
+
+    static void append_json_string(std::ostringstream& output, std::string_view value)
+    {
+        output << '"';
+        constexpr char hex[] = "0123456789abcdef";
+        for (const auto character : value) {
+            const auto byte = static_cast<unsigned char>(character);
+            switch (character) {
+            case '"': output << "\\\""; break;
+            case '\\': output << "\\\\"; break;
+            case '\b': output << "\\b"; break;
+            case '\f': output << "\\f"; break;
+            case '\n': output << "\\n"; break;
+            case '\r': output << "\\r"; break;
+            case '\t': output << "\\t"; break;
+            default:
+                if (byte < 0x20U) {
+                    output << "\\u00" << hex[byte >> 4U] << hex[byte & 0x0FU];
+                } else {
+                    output << character;
+                }
+                break;
+            }
+        }
+        output << '"';
+    }
+
+    std::string feature_use_json() const
+    {
+        std::lock_guard lock(feature_observation_mutex);
+        std::unordered_set<std::string> dispatched_event_features;
+        for (const auto& [key, observation] : feature_observations) {
+            static_cast<void>(key);
+            if (observation.classification == "supported"
+                && observation.source == "event-dispatch") {
+                dispatched_event_features.insert(
+                    observation.category + '\x1f' + observation.feature);
+            }
+        }
+        std::vector<const feature_observation*> ordered;
+        ordered.reserve(feature_observations.size());
+        for (const auto& [key, observation] : feature_observations) {
+            static_cast<void>(key);
+            if (observation.classification == "unobserved-code-path"
+                && observation.source == "event-listener-registration"
+                && dispatched_event_features.contains(
+                    observation.category + '\x1f' + observation.feature)) {
+                continue;
+            }
+            ordered.push_back(&observation);
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const auto* left, const auto* right) {
+            return std::tie(
+                left->category,
+                left->feature,
+                left->classification,
+                left->semantic_slice,
+                left->source)
+                < std::tie(
+                    right->category,
+                    right->feature,
+                    right->classification,
+                    right->semantic_slice,
+                    right->source);
+        });
+        std::ostringstream output;
+        output << R"({"schema":"htmlml-native-feature-use-v2","complete":false,"incompleteCategories":["html-attributes","css-values-functions-selectors-at-rules","dom-bindings-events","web-apis-storage","fonts-resources-cache"],"observations":[)";
+        for (size_t index = 0; index < ordered.size(); ++index) {
+            if (index != 0U) output << ',';
+            const auto& observation = *ordered[index];
+            output << "{\"category\":";
+            append_json_string(output, observation.category);
+            output << ",\"feature\":";
+            append_json_string(output, observation.feature);
+            output << ",\"classification\":";
+            append_json_string(output, observation.classification);
+            output << ",\"count\":"
+                << observation.count.load(std::memory_order_relaxed);
+            if (!observation.semantic_slice.empty()) {
+                output << ",\"semanticSlice\":";
+                append_json_string(output, observation.semantic_slice);
+            }
+            if (!observation.source.empty()) {
+                output << ",\"source\":";
+                append_json_string(output, observation.source);
+            }
+            output << '}';
+        }
+        output << R"(],"compositionDiscovery":{"schema":"htmlml-native-composition-use-v1","complete":false,"incompleteCategories":["cross-element-layout-paint","dom-event-state","web-api-resource-state"],"detectors":[)";
+        const auto& detectors = composition_detectors();
+        for (size_t index = 0; index < detectors.size(); ++index) {
+            if (index != 0U) output << ',';
+            const auto& detector = detectors[index];
+            output << "{\"id\":";
+            append_json_string(output, detector.id);
+            output << ",\"category\":";
+            append_json_string(output, detector.category);
+            output << ",\"features\":[";
+            for (size_t feature_index = 0; feature_index < detector.features.size();
+                 ++feature_index) {
+                if (feature_index != 0U) output << ',';
+                output << "{\"category\":";
+                append_json_string(output, detector.features[feature_index].category);
+                output << ",\"feature\":";
+                append_json_string(output, detector.features[feature_index].feature);
+                output << '}';
+            }
+            output << "]}";
+        }
+        output << R"(],"observations":[)";
+        std::vector<std::pair<std::string, size_t>> compositions;
+        compositions.reserve(composition_observed_nodes.size());
+        for (const auto& [id, node_ids] : composition_observed_nodes) {
+            if (!node_ids.empty()) compositions.emplace_back(id, node_ids.size());
+        }
+        std::sort(compositions.begin(), compositions.end());
+        for (size_t index = 0; index < compositions.size(); ++index) {
+            if (index != 0U) output << ',';
+            output << "{\"id\":";
+            append_json_string(output, compositions[index].first);
+            output << ",\"count\":" << compositions[index].second
+                << R"(,"source":"native-runtime-detector"})";
+        }
+        output << "]}}";
+        return std::move(output).str();
+    }
+
+    std::string event_listener_inventory_json() const
+    {
+        std::unordered_map<uint32_t, std::unordered_set<std::string>> by_target;
+        for (const auto& [type, targets] : frame_event_listener_targets) {
+            const auto callbacks = frame_event_listeners.find(type);
+            for (size_t index = 0; index < targets.size(); ++index) {
+                if (targets[index] == 0U
+                    || callbacks == frame_event_listeners.end()
+                    || index >= callbacks->second.size()
+                    || callbacks->second[index].IsEmpty()) continue;
+                by_target[targets[index]].insert(type);
+            }
+        }
+        std::vector<uint32_t> target_ids;
+        target_ids.reserve(by_target.size());
+        for (const auto& [target_id, types] : by_target) {
+            static_cast<void>(types);
+            target_ids.push_back(target_id);
+        }
+        std::sort(target_ids.begin(), target_ids.end());
+        std::ostringstream output;
+        output << R"({"schema":"htmlml-event-listener-inventory-v1","complete":true,"targets":[)";
+        for (size_t target_index = 0; target_index < target_ids.size(); ++target_index) {
+            if (target_index != 0U) output << ',';
+            const auto target_id = target_ids[target_index];
+            std::vector<std::string> types(
+                by_target.at(target_id).begin(),
+                by_target.at(target_id).end());
+            std::sort(types.begin(), types.end());
+            output << R"({"nodeId":)" << target_id << R"(,"eventTypes":[)";
+            for (size_t type_index = 0; type_index < types.size(); ++type_index) {
+                if (type_index != 0U) output << ',';
+                append_json_string(output, types[type_index]);
+            }
+            output << "]}";
+        }
+        output << "]}";
+        return std::move(output).str();
+    }
+
     static v8::Intercepted get_window_named_property(
         v8::Local<v8::Name> property,
         const v8::PropertyCallbackInfo<v8::Value>& info)
@@ -543,6 +1896,51 @@ struct v8_dom_runtime::implementation final {
             return nullptr;
         };
         auto* match = find_named(find_named, self->active_root());
+        if (match == nullptr) {
+            static const std::unordered_set<std::string> known_web_api_globals{
+                "localStorage", "indexedDB", "fetch", "XMLHttpRequest", "WebSocket",
+                "Worker", "SharedWorker", "ServiceWorker", "BroadcastChannel",
+                "OffscreenCanvas", "requestIdleCallback", "cancelIdleCallback"};
+            if (known_web_api_globals.contains(name)) {
+                self->record_feature(
+                    "web-api",
+                    "global:" + name,
+                    "unsupported",
+                    "global binding is absent",
+                    "unresolved-global-binding");
+            }
+            return v8::Intercepted::kNo;
+        }
+        info.GetReturnValue().Set(self->wrap_node(*match));
+        return v8::Intercepted::kYes;
+    }
+
+    static v8::Intercepted get_document_named_property(
+        v8::Local<v8::Name> property,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        if (!property->IsString()) return v8::Intercepted::kNo;
+        auto* self = current(info.GetIsolate());
+        if (self == nullptr) return v8::Intercepted::kNo;
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root == nullptr) root = &self->active_root();
+        const auto name = to_utf8(info.GetIsolate(), property.As<v8::Value>());
+        if (name.empty()) return v8::Intercepted::kNo;
+        const auto find_named_form = [&](const auto& recurse, dom_node& candidate) -> dom_node* {
+            if (candidate.tag == "form") {
+                const auto authored_name = candidate.attributes.find("name");
+                if ((authored_name != candidate.attributes.end() && authored_name->second == name)
+                    || candidate.id_attribute == name) return &candidate;
+            }
+            for (auto* child : candidate.children) {
+                if (child == nullptr) continue;
+                if (auto* match = recurse(recurse, *child); match != nullptr) return match;
+            }
+            return nullptr;
+        };
+        auto* match = find_named_form(find_named_form, *root);
         if (match == nullptr) return v8::Intercepted::kNo;
         info.GetReturnValue().Set(self->wrap_node(*match));
         return v8::Intercepted::kYes;
@@ -620,20 +2018,35 @@ struct v8_dom_runtime::implementation final {
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "nodeName"), get_tag_name);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "localName"), get_local_name);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "nodeType"), get_element_node_type);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "__htmlmlNativeNodeId"),
+            get_native_node_id,
+            nullptr,
+            v8::Local<v8::Value>(),
+            static_cast<v8::PropertyAttribute>(
+                v8::PropertyAttribute::ReadOnly
+                | v8::PropertyAttribute::DontEnum
+                | v8::PropertyAttribute::DontDelete));
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "nodeValue"), get_text_content, set_text_content);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "textContent"), get_text_content, set_text_content);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "innerText"), get_text_content, set_text_content);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "data"), get_text_content, set_text_content);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "namespaceURI"), get_namespace_uri);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "children"), get_children);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "childNodes"), get_children);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "parentNode"), get_parent_node);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "parentElement"), get_parent_node);
-        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "firstChild"), get_first_element_child);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "firstChild"), get_first_child);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "lastChild"), get_last_child);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "nextSibling"), get_next_sibling);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "previousSibling"), get_previous_sibling);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "nextElementSibling"), get_next_element_sibling);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "previousElementSibling"), get_previous_element_sibling);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "isConnected"), get_is_connected);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "firstElementChild"), get_first_element_child);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "lastElementChild"), get_last_element_child);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "ownerSVGElement"), get_owner_svg_element);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "dataset"), get_dataset);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "attributes"), get_attributes);
@@ -641,6 +2054,14 @@ struct v8_dom_runtime::implementation final {
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "classList"), get_class_list);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "clientWidth"), get_client_width);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "clientHeight"), get_client_height);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "scrollWidth"), get_scroll_width);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "scrollHeight"), get_scroll_height);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "scrollLeft"), get_scroll_left, set_scroll_left);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "scrollTop"), get_scroll_top, set_scroll_top);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "offsetWidth"), get_client_width);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "offsetHeight"), get_client_height);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "offsetLeft"), get_offset_left);
@@ -648,12 +2069,47 @@ struct v8_dom_runtime::implementation final {
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "offsetParent"), get_offset_parent);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "width"), get_element_width, set_element_width);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "height"), get_element_height, set_element_height);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "colSpan"), get_table_cell_span, set_table_cell_span);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "rowSpan"), get_table_cell_span, set_table_cell_span);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "cellSpacing"), get_reflected_string_attribute, set_reflected_string_attribute);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "cellPadding"), get_reflected_string_attribute, set_reflected_string_attribute);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "enctype"), get_reflected_string_attribute, set_reflected_string_attribute);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "htmlFor"), get_reflected_string_attribute, set_reflected_string_attribute);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "type"), get_element_type, set_element_type);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "name"), get_reflected_string_attribute, set_reflected_string_attribute);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "value"), get_form_value, set_form_value);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "defaultValue"), get_default_value, set_default_value);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "maxLength"), get_max_length, set_max_length);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "readOnly"), get_read_only, set_read_only);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "options"), get_select_options);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "elements"), get_form_elements);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "selectedIndex"), get_selected_index, set_selected_index);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "selectionStart"), get_selection_start, set_selection_start);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "selectionEnd"), get_selection_end, set_selection_end);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "selectionDirection"),
+            get_selection_direction,
+            set_selection_direction);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "checked"), get_checked, set_checked);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "selected"), get_selected, set_selected);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "multiple"), get_multiple, set_multiple);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "disabled"), get_disabled, set_disabled);
+        element->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "tabIndex"), get_tab_index, set_tab_index);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "src"), get_element_url, set_element_src);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "href"), get_element_url, set_element_href);
+        element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "hash"), get_anchor_hash, set_anchor_hash);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "innerHTML"), get_inner_html, set_inner_html);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "contentWindow"), get_content_window);
         element->InstanceTemplate()->SetNativeDataProperty(js_string(isolate, "contentDocument"), get_content_document);
@@ -662,7 +2118,7 @@ struct v8_dom_runtime::implementation final {
             v8::FunctionTemplate::New(isolate, append_child));
         element->PrototypeTemplate()->Set(
             js_string(isolate, "append"),
-            v8::FunctionTemplate::New(isolate, append_child));
+            v8::FunctionTemplate::New(isolate, append_nodes));
         element->PrototypeTemplate()->Set(
             js_string(isolate, "prepend"),
             v8::FunctionTemplate::New(isolate, prepend_child));
@@ -675,6 +2131,9 @@ struct v8_dom_runtime::implementation final {
         element->PrototypeTemplate()->Set(
             js_string(isolate, "removeChild"),
             v8::FunctionTemplate::New(isolate, remove_child));
+        element->PrototypeTemplate()->Set(
+            js_string(isolate, "replaceChild"),
+            v8::FunctionTemplate::New(isolate, replace_child));
         element->PrototypeTemplate()->Set(
             js_string(isolate, "replaceChildren"),
             v8::FunctionTemplate::New(isolate, replace_children));
@@ -696,6 +2155,9 @@ struct v8_dom_runtime::implementation final {
         element->PrototypeTemplate()->Set(
             js_string(isolate, "getClientRects"),
             v8::FunctionTemplate::New(isolate, get_client_rects));
+        element->PrototypeTemplate()->Set(
+            js_string(isolate, "scrollIntoView"),
+            v8::FunctionTemplate::New(isolate, element_scroll_into_view));
         element->PrototypeTemplate()->Set(
             js_string(isolate, "setAttribute"),
             v8::FunctionTemplate::New(isolate, set_attribute));
@@ -726,6 +2188,15 @@ struct v8_dom_runtime::implementation final {
         element->PrototypeTemplate()->Set(
             js_string(isolate, "contains"),
             v8::FunctionTemplate::New(isolate, element_contains));
+        element->PrototypeTemplate()->Set(
+            js_string(isolate, "compareDocumentPosition"),
+            v8::FunctionTemplate::New(isolate, element_compare_document_position));
+        element->PrototypeTemplate()->Set(
+            js_string(isolate, "isSameNode"),
+            v8::FunctionTemplate::New(isolate, element_is_same_node));
+        element->PrototypeTemplate()->Set(
+            js_string(isolate, "isEqualNode"),
+            v8::FunctionTemplate::New(isolate, element_is_equal_node));
         element->PrototypeTemplate()->Set(
             js_string(isolate, "matches"),
             v8::FunctionTemplate::New(isolate, element_matches));
@@ -771,22 +2242,61 @@ struct v8_dom_runtime::implementation final {
         element->PrototypeTemplate()->Set(
             js_string(isolate, "click"),
             v8::FunctionTemplate::New(isolate, element_click));
+        element->PrototypeTemplate()->Set(
+            js_string(isolate, "reset"),
+            v8::FunctionTemplate::New(isolate, form_reset));
         element_template.Reset(isolate, element);
 
         auto style = v8::ObjectTemplate::New(isolate);
         style->SetInternalFieldCount(2);
+        style->SetNativeDataProperty(
+            js_string(isolate, "cssText"), get_style_css_text, set_style_css_text);
         const char* properties[] = {
             "width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight",
-            "left", "top", "right", "bottom",
-            "display", "position", "flexDirection", "flexGrow", "flexShrink", "flexWrap",
-            "alignItems", "alignSelf", "justifyContent", "boxSizing", "borderRadius", "transform", "transformOrigin",
-            "zIndex", "opacity",
-            "background", "backgroundColor", "borderTopWidth", "borderTopColor", "overflow", "color",
-            "fontSize", "fontFamily", "fontWeight", "lineHeight", "textAlign", "whiteSpace",
-            "visibility", "pointerEvents"
+            "left", "top", "right", "bottom", "inset", "insetInlineStart", "insetInlineEnd",
+            "display", "position", "cssFloat", "flexDirection", "flexGrow", "flexShrink",
+            "flexBasis", "flexWrap",
+            "alignItems", "alignSelf", "justifyContent", "gap", "rowGap", "columnGap",
+            "padding", "paddingInline", "paddingBlock",
+            "paddingLeft", "paddingTop", "paddingRight", "paddingBottom",
+            "paddingInlineStart", "paddingInlineEnd", "paddingBlockStart", "paddingBlockEnd",
+            "margin", "marginInline", "marginBlock",
+            "marginLeft", "marginTop", "marginRight", "marginBottom",
+            "boxSizing", "borderRadius", "boxShadow", "transform", "transformOrigin",
+            "transition", "transitionProperty", "transitionDuration", "transitionDelay",
+            "transitionTimingFunction", "animation", "animationName",
+            "animationDuration", "animationDelay", "animationTimingFunction",
+            "animationDirection", "animationFillMode", "animationIterationCount",
+            "animationPlayState", "appearance", "zIndex", "opacity",
+            "background", "backgroundColor", "backgroundImage", "backgroundRepeat",
+            "backgroundAttachment", "backgroundClip", "backgroundOrigin",
+            "backgroundPosition", "backgroundPositionX", "backgroundPositionY", "backgroundSize",
+            "border", "borderWidth", "borderStyle", "borderColor",
+            "borderTop", "borderRight", "borderBottom", "borderLeft",
+            "borderTopWidth", "borderRightWidth",
+            "borderBottomWidth", "borderLeftWidth", "borderTopStyle", "borderTopColor",
+            "borderRightColor", "borderBottomColor", "borderLeftColor",
+            "borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius",
+            "borderBottomLeftRadius", "borderCollapse", "borderSpacing", "clear",
+            "columnCount", "columns", "emptyCells", "fillOpacity", "float",
+            "gridArea", "gridColumn", "gridColumnEnd", "gridColumnStart",
+            "gridRow", "gridRowEnd", "gridRowStart", "order", "orphans",
+            "outlineColor", "outlineWidth", "outlineStyle",
+            "overflow", "overflowX", "overflowY", "color",
+            "font", "fontSize", "fontFamily", "fontStretch", "fontWeight", "lineHeight",
+            "letterSpacing", "wordSpacing", "resize", "tableLayout", "textAlign",
+            "textDecoration", "textOverflow", "verticalAlign", "whiteSpace", "widows", "zoom",
+            "visibility", "direction", "pointerEvents", "cursor"
         };
         for (const auto* property : properties) {
             style->SetNativeDataProperty(js_string(isolate, property), get_style_property, set_style_property);
+            const auto css_name = canonical_css_property_name(property);
+            if (css_name != property) {
+                style->SetNativeDataProperty(
+                    js_string(isolate, css_name.c_str()),
+                    get_style_property,
+                    set_style_property);
+            }
         }
         style->Set(
             js_string(isolate, "setProperty"),
@@ -815,13 +2325,19 @@ struct v8_dom_runtime::implementation final {
         // geometry probes see an empty document instead of a TypeError.
         frame_document->Set(
             js_string(isolate, "querySelectorAll"),
-            v8::FunctionTemplate::New(isolate, empty_array));
+            v8::FunctionTemplate::New(isolate, document_query_selector_all));
         frame_document->Set(
             js_string(isolate, "querySelector"),
-            v8::FunctionTemplate::New(isolate, return_null));
+            v8::FunctionTemplate::New(isolate, document_query_selector));
         frame_document->Set(
             js_string(isolate, "getElementById"),
-            v8::FunctionTemplate::New(isolate, return_null));
+            v8::FunctionTemplate::New(isolate, get_element_by_id));
+        frame_document->SetNativeDataProperty(
+            js_string(isolate, "activeElement"),
+            get_provisional_frame_active_element);
+        frame_document->SetNativeDataProperty(
+            js_string(isolate, "defaultView"),
+            get_provisional_frame_default_view);
         frame_document_template.Reset(isolate, frame_document);
 
         auto frame_window = v8::ObjectTemplate::New(isolate);
@@ -832,16 +2348,58 @@ struct v8_dom_runtime::implementation final {
         frame_window->Set(
             js_string(isolate, "removeEventListener"),
             v8::FunctionTemplate::New(isolate, remove_event_listener));
+        frame_window->Set(
+            js_string(isolate, "getComputedStyle"),
+            v8::FunctionTemplate::New(isolate, get_computed_style));
+        frame_window->SetNativeDataProperty(
+            js_string(isolate, "frameElement"),
+            get_provisional_frame_element);
+        frame_window->SetNativeDataProperty(
+            js_string(isolate, "innerWidth"),
+            get_inner_width);
+        frame_window->SetNativeDataProperty(
+            js_string(isolate, "innerHeight"),
+            get_inner_height);
+        frame_window->SetNativeDataProperty(
+            js_string(isolate, "devicePixelRatio"),
+            get_device_pixel_ratio);
         frame_window_template.Reset(isolate, frame_window);
 
         auto document_template = v8::ObjectTemplate::New(isolate);
         document_template->SetInternalFieldCount(1);
+        document_template->SetHandler(v8::NamedPropertyHandlerConfiguration(
+            get_document_named_property,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            {},
+            v8::PropertyHandlerFlags::kNonMasking));
         document_template->SetNativeDataProperty(js_string(isolate, "body"), get_body);
         document_template->SetNativeDataProperty(js_string(isolate, "documentElement"), get_body);
         document_template->SetNativeDataProperty(js_string(isolate, "head"), get_body);
+        document_template->SetNativeDataProperty(
+            js_string(isolate, "scrollingElement"),
+            get_scrolling_element);
         document_template->SetNativeDataProperty(js_string(isolate, "nodeType"), get_document_node_type);
+        document_template->SetNativeDataProperty(js_string(isolate, "nodeName"), get_document_node_name);
         document_template->SetNativeDataProperty(js_string(isolate, "defaultView"), get_default_view);
+        document_template->SetNativeDataProperty(js_string(isolate, "location"), get_document_location);
+        document_template->SetNativeDataProperty(js_string(isolate, "links"), get_document_links);
+        document_template->SetNativeDataProperty(
+            js_string(isolate, "cookie"),
+            get_document_cookie,
+            set_document_cookie);
+        document_template->SetNativeDataProperty(
+            js_string(isolate, "__htmlMlDocumentCookie"),
+            get_document_cookie,
+            set_document_cookie,
+            v8::Local<v8::Value>(),
+            v8::PropertyAttribute::DontEnum);
         document_template->SetNativeDataProperty(js_string(isolate, "activeElement"), get_active_element);
+        document_template->SetNativeDataProperty(
+            js_string(isolate, "implementation"),
+            get_document_implementation);
         document_template->Set(
             js_string(isolate, "createElement"),
             v8::FunctionTemplate::New(isolate, create_element));
@@ -851,6 +2409,12 @@ struct v8_dom_runtime::implementation final {
         document_template->Set(
             js_string(isolate, "createTextNode"),
             v8::FunctionTemplate::New(isolate, create_text_node));
+        document_template->Set(
+            js_string(isolate, "createComment"),
+            v8::FunctionTemplate::New(isolate, create_comment));
+        document_template->Set(
+            js_string(isolate, "createAttribute"),
+            v8::FunctionTemplate::New(isolate, create_attribute));
         document_template->Set(
             js_string(isolate, "createDocumentFragment"),
             v8::FunctionTemplate::New(isolate, create_document_fragment));
@@ -891,12 +2455,368 @@ struct v8_dom_runtime::implementation final {
             js_string(isolate, "getSelection"),
             v8::FunctionTemplate::New(isolate, get_selection));
         this->document_template.Reset(isolate, document_template);
+        auto implementation_value = v8::Object::New(isolate);
+        implementation_value->Set(
+            local_context,
+            js_string(isolate, "createHTMLDocument"),
+            v8::Function::New(local_context, create_html_document).ToLocalChecked()).Check();
+        implementation_value->Set(
+            local_context,
+            js_string(isolate, "createDocument"),
+            v8::Function::New(local_context, create_xml_document).ToLocalChecked()).Check();
+        dom_implementation_object.Reset(isolate, implementation_value);
         auto document_value = document_template->NewInstance(local_context).ToLocalChecked();
         document_value->SetAlignedPointerInInternalField(
             0,
-            this,
+            &document.body(),
             v8::kEmbedderDataTypeTagDefault);
+        // Modern input-event feature detection checks property presence before
+        // installing its legacy IE attachEvent fallback.
+        document_value->Set(
+            local_context,
+            js_string(isolate, "oninput"),
+            v8::Null(isolate)).Check();
         document_object.Reset(isolate, document_value);
+    }
+
+    static session_storage_state* unwrap_session_storage(v8::Local<v8::Object> object)
+    {
+        return object->InternalFieldCount() < 1
+            ? nullptr
+            : static_cast<session_storage_state*>(object->GetAlignedPointerFromInternalField(
+                0,
+                v8::kEmbedderDataTypeTagDefault));
+    }
+
+    static session_storage_state* require_session_storage(
+        const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* storage = unwrap_session_storage(info.This());
+        if (storage == nullptr) {
+            info.GetIsolate()->ThrowException(v8::Exception::TypeError(
+                js_string(info.GetIsolate(), "Illegal invocation")));
+        }
+        return storage;
+    }
+
+    static void session_storage_get_item(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Storage.getItem", "supported", {}, "web-api-binding");
+        auto* storage = require_session_storage(info);
+        if (storage == nullptr) return;
+        const auto key = info.Length() > 0
+            ? to_utf8(info.GetIsolate(), info[0]) : std::string("undefined");
+        const auto known = storage->values.find(key);
+        info.GetReturnValue().Set(known == storage->values.end()
+            ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+            : v8::Local<v8::Value>(js_string(info.GetIsolate(), known->second.c_str())));
+    }
+
+    static void session_storage_set_item(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Storage.setItem", "supported", {}, "web-api-binding");
+        auto* storage = require_session_storage(info);
+        if (storage == nullptr) return;
+        const auto key = info.Length() > 0
+            ? to_utf8(info.GetIsolate(), info[0]) : std::string("undefined");
+        const auto value = info.Length() > 1
+            ? to_utf8(info.GetIsolate(), info[1]) : std::string("undefined");
+        if (!storage->values.contains(key)) storage->keys.push_back(key);
+        storage->values[key] = value;
+    }
+
+    static void session_storage_remove_item(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Storage.removeItem", "supported", {}, "web-api-binding");
+        auto* storage = require_session_storage(info);
+        if (storage == nullptr) return;
+        const auto key = info.Length() > 0
+            ? to_utf8(info.GetIsolate(), info[0]) : std::string("undefined");
+        if (storage->values.erase(key) == 0U) return;
+        std::erase(storage->keys, key);
+    }
+
+    static void session_storage_clear(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Storage.clear", "supported", {}, "web-api-binding");
+        auto* storage = require_session_storage(info);
+        if (storage == nullptr) return;
+        storage->keys.clear();
+        storage->values.clear();
+    }
+
+    static void session_storage_key(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Storage.key", "supported", {}, "web-api-binding");
+        auto* storage = require_session_storage(info);
+        if (storage == nullptr) return;
+        const auto context = info.GetIsolate()->GetCurrentContext();
+        const auto index = info.Length() > 0
+            ? info[0]->Uint32Value(context).FromMaybe(std::numeric_limits<uint32_t>::max())
+            : std::numeric_limits<uint32_t>::max();
+        info.GetReturnValue().Set(index >= storage->keys.size()
+            ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+            : v8::Local<v8::Value>(js_string(
+                info.GetIsolate(),
+                storage->keys[index].c_str())));
+    }
+
+    static void get_session_storage_length(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Storage.length", "supported", {}, "web-api-binding");
+        auto* storage = unwrap_session_storage(info.Holder());
+        if (storage != nullptr) {
+            info.GetReturnValue().Set(v8::Integer::NewFromUnsigned(
+                info.GetIsolate(),
+                static_cast<uint32_t>(storage->keys.size())));
+        }
+    }
+
+    v8::Local<v8::Object> create_session_storage(
+        v8::Local<v8::Context> local_context,
+        session_storage_state& storage)
+    {
+        auto storage_template = v8::ObjectTemplate::New(isolate);
+        storage_template->SetInternalFieldCount(1);
+        storage_template->Set(
+            js_string(isolate, "getItem"),
+            v8::FunctionTemplate::New(isolate, session_storage_get_item));
+        storage_template->Set(
+            js_string(isolate, "setItem"),
+            v8::FunctionTemplate::New(isolate, session_storage_set_item));
+        storage_template->Set(
+            js_string(isolate, "removeItem"),
+            v8::FunctionTemplate::New(isolate, session_storage_remove_item));
+        storage_template->Set(
+            js_string(isolate, "clear"),
+            v8::FunctionTemplate::New(isolate, session_storage_clear));
+        storage_template->Set(
+            js_string(isolate, "key"),
+            v8::FunctionTemplate::New(isolate, session_storage_key));
+        storage_template->SetNativeDataProperty(
+            js_string(isolate, "length"),
+            get_session_storage_length,
+            nullptr,
+            v8::Local<v8::Value>(),
+            v8::PropertyAttribute::ReadOnly);
+        auto result = storage_template->NewInstance(local_context).ToLocalChecked();
+        result->SetAlignedPointerInInternalField(
+            0,
+            &storage,
+            v8::kEmbedderDataTypeTagDefault);
+        return result;
+    }
+
+    void install_document_constructor(
+        v8::Local<v8::Context> local_context,
+        v8::Local<v8::Object> global,
+        v8::Local<v8::Object> document_value)
+    {
+        auto constructor_template = v8::FunctionTemplate::New(isolate);
+        constructor_template->SetClassName(js_string(isolate, "Document"));
+        auto constructor = constructor_template->GetFunction(local_context).ToLocalChecked();
+        global->Set(local_context, js_string(isolate, "Document"), constructor).Check();
+        auto prototype = constructor->Get(
+            local_context,
+            js_string(isolate, "prototype")).ToLocalChecked().As<v8::Object>();
+        const auto cookie_name = js_string(isolate, "cookie");
+        auto cookie_getter = v8::Function::New(
+            local_context,
+            document_cookie_getter_bridge).ToLocalChecked();
+        auto cookie_setter = v8::Function::New(
+            local_context,
+            document_cookie_setter_bridge).ToLocalChecked();
+        v8::PropertyDescriptor cookie_descriptor(cookie_getter, cookie_setter);
+        cookie_descriptor.set_enumerable(true);
+        cookie_descriptor.set_configurable(true);
+        prototype->DefineProperty(
+            local_context,
+            cookie_name,
+            cookie_descriptor).Check();
+        document_value->SetPrototype(local_context, prototype).Check();
+    }
+
+    static void document_cookie_getter_bridge(
+        const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        const auto local_context = info.GetIsolate()->GetCurrentContext();
+        v8::Local<v8::Value> value;
+        if (info.This()->Get(
+                local_context,
+                js_string(info.GetIsolate(), "__htmlMlDocumentCookie")).ToLocal(&value)) {
+            info.GetReturnValue().Set(value);
+        }
+    }
+
+    static void document_cookie_setter_bridge(
+        const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        if (info.Length() == 0) return;
+        const auto local_context = info.GetIsolate()->GetCurrentContext();
+        info.This()->Set(
+            local_context,
+            js_string(info.GetIsolate(), "__htmlMlDocumentCookie"),
+            info[0]).Check();
+    }
+
+    void install_intersection_observer_polyfill(v8::Local<v8::Context> local_context)
+    {
+        constexpr std::string_view source = R"JS(
+          (() => {
+            const normalizeThresholds = value => {
+              const source = value === undefined ? [0] : Array.isArray(value) ? value : [value];
+              const values = Array.from(new Set(source.map(item => {
+                const threshold = Number(item);
+                if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+                  throw new RangeError('IntersectionObserver threshold must be between 0 and 1');
+                }
+                return threshold;
+              }))).sort((left, right) => left - right);
+              return values.length ? values : [0];
+            };
+            const normalizeRootMargin = value => {
+              const parts = String(value === undefined ? '0px' : value).trim().split(/\s+/).filter(Boolean);
+              if (parts.length < 1 || parts.length > 4 || parts.some(part =>
+                !/^-?(?:\d+|\d*\.\d+)(?:px|%)$/.test(part))) {
+                throw new SyntaxError('IntersectionObserver rootMargin must use px or % lengths');
+              }
+              if (parts.length === 1) parts.push(parts[0], parts[0], parts[0]);
+              else if (parts.length === 2) parts.push(parts[0], parts[1]);
+              else if (parts.length === 3) parts.push(parts[1]);
+              return parts.join(' ');
+            };
+            const marginPixels = (value, reference) => value.endsWith('%')
+              ? Number.parseFloat(value) * reference / 100
+              : Number.parseFloat(value);
+            const cloneRect = rect => ({
+              x: Number(rect.x), y: Number(rect.y),
+              left: Number(rect.left), top: Number(rect.top),
+              right: Number(rect.right), bottom: Number(rect.bottom),
+              width: Number(rect.width), height: Number(rect.height)
+            });
+            class HtmlMLIntersectionObserverEntry {
+              constructor(target, rootBounds, targetRect, intersectionRect, isIntersecting, ratio) {
+                this.time = typeof performance?.now === 'function' ? performance.now() : Date.now();
+                this.target = target;
+                this.rootBounds = rootBounds;
+                this.boundingClientRect = targetRect;
+                this.intersectionRect = intersectionRect;
+                this.isIntersecting = isIntersecting;
+                this.intersectionRatio = ratio;
+              }
+            }
+            class HtmlMLIntersectionObserver {
+              constructor(callback, options = {}) {
+                if (typeof callback !== 'function') {
+                  throw new TypeError('IntersectionObserver callback must be a function');
+                }
+                this.root = options.root == null ? null : options.root;
+                this.rootMargin = normalizeRootMargin(options.rootMargin);
+                this.thresholds = normalizeThresholds(options.threshold);
+                this._callback = callback;
+                this._observations = [];
+                this._timer = 0;
+                this._queuedEntries = [];
+              }
+              _thresholdBucket(ratio) {
+                let bucket = 0;
+                while (bucket < this.thresholds.length && ratio >= this.thresholds[bucket]) bucket++;
+                return bucket;
+              }
+              _rootRect() {
+                const base = this.root
+                  ? cloneRect(this.root.getBoundingClientRect())
+                  : { x: 0, y: 0, left: 0, top: 0, right: Number(innerWidth),
+                      bottom: Number(innerHeight), width: Number(innerWidth), height: Number(innerHeight) };
+                const margin = this.rootMargin.split(/\s+/);
+                const top = marginPixels(margin[0], base.height);
+                const right = marginPixels(margin[1], base.width);
+                const bottom = marginPixels(margin[2], base.height);
+                const left = marginPixels(margin[3], base.width);
+                return {
+                  x: base.left - left, y: base.top - top,
+                  left: base.left - left, top: base.top - top,
+                  right: base.right + right, bottom: base.bottom + bottom,
+                  width: Math.max(0, base.width + left + right),
+                  height: Math.max(0, base.height + top + bottom)
+                };
+              }
+              _check() {
+                if (!this._observations.length) return;
+                const rootBounds = this._rootRect();
+                const entries = [];
+                for (const observation of this._observations) {
+                  const targetRect = cloneRect(observation.target.getBoundingClientRect());
+                  const left = Math.max(rootBounds.left, targetRect.left);
+                  const top = Math.max(rootBounds.top, targetRect.top);
+                  const right = Math.min(rootBounds.right, targetRect.right);
+                  const bottom = Math.min(rootBounds.bottom, targetRect.bottom);
+                  const width = Math.max(0, right - left);
+                  const height = Math.max(0, bottom - top);
+                  const isIntersecting = width > 0 && height > 0;
+                  const area = Math.max(0, targetRect.width) * Math.max(0, targetRect.height);
+                  const ratio = area > 0 ? width * height / area : isIntersecting ? 1 : 0;
+                  const bucket = this._thresholdBucket(ratio);
+                  if (!observation.initialized || observation.isIntersecting !== isIntersecting
+                      || observation.bucket !== bucket) {
+                    observation.initialized = true;
+                    observation.isIntersecting = isIntersecting;
+                    observation.bucket = bucket;
+                    entries.push(new HtmlMLIntersectionObserverEntry(
+                      observation.target, rootBounds, targetRect,
+                      { x: left, y: top, left, top, right, bottom, width, height },
+                      isIntersecting, ratio));
+                  }
+                }
+                if (entries.length) this._callback(entries, this);
+              }
+              observe(target) {
+                if (!target || typeof target.getBoundingClientRect !== 'function') {
+                  throw new TypeError('IntersectionObserver.observe requires an Element');
+                }
+                if (this._observations.some(observation => observation.target === target)) return;
+                this._observations.push({ target, initialized: false, isIntersecting: false, bucket: -1 });
+                setTimeout(() => this._check(), 0);
+                if (!this._timer) this._timer = setInterval(() => this._check(), 32);
+              }
+              unobserve(target) {
+                const index = this._observations.findIndex(observation => observation.target === target);
+                if (index >= 0) this._observations.splice(index, 1);
+                if (!this._observations.length && this._timer) {
+                  clearInterval(this._timer);
+                  this._timer = 0;
+                }
+              }
+              disconnect() {
+                this._observations.length = 0;
+                this._queuedEntries.length = 0;
+                if (this._timer) clearInterval(this._timer);
+                this._timer = 0;
+              }
+              takeRecords() {
+                const records = this._queuedEntries.slice();
+                this._queuedEntries.length = 0;
+                return records;
+              }
+            }
+            Object.defineProperties(globalThis, {
+              IntersectionObserver: { value: HtmlMLIntersectionObserver, writable: true, configurable: true },
+              IntersectionObserverEntry: { value: HtmlMLIntersectionObserverEntry, writable: true, configurable: true }
+            });
+          })();
+        )JS";
+        auto script = v8::Script::Compile(
+            local_context,
+            js_string(isolate, std::string(source).c_str())).ToLocalChecked();
+        script->Run(local_context).ToLocalChecked();
     }
 
     void install_globals(v8::Local<v8::Context> local_context)
@@ -910,8 +2830,20 @@ struct v8_dom_runtime::implementation final {
             document_object.Get(isolate)).Check();
         global->Set(
             local_context,
+            js_string(isolate, "sessionStorage"),
+            create_session_storage(local_context, outer_session_storage)).Check();
+        global->Set(
+            local_context,
             js_string(isolate, "getComputedStyle"),
             v8::Function::New(local_context, get_computed_style).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "matchMedia"),
+            v8::Function::New(local_context, match_media).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "open"),
+            v8::Function::New(local_context, window_open).ToLocalChecked()).Check();
         global->Set(
             local_context,
             js_string(isolate, "requestAnimationFrame"),
@@ -942,9 +2874,25 @@ struct v8_dom_runtime::implementation final {
             v8::Function::New(local_context, add_event_listener).ToLocalChecked()).Check();
         global->Set(
             local_context,
+            js_string(isolate, "removeEventListener"),
+            v8::Function::New(local_context, remove_event_listener).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
             js_string(isolate, "dispatchEvent"),
             v8::Function::New(local_context, dispatch_event).ToLocalChecked()).Check();
         auto event_template = v8::FunctionTemplate::New(isolate, event_constructor);
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "preventDefault"),
+            v8::FunctionTemplate::New(isolate, event_prevent_default));
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "stopPropagation"),
+            v8::FunctionTemplate::New(isolate, event_stop_propagation));
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "stopImmediatePropagation"),
+            v8::FunctionTemplate::New(isolate, event_stop_immediate_propagation));
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "composedPath"),
+            v8::FunctionTemplate::New(isolate, event_composed_path));
         global->Set(
             local_context,
             js_string(isolate, "Event"),
@@ -953,6 +2901,30 @@ struct v8_dom_runtime::implementation final {
             local_context,
             js_string(isolate, "CustomEvent"),
             event_template->GetFunction(local_context).ToLocalChecked()).Check();
+        auto mouse_event_template = v8::FunctionTemplate::New(isolate, mouse_event_constructor);
+        mouse_event_template->Inherit(event_template);
+        global->Set(
+            local_context,
+            js_string(isolate, "MouseEvent"),
+            mouse_event_template->GetFunction(local_context).ToLocalChecked()).Check();
+        auto css = v8::Object::New(isolate);
+        css->Set(
+            local_context,
+            js_string(isolate, "escape"),
+            v8::Function::New(local_context, css_escape, {}, 1).ToLocalChecked()).Check();
+        css->Set(
+            local_context,
+            js_string(isolate, "supports"),
+            v8::Function::New(local_context, css_supports).ToLocalChecked()).Check();
+        global->Set(local_context, js_string(isolate, "CSS"), css).Check();
+        auto dom_parser_template = v8::FunctionTemplate::New(isolate);
+        dom_parser_template->PrototypeTemplate()->Set(
+            js_string(isolate, "parseFromString"),
+            v8::FunctionTemplate::New(isolate, dom_parser_parse));
+        global->Set(
+            local_context,
+            js_string(isolate, "DOMParser"),
+            dom_parser_template->GetFunction(local_context).ToLocalChecked()).Check();
         auto element_constructor = element_template.Get(isolate)->GetFunction(local_context).ToLocalChecked();
         element_constructor->Set(
             local_context,
@@ -979,7 +2951,10 @@ struct v8_dom_runtime::implementation final {
         global->Set(local_context, js_string(isolate, "HTMLImageElement"), element_constructor).Check();
         global->Set(local_context, js_string(isolate, "HTMLInputElement"), element_constructor).Check();
         global->Set(local_context, js_string(isolate, "SVGElement"), element_constructor).Check();
-        global->Set(local_context, js_string(isolate, "Document"), element_constructor).Check();
+        install_document_constructor(
+            local_context,
+            global,
+            document_object.Get(isolate));
         global->Set(local_context, js_string(isolate, "DocumentFragment"), element_constructor).Check();
         global->Set(local_context, js_string(isolate, "Window"), element_constructor).Check();
         global->Set(
@@ -990,6 +2965,14 @@ struct v8_dom_runtime::implementation final {
             local_context,
             js_string(isolate, "__htmlMlCreateObjectUrl"),
             v8::Function::New(local_context, create_object_url).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "__htmlMlResolveUrl"),
+            v8::Function::New(local_context, resolve_url).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "__htmlMlRecordWebApi"),
+            v8::Function::New(local_context, record_web_api_use).ToLocalChecked()).Check();
         global->SetNativeDataProperty(
             local_context,
             js_string(isolate, "innerWidth"),
@@ -998,10 +2981,15 @@ struct v8_dom_runtime::implementation final {
             local_context,
             js_string(isolate, "innerHeight"),
             get_inner_height).Check();
-        global->Set(local_context, js_string(isolate, "devicePixelRatio"), v8::Number::New(isolate, 1)).Check();
+        global->SetNativeDataProperty(
+            local_context,
+            js_string(isolate, "devicePixelRatio"),
+            get_device_pixel_ratio).Check();
+        install_screen(local_context, global);
         global->Set(local_context, js_string(isolate, "parent"), global).Check();
         global->Set(local_context, js_string(isolate, "top"), global).Check();
         global->Set(local_context, js_string(isolate, "opener"), v8::Null(isolate)).Check();
+        global->Set(local_context, js_string(isolate, "name"), js_string(isolate, "")).Check();
 
         auto performance = v8::Object::New(isolate);
         performance->Set(
@@ -1021,9 +3009,27 @@ struct v8_dom_runtime::implementation final {
         performance->Set(local_context, js_string(isolate, "clearMeasures"),
             v8::Function::New(local_context, console_log).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "performance"), performance).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "__htmlMlCreateObjectUrl"),
+            v8::Function::New(local_context, create_object_url).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "Image"),
             v8::FunctionTemplate::New(isolate, image_constructor)
                 ->GetFunction(local_context).ToLocalChecked()).Check();
+        auto path_template = v8::FunctionTemplate::New(isolate, path_2d_constructor);
+        global->Set(
+            local_context,
+            js_string(isolate, "Path2D"),
+            path_template->GetFunction(local_context).ToLocalChecked()).Check();
+        auto matrix_template = v8::FunctionTemplate::New(isolate, dom_matrix_constructor);
+        global->Set(
+            local_context,
+            js_string(isolate, "DOMMatrix"),
+            matrix_template->GetFunction(local_context).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "DOMMatrixReadOnly"),
+            matrix_template->GetFunction(local_context).ToLocalChecked()).Check();
 
         auto location = v8::Object::New(isolate);
         location->Set(
@@ -1036,10 +3042,7 @@ struct v8_dom_runtime::implementation final {
         location->Set(local_context, js_string(isolate, "hash"), js_string(isolate, "")).Check();
         global->Set(local_context, js_string(isolate, "location"), location).Check();
 
-        auto navigator = v8::Object::New(isolate);
-        navigator->Set(local_context, js_string(isolate, "userAgent"), js_string(isolate, "HtmlML.Native/V8")).Check();
-        navigator->Set(local_context, js_string(isolate, "language"), js_string(isolate, "en-US")).Check();
-        global->Set(local_context, js_string(isolate, "navigator"), navigator).Check();
+        install_navigator(isolate, local_context, global);
 
         auto console = v8::Object::New(isolate);
         console->Set(local_context, js_string(isolate, "log"),
@@ -1050,6 +3053,118 @@ struct v8_dom_runtime::implementation final {
             v8::Function::New(local_context, console_log, v8::Integer::New(isolate, 2)).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "console"), console).Check();
         install_host_bridge(local_context);
+
+        constexpr std::string_view crypto_source = R"JS(
+            class HtmlMLBlob {
+              constructor(parts = []) {
+                __htmlMlRecordWebApi(
+                  'Blob.constructor', 'partially-supported',
+                  'text serialization without MIME type, byte preservation, slicing, or streaming');
+                this._text = Array.from(parts, String).join('');
+              }
+              toString() { return this._text; }
+            }
+            class HtmlMLURLSearchParams {
+              constructor(owner = null) {
+                this._owner = owner;
+                this._pairs = [];
+              }
+              append(name, value) {
+                __htmlMlRecordWebApi(
+                  'URLSearchParams.append', 'partially-supported',
+                  'ordered append and URL serialization without the complete mutation/query surface');
+                this._pairs.push([String(name), String(value)]);
+                if (!this._owner) return;
+                const serialized = `${encodeURIComponent(String(name))}=${encodeURIComponent(String(value))}`;
+                this._owner.search += (this._owner.search ? '&' : '?') + serialized;
+                this._owner.href = this._owner.origin + this._owner.pathname
+                  + this._owner.search + this._owner.hash;
+              }
+              toString() {
+                return this._pairs.map(([name, value]) =>
+                  `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('&');
+              }
+            }
+            class HtmlMLURL {
+              constructor(value, base = globalThis.location?.href || '') {
+                __htmlMlRecordWebApi(
+                  'URL.constructor', 'partially-supported',
+                  'hierarchical URL resolution and common components without the complete URL parser');
+                this.href = __htmlMlResolveUrl(String(value), String(base));
+                const match = /^(?:([a-z][a-z0-9+.-]*:))?(?:\/\/([^/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(this.href) || [];
+                this.protocol = match[1] || '';
+                this.host = match[2] || '';
+                const separator = this.host.lastIndexOf(':');
+                this.hostname = separator > 0 ? this.host.slice(0, separator) : this.host;
+                this.port = separator > 0 ? this.host.slice(separator + 1) : '';
+                this.pathname = match[3] || '';
+                this.search = match[4] || '';
+                this.hash = match[5] || '';
+                this.origin = this.protocol && this.host ? `${this.protocol}//${this.host}` : 'null';
+                this.searchParams = new HtmlMLURLSearchParams(this);
+              }
+              toString() { return this.href; }
+              toJSON() { return this.href; }
+              static createObjectURL(blob) { return __htmlMlCreateObjectUrl(String(blob)); }
+              static revokeObjectURL() {}
+            }
+            class HtmlMLDOMException extends Error {
+              constructor(message = '', name = 'Error') {
+                super(String(message));
+                this.name = String(name);
+                const legacyCodes = {
+                  IndexSizeError: 1,
+                  HierarchyRequestError: 3,
+                  WrongDocumentError: 4,
+                  InvalidCharacterError: 5,
+                  NoModificationAllowedError: 7,
+                  NotFoundError: 8,
+                  NotSupportedError: 9,
+                  InUseAttributeError: 10,
+                  InvalidStateError: 11,
+                  SyntaxError: 12,
+                  InvalidModificationError: 13,
+                  NamespaceError: 14,
+                  InvalidAccessError: 15,
+                  TypeMismatchError: 17,
+                  SecurityError: 18,
+                  NetworkError: 19,
+                  AbortError: 20,
+                  URLMismatchError: 21,
+                  QuotaExceededError: 22,
+                  TimeoutError: 23,
+                  InvalidNodeTypeError: 24,
+                  DataCloneError: 25
+                };
+                this.code = legacyCodes[this.name] || 0;
+              }
+            }
+            Object.defineProperties(globalThis, {
+              Blob: { value: HtmlMLBlob, configurable: true },
+              URL: { value: HtmlMLURL, configurable: true },
+              URLSearchParams: { value: HtmlMLURLSearchParams, configurable: true },
+              DOMException: { value: HtmlMLDOMException, configurable: true },
+              crypto: { value: {
+                getRandomValues(array) {
+                  __htmlMlRecordWebApi(
+                    'Crypto.getRandomValues', 'partially-supported',
+                    'integer TypedArray filling without a cryptographic entropy guarantee');
+                  if (!ArrayBuffer.isView(array) || array instanceof DataView) {
+                    throw new TypeError('Expected an integer TypedArray');
+                  }
+                  for (let index = 0; index < array.length; index++) {
+                    array[index] = Math.floor(Math.random() * 256);
+                  }
+                  return array;
+                }
+              }, configurable: true }
+            });
+        )JS";
+        auto crypto_script = v8::Script::Compile(
+            local_context,
+            js_string(isolate, std::string(crypto_source).c_str())).ToLocalChecked();
+        crypto_script->Run(local_context).ToLocalChecked();
+        install_intersection_observer_polyfill(local_context);
     }
 
     void install_host_bridge(v8::Local<v8::Context> local_context)
@@ -1083,6 +3198,11 @@ struct v8_dom_runtime::implementation final {
         return true;
     }
 
+    uint32_t current_cursor_kind() const noexcept
+    {
+        return current_cursor_kind_value;
+    }
+
     bool try_take_console_message(std::string& message)
     {
         std::lock_guard lock(console_message_mutex);
@@ -1090,6 +3210,110 @@ struct v8_dom_runtime::implementation final {
         message = std::move(console_messages.front());
         console_messages.pop_front();
         return true;
+    }
+
+    bool enqueue_host_request(
+        v8::Local<v8::Context> local_context,
+        v8::Local<v8::Object> request)
+    {
+        v8::Local<v8::String> json;
+        if (!v8::JSON::Stringify(local_context, request).ToLocal(&json)) return false;
+        std::lock_guard lock(host_request_mutex);
+        constexpr size_t maximum_host_requests = 1024U;
+        if (host_requests.size() >= maximum_host_requests) return false;
+        host_requests.push_back(to_utf8(isolate, json));
+        return true;
+    }
+
+    bool queue_external_navigation(dom_node& target)
+    {
+        auto* anchor = &target;
+        while (anchor != nullptr && anchor->tag != "a") anchor = anchor->parent;
+        if (anchor == nullptr || anchor->attributes.contains("download")) return true;
+        const auto authored = anchor->attributes.find("href");
+        if (authored == anchor->attributes.end() || authored->second.empty()) return true;
+        return queue_external_url(authored->second);
+    }
+
+    bool queue_external_url(const std::string& authored)
+    {
+        const auto& base = in_frame_context() ? frame_base_address : document_base_address;
+        const auto resolved = resolve_resource_url(authored, base);
+        const auto lower = lower_html_name(resolved);
+        if (!lower.starts_with("https://") && !lower.starts_with("http://")) return true;
+
+        auto local_context = frame_context.IsEmpty()
+            ? context.Get(isolate)
+            : frame_context.Get(isolate);
+        auto request = v8::Object::New(isolate);
+        request->Set(
+            local_context,
+            js_string(isolate, "kind"),
+            js_string(isolate, "openExternalUrl")).Check();
+        request->Set(
+            local_context,
+            js_string(isolate, "url"),
+            js_string(isolate, resolved.c_str())).Check();
+        request->Set(
+            local_context,
+            js_string(isolate, "disposition"),
+            js_string(isolate, "systemDefaultBrowser")).Check();
+        record_feature(
+            "html",
+            "anchor-external-navigation",
+            "supported",
+            "http(s) activation emits a host request without replacing the HtmlML document",
+            "default-action");
+        return enqueue_host_request(local_context, request);
+    }
+
+    static void window_open(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto local_context = info.GetIsolate()->GetCurrentContext();
+        if (info.Length() < 1 || !self->queue_external_url(to_utf8(info.GetIsolate(), info[0]))) {
+            info.GetIsolate()->ThrowException(v8::Exception::Error(
+                js_string(info.GetIsolate(), "HtmlML rejected the external window URL")));
+            return;
+        }
+        self->record_feature(
+            "web-api",
+            "Window.open",
+            "partially-supported",
+            "HTTP(S) system-browser handoff without an embedded browsing context",
+            "web-api-binding");
+        // Component libraries commonly clear opener on the returned WindowProxy.
+        // Return a small writable proxy-shaped object while the real navigation
+        // is deliberately owned by the desktop host.
+        auto proxy = v8::Object::New(info.GetIsolate());
+        proxy->Set(local_context, js_string(info.GetIsolate(), "opener"), v8::Null(info.GetIsolate())).Check();
+        proxy->Set(local_context, js_string(info.GetIsolate(), "closed"), v8::False(info.GetIsolate())).Check();
+        info.GetReturnValue().Set(proxy);
+    }
+
+    static void record_web_api_use(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        if (info.Length() < 2) return;
+        auto feature = to_utf8(info.GetIsolate(), info[0]);
+        auto classification = to_utf8(info.GetIsolate(), info[1]);
+        if (feature.empty()
+            || (classification != "supported"
+                && classification != "partially-supported"
+                && classification != "unsupported"
+                && classification != "invalid-authoring"
+                && classification != "unobserved-code-path")) {
+            return;
+        }
+        auto semantic_slice = info.Length() > 2
+            ? to_utf8(info.GetIsolate(), info[2])
+            : std::string{};
+        current(info.GetIsolate())->record_feature(
+            "web-api",
+            std::move(feature),
+            std::move(classification),
+            std::move(semantic_slice),
+            "web-api-polyfill");
+        info.GetReturnValue().Set(v8::True(info.GetIsolate()));
     }
 
     static void host_bridge_call(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -1140,21 +3364,10 @@ struct v8_dom_runtime::implementation final {
             return;
         }
 
-        v8::Local<v8::String> json;
-        if (!v8::JSON::Stringify(local_context, request).ToLocal(&json)) {
+        if (!self->enqueue_host_request(local_context, request)) {
             info.GetIsolate()->ThrowException(v8::Exception::Error(
-                js_string(info.GetIsolate(), "HtmlML managed bridge request serialization failed")));
+                js_string(info.GetIsolate(), "HtmlML managed bridge request queue is unavailable")));
             return;
-        }
-        {
-            std::lock_guard lock(self->host_request_mutex);
-            constexpr size_t maximum_host_requests = 1024U;
-            if (self->host_requests.size() >= maximum_host_requests) {
-                info.GetIsolate()->ThrowException(v8::Exception::Error(
-                    js_string(info.GetIsolate(), "HtmlML managed bridge queue is full")));
-                return;
-            }
-            self->host_requests.push_back(to_utf8(info.GetIsolate(), json));
         }
         info.GetReturnValue().Set(v8::True(info.GetIsolate()));
     }
@@ -1171,6 +3384,223 @@ struct v8_dom_runtime::implementation final {
             return false;
         }
         if (!promote_pending_promise_error()) return false;
+        last_error.clear();
+        return true;
+    }
+
+    bool load_url(const std::string& url)
+    {
+        v8::Isolate::Scope isolate_scope(isolate);
+        v8::HandleScope handle_scope(isolate);
+        auto local_context = context.Get(isolate);
+        v8::Context::Scope context_scope(local_context);
+
+        std::string html;
+        std::string resolved_url;
+        if (!load_text_resource(
+                url,
+                {},
+                HTMLML_RESOURCE_DOCUMENT,
+                html,
+                resolved_url)) {
+            last_error = "Unable to load HtmlML document: " + url;
+            return false;
+        }
+        document_base_address = resolved_url;
+        set_context_location(local_context, local_context->Global(), resolved_url);
+
+        const auto stylesheets = parse_frame_stylesheets(html);
+        const auto scripts = parse_frame_scripts(html);
+        for (const auto& href : stylesheets) {
+            start_resource_prefetch(href, document_base_address, HTMLML_RESOURCE_STYLESHEET);
+        }
+        for (const auto& script : scripts) {
+            if (!script.source.empty()) {
+                start_resource_prefetch(
+                    script.source,
+                    document_base_address,
+                    HTMLML_RESOURCE_SCRIPT);
+            }
+        }
+
+        auto& viewport_root = document.body();
+        record_feature(
+            "html",
+            "element:body",
+            "supported",
+            {},
+            "html-element");
+        detach_all_children(viewport_root);
+
+        // Keep the native viewport root stable for scene/layout ownership, but
+        // expose the browser-shaped HTML/HEAD/BODY tree to CSS and script. This
+        // prevents BODY declarations from contaminating documentElement while
+        // avoiding a second viewport/scroll owner in the native renderer.
+        auto& html_element = document.create_element("html");
+        auto& head_element = document.create_element("head");
+        auto& body = document.create_element("body");
+        html_element.style.width = {100, length_unit::percent};
+        body.style.width = {100, length_unit::percent};
+        document.append_child(viewport_root, html_element);
+        document.append_child(html_element, head_element);
+        document.append_child(html_element, body);
+        record_feature(
+            "html",
+            "element:html",
+            "supported",
+            {},
+            "html-element");
+
+        document_object.Get(isolate)->SetAlignedPointerInInternalField(
+            0,
+            &html_element,
+            v8::kEmbedderDataTypeTagDefault);
+        local_context->SetAlignedPointerInEmbedderData(
+            1,
+            &html_element,
+            v8::kEmbedderDataTypeTagDefault);
+
+        const auto html_open = html.find("<html");
+        const auto html_close = html_open == std::string::npos
+            ? std::string::npos
+            : html_tag_end(html, html_open);
+        if (html_close != std::string::npos) {
+            for (auto [attribute_name, value] : parse_html_attributes(
+                std::string_view(html).substr(html_open, html_close - html_open + 1U),
+                5U)) {
+                const auto lower_name = lower_html_name(attribute_name);
+                record_html_attribute_feature(lower_name, "html-parser");
+                if (lower_name == "class") html_element.class_name = value;
+                else if (lower_name == "id") html_element.id_attribute = value;
+                html_element.attributes[lower_name] = std::move(value);
+            }
+        }
+        const auto body_open = html.find("<body");
+        const auto body_close = body_open == std::string::npos
+            ? std::string::npos
+            : html_tag_end(html, body_open);
+        if (body_close != std::string::npos) {
+            for (auto [attribute_name, value] : parse_html_attributes(
+                std::string_view(html).substr(body_open, body_close - body_open + 1U),
+                5U)) {
+                const auto lower_name = lower_html_name(attribute_name);
+                record_html_attribute_feature(lower_name, "html-parser");
+                if (lower_name == "class") {
+                    body.class_name += value;
+                }
+                else if (lower_name == "id") body.id_attribute = value;
+                body.attributes[lower_name] = std::move(value);
+            }
+        }
+        if (!html_element.class_name.empty()) {
+            html_element.attributes["class"] = html_element.class_name;
+        }
+        if (!body.class_name.empty()) body.attributes["class"] = body.class_name;
+        css_rules.clear();
+        opacity_keyframes.clear();
+        css_rules_by_class.clear();
+        css_rules_by_id.clear();
+        css_rules_by_tag.clear();
+        css_rules_by_attribute.clear();
+        css_focus_rules.clear();
+        unindexed_css_rules.clear();
+        css_attribute_dependencies.clear();
+        hover_selector_dependencies.clear();
+        css_variables.clear();
+        important_css_variables.clear();
+
+        for (auto stylesheet : parse_inline_stylesheets(html)) {
+            add_stylesheet(std::move(stylesheet), document_base_address);
+        }
+        for (const auto& href : stylesheets) {
+            std::string stylesheet;
+            std::string stylesheet_url;
+            if (!load_text_resource(
+                    href,
+                    document_base_address,
+                    HTMLML_RESOURCE_STYLESHEET,
+                    stylesheet,
+                    stylesheet_url)) {
+                last_error = "Unable to load document stylesheet: " + href;
+                return false;
+            }
+            add_stylesheet(std::move(stylesheet), stylesheet_url);
+        }
+
+        apply_css_rules(html_element);
+        apply_css_rules(head_element);
+        apply_css_rules(body);
+        const auto apply_inline_style_attribute = [&](dom_node& node) {
+            const auto style = node.attributes.find("style");
+            if (style == node.attributes.end()) return;
+            for (const auto& declaration : parse_css_declarations(style->second, true)) {
+                inventory_css_value_functions(declaration.value, "inline-style-parser");
+                if (!store_inline_declaration(node, declaration)) continue;
+                apply_css_declaration(node, declaration);
+                node.style.inline_property_mask |= inline_style_mask(declaration.name);
+            }
+            detect_css_compositions(node);
+        };
+        apply_inline_style_attribute(html_element);
+        apply_inline_style_attribute(body);
+
+        auto body_html = extract_element_contents(html, "body");
+        if (body_html.empty()) body_html = html;
+        body_html = strip_html_elements(std::move(body_html), "script");
+        body_html = strip_html_elements(std::move(body_html), "style");
+        parse_inner_html(body, body_html);
+        append_script_elements(body, scripts);
+
+        const auto report_document_script_error = [&](const std::string& error) {
+            std::lock_guard lock(console_message_mutex);
+            constexpr size_t maximum_console_messages = 1024U;
+            if (console_messages.size() >= maximum_console_messages) {
+                console_messages.pop_front();
+            }
+            console_messages.push_back("error\n" + error);
+        };
+        const auto execute_group = [&](bool defer) {
+            for (const auto& script : scripts) {
+                if (script.defer != defer) continue;
+                std::string source = script.code;
+                auto name = resolved_url + "#inline-script-" + std::to_string(script.index + 1U);
+                if (!script.source.empty()) {
+                    if (!load_text_resource(
+                            script.source,
+                            document_base_address,
+                            HTMLML_RESOURCE_SCRIPT,
+                            source,
+                            name)) {
+                        frame_last_error_value = "Unable to load document script: " + script.source;
+                        ++frame_script_error_count;
+                        report_document_script_error(frame_last_error_value);
+                        continue;
+                    }
+                }
+                set_current_script(local_context, document_object.Get(isolate), name);
+                std::string error;
+                if (!execute_in_context(local_context, source, name, error)) {
+                    frame_last_error_value = "Document script #" + std::to_string(script.index)
+                        + " failed: " + error;
+                    ++frame_script_error_count;
+                    report_document_script_error(frame_last_error_value);
+                    continue;
+                }
+                loaded_resource_names.push_back(resource_leaf_name(name));
+                ++frame_script_execution_count;
+            }
+            return true;
+        };
+        if (!execute_group(false) || !execute_group(true)) return false;
+        document_object.Get(isolate)->Set(
+            local_context,
+            js_string(isolate, "currentScript"),
+            v8::Null(isolate)).Check();
+        document_object.Get(isolate)->Set(
+            local_context,
+            js_string(isolate, "readyState"),
+            js_string(isolate, "complete")).Check();
+        document.mark_dirty();
         last_error.clear();
         return true;
     }
@@ -1213,8 +3643,29 @@ struct v8_dom_runtime::implementation final {
         return false;
     }
 
+    void pump_v8_platform_tasks()
+    {
+        constexpr uint32_t maximum_tasks = 8U;
+        constexpr auto maximum_time = std::chrono::milliseconds(1);
+        const auto started = std::chrono::steady_clock::now();
+        uint32_t count = 0U;
+        while (count < maximum_tasks
+            && std::chrono::steady_clock::now() - started < maximum_time
+            && v8::platform::PumpMessageLoop(
+                v8_platform.get(),
+                isolate,
+                v8::platform::MessageLoopBehavior::kDoNotWait)) {
+            ++count;
+        }
+    }
+
     bool drain_tasks()
     {
+        collect_detached_dom_if_requested();
+        // V8's default platform uses foreground tasks to finish background
+        // compilation and optimization work. An embedder must service that
+        // queue; otherwise hot application code remains on its initial tier.
+        pump_v8_platform_tasks();
         if (!pending_frame_hydrations.empty()) {
             auto* frame = pending_frame_hydrations.front();
             pending_frame_hydrations.erase(pending_frame_hydrations.begin());
@@ -1224,11 +3675,16 @@ struct v8_dom_runtime::implementation final {
             }
             return true;
         }
+        const auto timer_due = has_due_timer();
         // Dynamically connected resources and zero-delay timers are separate
         // browser task sources. Do not starve React/datafeed timers behind an
         // entire Webpack resource wave; alternate when both are ready.
         if (!connected_resources.empty()
-            && (!has_due_timer() || !prefer_timer_task)) {
+            && (!timer_due || !prefer_timer_task)) {
+            // Preparing a large warm-cache resource wave can itself take a few
+            // milliseconds. Only do that work once this task source has won
+            // the fairness decision, so an already-due timer runs promptly.
+            prefetch_connected_resources();
             prefer_timer_task = true;
             if (profile_startup) ++startup_connected_resources;
             auto resource = std::move(connected_resources.front());
@@ -1237,9 +3693,34 @@ struct v8_dom_runtime::implementation final {
             auto wrapper = resource.wrapper.Get(isolate);
             if (resource.node == nullptr || resource_context.IsEmpty() || wrapper.IsEmpty()) return true;
             v8::Context::Scope resource_scope(resource_context);
+            const auto trace_resource = profile_startup
+                && std::getenv("HTMLML_PROBE_TRACE_STARTUP_TASKS") != nullptr;
+            const auto resource_started = trace_resource
+                ? std::chrono::steady_clock::now()
+                : std::chrono::steady_clock::time_point{};
+            auto resource_name = std::string{};
+            if (trace_resource) {
+                const auto attribute_name = resource.node->tag == "script" ? "src" : "href";
+                if (const auto attribute = resource.node->attributes.find(attribute_name);
+                    attribute != resource.node->attributes.end()) {
+                    resource_name = resource_leaf_name(attribute->second);
+                }
+            }
             if (!load_connected_resource(*resource.node, wrapper)) {
                 last_error = frame_last_error_value;
                 return false;
+            }
+            if (trace_resource) {
+                const auto completed = std::chrono::steady_clock::now();
+                std::cerr << "[Native Engine Probe] startup-resource t=" << std::fixed
+                    << std::setprecision(1)
+                    << std::chrono::duration<double, std::milli>(
+                        completed - startup_profile_started).count()
+                    << "ms elapsed="
+                    << std::chrono::duration<double, std::milli>(
+                        completed - resource_started).count()
+                    << "ms kind=" << resource.node->tag
+                    << " name=" << resource_name << '\n';
             }
             isolate->PerformMicrotaskCheckpoint();
             return true;
@@ -1267,11 +3748,35 @@ struct v8_dom_runtime::implementation final {
         v8::Context::Scope task_context_scope(task_context);
         auto callback = task.callback.Get(isolate);
         if (callback.IsEmpty()) return true;
+        auto task_profile_name = std::string{};
+        auto task_profile_started = std::chrono::steady_clock::time_point{};
+        if (profile_startup) {
+            const auto origin = callback->GetScriptOrigin().ResourceName();
+            task_profile_name = origin.IsEmpty() || origin->IsUndefined()
+                ? std::string("<anonymous>")
+                : resource_leaf_name(to_utf8(isolate, origin));
+            auto function_name = to_utf8(isolate, callback->GetName());
+            if (function_name.empty()) {
+                function_name = to_utf8(isolate, callback->GetInferredName());
+            }
+            if (!function_name.empty()) task_profile_name += ':' + function_name;
+            else {
+                const auto line = callback->GetScriptLineNumber();
+                const auto column = callback->GetScriptColumnNumber();
+                if (line >= 0) {
+                    task_profile_name += ':' + std::to_string(line + 1);
+                    if (column >= 0) task_profile_name += ':' + std::to_string(column + 1);
+                }
+            }
+            task_profile_started = std::chrono::steady_clock::now();
+        }
         v8::TryCatch try_catch(isolate);
         std::vector<v8::Local<v8::Value>> arguments;
         if (task.animation_frame) {
-            const auto timestamp = std::chrono::duration<double, std::milli>(
-                now_time.time_since_epoch()).count();
+            const auto timestamp = task.animation_timestamp_ms >= 0
+                ? task.animation_timestamp_ms
+                : std::chrono::duration<double, std::milli>(
+                    now_time.time_since_epoch()).count();
             arguments.push_back(v8::Number::New(isolate, timestamp));
         } else {
             arguments.reserve(task.arguments.size());
@@ -1294,6 +3799,22 @@ struct v8_dom_runtime::implementation final {
             return false;
         }
         isolate->PerformMicrotaskCheckpoint();
+        if (profile_startup) {
+            auto& stats = startup_task_profiles[task_profile_name];
+            ++stats.calls;
+            stats.nanoseconds += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - task_profile_started).count());
+            if (std::getenv("HTMLML_PROBE_TRACE_STARTUP_TASKS") != nullptr) {
+                std::cerr << "[Native Engine Probe] startup-task t=" << std::fixed
+                    << std::setprecision(1)
+                    << std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - startup_profile_started).count()
+                    << "ms kind=" << (task.animation_frame ? "raf" : "timer")
+                    << " delay=" << task.interval.count() << "ms"
+                    << " name=" << task_profile_name << '\n';
+            }
+        }
         const auto cancelled = active_timer_cancelled;
         active_timer_id = 0;
         active_timer_cancelled = false;
@@ -1365,8 +3886,46 @@ struct v8_dom_runtime::implementation final {
         last_resize_cpu_profile = std::move(result).str();
     }
 
+    v8::Local<v8::Object> create_event_instance(v8::Local<v8::Context> local_context)
+    {
+        v8::Local<v8::Value> constructor_value;
+        if (local_context->Global()->Get(
+                local_context,
+                js_string(isolate, "Event")).ToLocal(&constructor_value)
+            && constructor_value->IsFunction()) {
+            auto constructor = constructor_value.As<v8::Function>();
+            if (auto instance = constructor->NewInstance(local_context, 0, nullptr);
+                !instance.IsEmpty()) {
+                return instance.ToLocalChecked();
+            }
+        }
+        return v8::Object::New(isolate);
+    }
+
+    v8::Local<v8::Object> create_window_event(
+        v8::Local<v8::Context> local_context,
+        std::string_view type)
+    {
+        auto event = create_event_instance(local_context);
+        auto global = local_context->Global();
+        event->Set(
+            local_context,
+            js_string(isolate, "type"),
+            js_string(isolate, std::string(type).c_str())).Check();
+        event->Set(local_context, js_string(isolate, "target"), global).Check();
+        event->Set(local_context, js_string(isolate, "currentTarget"), global).Check();
+        event->Set(local_context, js_string(isolate, "srcElement"), global).Check();
+        event->Set(local_context, js_string(isolate, "view"), global).Check();
+        event->Set(local_context, js_string(isolate, "bubbles"), v8::False(isolate)).Check();
+        event->Set(local_context, js_string(isolate, "cancelable"), v8::False(isolate)).Check();
+        event->Set(local_context, js_string(isolate, "defaultPrevented"), v8::False(isolate)).Check();
+        return event;
+    }
+
     bool dispatch_resize()
     {
+        record_feature(
+            "event", "type:resize", "supported", {}, "event-dispatch");
         const auto resize_started = std::chrono::steady_clock::now();
         v8::Isolate::Scope isolate_scope(isolate);
         v8::HandleScope handle_scope(isolate);
@@ -1374,11 +3933,13 @@ struct v8_dom_runtime::implementation final {
             auto local_context = context.Get(isolate);
             v8::Context::Scope context_scope(local_context);
             auto global = local_context->Global();
+            auto event = create_window_event(local_context, "resize");
+            v8::Local<v8::Value> arguments[] = {event};
             for (auto& listener : resize_listeners) {
                 auto callback = listener.Get(isolate);
                 if (callback.IsEmpty()) continue;
                 v8::TryCatch try_catch(isolate);
-                if (callback->Call(local_context, global, 0, nullptr).IsEmpty()) {
+                if (callback->Call(local_context, global, 1, arguments).IsEmpty()) {
                     last_error = describe_exception(try_catch);
                     return false;
                 }
@@ -1389,6 +3950,29 @@ struct v8_dom_runtime::implementation final {
         last_resize_outer_listeners_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 outer_listeners_finished - resize_started).count());
+
+        // Responsive stylesheet rules depend on the current host viewport.
+        // The compact runtime retains the active browsing context's stylesheet
+        // index. Once an iframe is hydrated, applying that index to the outer
+        // document erases its already-cascaded percentage sizing (including a
+        // host chart_container and the iframe itself). Re-cascade only the root
+        // that owns the active rules; layout below still recomputes the unified
+        // native tree against the new host viewport.
+        if (refresh_css_media_matches()) {
+            // Only a media-query truth transition changes the cascade. Relative
+            // lengths (percent, vw/vh, calc) are retained as computed terms and
+            // resolve against the new viewport during layout; recascading the
+            // entire component tree on every intermediate resize frame turns a
+            // 60 Hz drag into a 30 Hz one.
+            rebuild_css_rule_indexes_and_root_variables();
+            if (frame_context.IsEmpty()) {
+                apply_css_rules_subtree(document.body());
+            } else {
+                auto resize_frame_context = frame_context.Get(isolate);
+                v8::Context::Scope resize_frame_scope(resize_frame_context);
+                apply_css_rules_subtree(active_root());
+            }
+        }
 
         if (frame_context.IsEmpty()) return true;
         auto local_frame_context = frame_context.Get(isolate);
@@ -1411,9 +3995,7 @@ struct v8_dom_runtime::implementation final {
         const auto binding_profile_before = binding_totals;
         auto listeners = frame_event_listeners.find("resize");
         if (listeners != frame_event_listeners.end()) {
-            auto event = v8::Object::New(isolate);
-            event->Set(local_frame_context, js_string(isolate, "type"), js_string(isolate, "resize")).Check();
-            event->Set(local_frame_context, js_string(isolate, "target"), local_frame_context->Global()).Check();
+            auto event = create_window_event(local_frame_context, "resize");
             v8::Local<v8::Value> arguments[] = {event};
             ++input_event_dispatch_count;
             for (auto& listener : listeners->second) {
@@ -1581,28 +4163,135 @@ struct v8_dom_runtime::implementation final {
             v8::True(info.GetIsolate())).Check();
     }
 
+    static void event_composed_path(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* isolate = info.GetIsolate();
+        auto local_context = isolate->GetCurrentContext();
+        v8::Local<v8::Value> stored;
+        if (!info.This()->Get(
+                local_context,
+                js_string(isolate, "__htmlMlComposedPath")).ToLocal(&stored)
+            || !stored->IsArray()) {
+            info.GetReturnValue().Set(v8::Array::New(isolate));
+            return;
+        }
+        auto source = stored.As<v8::Array>();
+        auto result = v8::Array::New(isolate, static_cast<int>(source->Length()));
+        for (uint32_t index = 0; index < source->Length(); ++index) {
+            v8::Local<v8::Value> entry;
+            if (source->Get(local_context, index).ToLocal(&entry)) {
+                result->Set(local_context, index, entry).Check();
+            }
+        }
+        info.GetReturnValue().Set(result);
+    }
+
+    static std::string utf8_scalar(uint32_t value)
+    {
+        if (value > 0x10FFFFU || (value >= 0xD800U && value <= 0xDFFFU)) return {};
+        std::string result;
+        if (value <= 0x7FU) {
+            result.push_back(static_cast<char>(value));
+        } else if (value <= 0x7FFU) {
+            result.push_back(static_cast<char>(0xC0U | (value >> 6U)));
+            result.push_back(static_cast<char>(0x80U | (value & 0x3FU)));
+        } else if (value <= 0xFFFFU) {
+            result.push_back(static_cast<char>(0xE0U | (value >> 12U)));
+            result.push_back(static_cast<char>(0x80U | ((value >> 6U) & 0x3FU)));
+            result.push_back(static_cast<char>(0x80U | (value & 0x3FU)));
+        } else {
+            result.push_back(static_cast<char>(0xF0U | (value >> 18U)));
+            result.push_back(static_cast<char>(0x80U | ((value >> 12U) & 0x3FU)));
+            result.push_back(static_cast<char>(0x80U | ((value >> 6U) & 0x3FU)));
+            result.push_back(static_cast<char>(0x80U | (value & 0x3FU)));
+        }
+        return result;
+    }
+
+    static std::string keyboard_key_name(int key_code)
+    {
+        switch (key_code) {
+        case 8: return "Backspace";
+        case 9: return "Tab";
+        case 13: return "Enter";
+        case 27: return "Escape";
+        case 32: return " ";
+        case 33: return "PageUp";
+        case 34: return "PageDown";
+        case 35: return "End";
+        case 36: return "Home";
+        case 37: return "ArrowLeft";
+        case 38: return "ArrowUp";
+        case 39: return "ArrowRight";
+        case 40: return "ArrowDown";
+        case 46: return "Delete";
+        default:
+            if ((key_code >= '0' && key_code <= '9')
+                || (key_code >= 'A' && key_code <= 'Z')) {
+                return std::string(1, static_cast<char>(key_code));
+            }
+            return "Unidentified";
+        }
+    }
+
+    static std::string keyboard_code_name(int key_code)
+    {
+        if (key_code >= 'A' && key_code <= 'Z') {
+            return "Key" + std::string(1, static_cast<char>(key_code));
+        }
+        if (key_code >= '0' && key_code <= '9') {
+            return "Digit" + std::string(1, static_cast<char>(key_code));
+        }
+        return keyboard_key_name(key_code);
+    }
+
     bool dispatch_input_event_type(
         const htmlml_input_event& input,
         const char* type,
-        dom_node& target)
+        dom_node& target,
+        bool* default_prevented = nullptr)
     {
+        record_feature(
+            "event",
+            std::string("type:") + type,
+            "supported",
+            {},
+            "event-dispatch");
         ++event_dispatch_counts[type];
         ++event_dispatch_target_counts[type][target.id];
         const auto callback_count_before = input_callback_invocation_count;
         auto local_context = frame_context.IsEmpty()
             ? context.Get(isolate)
             : frame_context.Get(isolate);
-        auto event = v8::Object::New(isolate);
+        auto event = create_event_instance(local_context);
         auto target_wrapper = wrap_node(target);
         const auto set_number = [&](const char* name, double value) {
             event->Set(local_context, js_string(isolate, name), v8::Number::New(isolate, value)).Check();
         };
+        const auto type_view = std::string_view(type);
+        const auto bubbles = type_view != "blur"
+            && type_view != "focus"
+            && type_view != "mouseenter"
+            && type_view != "mouseleave"
+            && type_view != "pointerenter"
+            && type_view != "pointerleave"
+            && type_view != "scroll";
+        const auto cancelable = type_view != "blur"
+            && type_view != "focus"
+            && type_view != "focusin"
+            && type_view != "focusout"
+            && type_view != "mouseenter"
+            && type_view != "mouseleave"
+            && type_view != "pointerenter"
+            && type_view != "pointerleave"
+            && type_view != "input"
+            && type_view != "scroll";
         event->Set(local_context, js_string(isolate, "type"), js_string(isolate, type)).Check();
         event->Set(local_context, js_string(isolate, "target"), target_wrapper).Check();
         event->Set(local_context, js_string(isolate, "srcElement"), target_wrapper).Check();
         event->Set(local_context, js_string(isolate, "view"), local_context->Global()).Check();
-        event->Set(local_context, js_string(isolate, "bubbles"), v8::True(isolate)).Check();
-        event->Set(local_context, js_string(isolate, "cancelable"), v8::True(isolate)).Check();
+        event->Set(local_context, js_string(isolate, "bubbles"), v8::Boolean::New(isolate, bubbles)).Check();
+        event->Set(local_context, js_string(isolate, "cancelable"), v8::Boolean::New(isolate, cancelable)).Check();
         event->Set(local_context, js_string(isolate, "defaultPrevented"), v8::False(isolate)).Check();
         event->Set(local_context, js_string(isolate, "pointerType"), js_string(isolate, "mouse")).Check();
         event->Set(local_context, js_string(isolate, "isPrimary"), v8::True(isolate)).Check();
@@ -1612,18 +4301,6 @@ struct v8_dom_runtime::implementation final {
             current_related_target == nullptr
                 ? v8::Local<v8::Value>(v8::Null(isolate))
                 : v8::Local<v8::Value>(wrap_node(*current_related_target))).Check();
-        event->Set(
-            local_context,
-            js_string(isolate, "preventDefault"),
-            v8::Function::New(local_context, event_prevent_default).ToLocalChecked()).Check();
-        event->Set(
-            local_context,
-            js_string(isolate, "stopPropagation"),
-            v8::Function::New(local_context, event_stop_propagation).ToLocalChecked()).Check();
-        event->Set(
-            local_context,
-            js_string(isolate, "stopImmediatePropagation"),
-            v8::Function::New(local_context, event_stop_immediate_propagation).ToLocalChecked()).Check();
         set_number("clientX", input.x);
         set_number("clientY", input.y);
         set_number("pageX", input.x);
@@ -1637,10 +4314,17 @@ struct v8_dom_runtime::implementation final {
         set_number("deltaX", input.delta_x);
         set_number("deltaY", input.delta_y);
         set_number("deltaMode", 0);
-        set_number("button", 0);
-        set_number("buttons", input.kind == HTMLML_INPUT_POINTER_UP ? 0 : (input.flags & 1U));
+        const auto encoded_button = static_cast<int>((input.flags >> 8U) & 0xffU);
+        const auto changed_button = encoded_button == 0 ? 0 : encoded_button - 1;
+        const auto buttons = static_cast<int>(input.flags & 0x1fU);
+        set_number("button", changed_button);
+        set_number("buttons", buttons);
         set_number("pointerId", 1);
-        set_number("detail", std::string_view(type) == "click" ? 1 : 0);
+        const auto mouse_click_sequence_event = std::string_view(type) == "mousedown"
+            || std::string_view(type) == "mouseup"
+            || std::string_view(type) == "click"
+            || std::string_view(type) == "auxclick";
+        set_number("detail", mouse_click_sequence_event ? 1 : 0);
         // MouseEvent.which identifies the changed button and remains 1 for a
         // primary-button mouseup/click even though `buttons` has returned to 0.
         // Release and long-press paths in component libraries still consult this legacy
@@ -1649,20 +4333,95 @@ struct v8_dom_runtime::implementation final {
             || std::string_view(type) == "mousedown"
             || std::string_view(type) == "pointerup"
             || std::string_view(type) == "mouseup"
-            || std::string_view(type) == "click";
+            || std::string_view(type) == "click"
+            || std::string_view(type) == "auxclick"
+            || std::string_view(type) == "contextmenu";
         // Legacy MouseEvent.which also reports the currently held primary
         // button on mousemove. Drag and long-press normalization
         // still reads it in addition to `buttons`; reporting zero here makes
         // an ordered pressed move look like a hover on that path.
-        const auto primary_button_held = (input.flags & 1U) != 0U;
-        set_number("which", mouse_button_event || primary_button_held ? 1 : 0);
-        event->Set(local_context, js_string(isolate, "altKey"), v8::False(isolate)).Check();
-        event->Set(local_context, js_string(isolate, "ctrlKey"), v8::False(isolate)).Check();
-        event->Set(local_context, js_string(isolate, "metaKey"), v8::False(isolate)).Check();
-        event->Set(local_context, js_string(isolate, "shiftKey"), v8::False(isolate)).Check();
+        const auto primary_button_held = (buttons & 1) != 0;
+        const auto legacy_changed_button = changed_button == 1
+            ? 2
+            : changed_button == 2 ? 3 : 1;
+        set_number(
+            "which",
+            mouse_button_event ? legacy_changed_button : (primary_button_held ? 1 : 0));
+        const auto keyboard_input = input.kind == HTMLML_INPUT_KEY_DOWN
+            || input.kind == HTMLML_INPUT_KEY_UP;
+        const auto pointer_input = input.kind == HTMLML_INPUT_POINTER_MOVE
+            || input.kind == HTMLML_INPUT_POINTER_DOWN
+            || input.kind == HTMLML_INPUT_POINTER_UP
+            || input.kind == HTMLML_INPUT_WHEEL;
+        const auto text_input = input.kind == HTMLML_INPUT_TEXT;
+        event->Set(local_context, js_string(isolate, "altKey"), v8::Boolean::New(
+            isolate, (keyboard_input && (input.flags & HTMLML_INPUT_MODIFIER_ALT) != 0U)
+                || (pointer_input && (input.flags & HTMLML_INPUT_POINTER_MODIFIER_ALT) != 0U))).Check();
+        event->Set(local_context, js_string(isolate, "ctrlKey"), v8::Boolean::New(
+            isolate, (keyboard_input && (input.flags & HTMLML_INPUT_MODIFIER_CONTROL) != 0U)
+                || (pointer_input && (input.flags & HTMLML_INPUT_POINTER_MODIFIER_CONTROL) != 0U))).Check();
+        event->Set(local_context, js_string(isolate, "metaKey"), v8::Boolean::New(
+            isolate, (keyboard_input && (input.flags & HTMLML_INPUT_MODIFIER_META) != 0U)
+                || (pointer_input && (input.flags & HTMLML_INPUT_POINTER_MODIFIER_META) != 0U))).Check();
+        event->Set(local_context, js_string(isolate, "shiftKey"), v8::Boolean::New(
+            isolate, (keyboard_input && (input.flags & HTMLML_INPUT_MODIFIER_SHIFT) != 0U)
+                || (pointer_input && (input.flags & HTMLML_INPUT_POINTER_MODIFIER_SHIFT) != 0U))).Check();
+        if (keyboard_input) {
+            const auto key_code = static_cast<int>(input.x);
+            const auto key = keyboard_key_name(key_code);
+            const auto code = keyboard_code_name(key_code);
+            event->Set(local_context, js_string(isolate, "key"), js_string(isolate, key.c_str())).Check();
+            event->Set(local_context, js_string(isolate, "code"), js_string(isolate, code.c_str())).Check();
+            set_number("keyCode", key_code);
+            set_number("charCode", 0);
+            set_number("which", key_code);
+            set_number("location", 0);
+            event->Set(local_context, js_string(isolate, "repeat"), v8::Boolean::New(
+                isolate, (input.flags & HTMLML_INPUT_KEY_REPEAT) != 0U)).Check();
+        }
+        if (text_input || std::string_view(type) == "beforeinput"
+            || std::string_view(type) == "input") {
+            const auto deleting = input.kind == HTMLML_INPUT_KEY_DOWN
+                && (static_cast<int>(input.x) == 8 || static_cast<int>(input.x) == 46);
+            const auto data = text_input ? utf8_scalar(static_cast<uint32_t>(input.x)) : std::string{};
+            event->Set(
+                local_context,
+                js_string(isolate, "data"),
+                deleting
+                    ? v8::Local<v8::Value>(v8::Null(isolate))
+                    : v8::Local<v8::Value>(js_string(isolate, data.c_str()))).Check();
+            event->Set(
+                local_context,
+                js_string(isolate, "inputType"),
+                js_string(isolate, deleting
+                    ? static_cast<int>(input.x) == 8
+                        ? "deleteContentBackward"
+                        : "deleteContentForward"
+                    : "insertText")).Check();
+            event->Set(local_context, js_string(isolate, "isComposing"), v8::False(isolate)).Check();
+        }
         set_number("timeStamp", std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
         set_number("sequence", static_cast<double>(input.sequence));
+        event->Set(
+            local_context,
+            js_string(isolate, "__htmlmlPropagationStopped"),
+            v8::False(isolate)).Check();
+        event->Set(
+            local_context,
+            js_string(isolate, "__htmlmlImmediatePropagationStopped"),
+            v8::False(isolate)).Check();
+        const auto read_event_boolean = [&](const char* name) {
+            v8::Local<v8::Value> value;
+            return event->Get(local_context, js_string(isolate, name)).ToLocal(&value)
+                && value->BooleanValue(isolate);
+        };
+        const auto propagation_stopped = [&]() {
+            return read_event_boolean("__htmlmlPropagationStopped");
+        };
+        const auto immediate_propagation_stopped = [&]() {
+            return read_event_boolean("__htmlmlImmediatePropagationStopped");
+        };
 
         std::vector<uint32_t> ancestry;
         for (auto* node = &target; node != nullptr; node = node->parent) ancestry.push_back(node->id);
@@ -1689,7 +4448,8 @@ struct v8_dom_runtime::implementation final {
             if (listeners == frame_event_listeners.end()) return true;
             event->Set(local_context, js_string(isolate, "currentTarget"), current_target).Check();
             set_number("eventPhase", event_phase);
-            for (size_t index = 0; index < listeners->second.size(); ++index) {
+            const auto listener_count = listeners->second.size();
+            for (size_t index = 0; index < listener_count; ++index) {
                 if (listener_contexts != frame_event_listener_contexts.end()
                     && index < listener_contexts->second.size()
                     && listener_contexts->second[index].Get(isolate) != local_context) continue;
@@ -1707,6 +4467,25 @@ struct v8_dom_runtime::implementation final {
                 const auto invoke_once = once_flags != frame_event_listener_once.end()
                     && index < once_flags->second.size() && once_flags->second[index];
                 if (invoke_once) listeners->second[index].Reset();
+                if (std::getenv("HTMLML_PROBE_PROFILE_INPUT") != nullptr
+                    && (std::string_view(type) == "pointerdown"
+                        || std::string_view(type) == "mousedown"
+                        || std::string_view(type) == "pointermove"
+                        || std::string_view(type) == "mousemove"
+                        || std::string_view(type) == "pointerup"
+                        || std::string_view(type) == "mouseup")) {
+                    std::cerr << "[Native Engine Probe] input listener"
+                        << ", type=" << type
+                        << ", target=" << registered_target
+                        << ", capture=" << (capture ? 1 : 0)
+                        << ", phase=" << event_phase
+                        << ", listener=" << index
+                        << ", stopped=" << (propagation_stopped() ? 1 : 0)
+                        << ", immediate="
+                        << (immediate_propagation_stopped() ? 1 : 0)
+                        << '\n';
+                }
+                if (immediate_propagation_stopped()) break;
             }
             return true;
         };
@@ -1727,33 +4506,103 @@ struct v8_dom_runtime::implementation final {
             return true;
         };
 
-        // Preserve browser listener phase/ancestry order. Propagation flags
-        // remain advisory until frame Document/Window nodes are represented
-        // separately; treating the current flattened nodes as exact browser
-        // boundaries can incorrectly block a component's root drag listener.
+        // Preserve browser listener phase/ancestry order and propagation stops.
+        // A native mouseup may have several gesture recognizers registered on
+        // overlapping chart ancestors; continuing after stopPropagation can end
+        // the same scale transaction twice.
         auto global = local_context->Global();
+        auto document_target = global;
+        v8::Local<v8::Value> document_value;
+        if (global->Get(local_context, js_string(isolate, "document")).ToLocal(&document_value)
+            && document_value->IsObject()) {
+            document_target = document_value.As<v8::Object>();
+        }
+        auto composed_path = v8::Array::New(
+            isolate,
+            static_cast<int>(ancestry.size() + 2U));
+        for (size_t index = 0; index < ancestry.size(); ++index) {
+            auto* node = &target;
+            while (node != nullptr && node->id != ancestry[index]) node = node->parent;
+            if (node != nullptr) {
+                composed_path->Set(
+                    local_context,
+                    static_cast<uint32_t>(index),
+                    wrap_node(*node)).Check();
+            }
+        }
+        composed_path->Set(
+            local_context,
+            static_cast<uint32_t>(ancestry.size()),
+            document_target).Check();
+        composed_path->Set(
+            local_context,
+            static_cast<uint32_t>(ancestry.size() + 1U),
+            global).Check();
+        event->Set(
+            local_context,
+            js_string(isolate, "__htmlMlComposedPath"),
+            composed_path).Check();
+        event->Set(
+            local_context,
+            js_string(isolate, "composed"),
+            v8::True(isolate)).Check();
         if (!invoke_listeners(0U, global, true, 1)) return false;
-        for (size_t cursor = ancestry.size(); cursor-- > 0;) {
+        if (!propagation_stopped() && !invoke_listeners(
+                std::numeric_limits<uint32_t>::max(),
+                document_target,
+                true,
+                1)) return false;
+        for (size_t cursor = ancestry.size();
+             !propagation_stopped() && cursor-- > 1;) {
             dom_node* node = &target;
             while (node != nullptr && node->id != ancestry[cursor]) node = node->parent;
             if (node == nullptr) continue;
-            const auto phase = cursor == 0 ? 2 : 1;
-            if (!invoke_listeners(node->id, wrap_node(*node), true, phase)) return false;
+            if (!invoke_listeners(node->id, wrap_node(*node), true, 1)) return false;
         }
-        for (size_t cursor = 0; cursor < ancestry.size(); ++cursor) {
-            dom_node* node = &target;
-            while (node != nullptr && node->id != ancestry[cursor]) node = node->parent;
-            if (node == nullptr) continue;
-            const auto phase = cursor == 0 ? 2 : 3;
-            if (!invoke_listeners(node->id, wrap_node(*node), false, phase)) return false;
-            if (!invoke_property(*node, phase)) return false;
+        if (!propagation_stopped()) {
+            auto target_wrapper = wrap_node(target);
+            if (!invoke_listeners(target.id, target_wrapper, true, 2)) return false;
+            if (!immediate_propagation_stopped()
+                && !invoke_listeners(target.id, target_wrapper, false, 2)) return false;
+            if (!immediate_propagation_stopped()
+                && !invoke_property(target, 2)) return false;
         }
-        if (!invoke_listeners(0U, global, false, 3)) return false;
+        if (bubbles && !propagation_stopped()) {
+            for (size_t cursor = 1;
+                 cursor < ancestry.size() && !propagation_stopped();
+                 ++cursor) {
+                dom_node* node = &target;
+                while (node != nullptr && node->id != ancestry[cursor]) {
+                    node = node->parent;
+                }
+                if (node == nullptr) continue;
+                auto wrapper = wrap_node(*node);
+                if (!invoke_listeners(node->id, wrapper, false, 3)
+                    || (!immediate_propagation_stopped()
+                        && !invoke_property(*node, 3))) return false;
+            }
+            if (!propagation_stopped()
+                && !invoke_listeners(
+                    std::numeric_limits<uint32_t>::max(),
+                    document_target,
+                    false,
+                    3)) return false;
+            if (!propagation_stopped()
+                && !invoke_listeners(0U, global, false, 3)) return false;
+        }
         set_number("eventPhase", 0);
         event->Set(local_context, js_string(isolate, "currentTarget"), v8::Null(isolate)).Check();
         isolate->PerformMicrotaskCheckpoint();
         event_callback_counts[type] +=
             input_callback_invocation_count - callback_count_before;
+        if (default_prevented != nullptr) {
+            v8::Local<v8::Value> prevented;
+            *default_prevented = event->Get(
+                    local_context,
+                    js_string(isolate, "defaultPrevented"))
+                .ToLocal(&prevented)
+                && prevented->BooleanValue(isolate);
+        }
 
         // removeEventListener is commonly called by component code from inside
         // its root mouseup callback. Removal tombstones the callback so the
@@ -1791,6 +4640,421 @@ struct v8_dom_runtime::implementation final {
                 }
             }
         }
+        return true;
+    }
+
+    static bool is_text_control(const dom_node* node)
+    {
+        if (node == nullptr || (node->tag != "input" && node->tag != "textarea")
+            || node->attributes.contains("disabled")) {
+            return false;
+        }
+        if (node->tag == "textarea") return true;
+        const auto type = node->attributes.find("type");
+        if (type == node->attributes.end()) return true;
+        return type->second != "checkbox" && type->second != "radio"
+            && type->second != "button" && type->second != "submit"
+            && type->second != "reset" && type->second != "file"
+            && type->second != "image" && type->second != "range"
+            && type->second != "color";
+    }
+
+    static bool is_natively_focusable(const dom_node* node)
+    {
+        if (node == nullptr || node->attributes.contains("disabled")) return false;
+        if (node->tag == "button" || node->tag == "select" || node->tag == "textarea") {
+            return true;
+        }
+        if (node->tag == "a") return node->attributes.contains("href");
+        if (node->tag != "input") return false;
+        const auto type = node->attributes.find("type");
+        return type == node->attributes.end() || type->second != "hidden";
+    }
+
+    static bool is_effectively_visible_for_focus(const dom_node* node)
+    {
+        auto visibility_resolved = false;
+        auto visibility_hidden = false;
+        for (auto* current_node = node; current_node != nullptr;
+             current_node = current_node->parent) {
+            if (current_node->style.display == display_mode::none) return false;
+            if (!visibility_resolved && current_node->style.visibility_specified) {
+                visibility_hidden = current_node->style.visibility_hidden;
+                visibility_resolved = true;
+            }
+        }
+        return !visibility_hidden;
+    }
+
+    static bool try_tab_index(const dom_node* node, int& value)
+    {
+        if (node == nullptr) return false;
+        const auto attribute = node->attributes.find("tabindex");
+        if (attribute == node->attributes.end() || attribute->second.empty()) return false;
+        char* end = nullptr;
+        const auto parsed = std::strtol(attribute->second.c_str(), &end, 10);
+        if (end == attribute->second.c_str() || *end != '\0') return false;
+        value = static_cast<int>(parsed);
+        return true;
+    }
+
+    static bool is_programmatically_focusable(const dom_node* node)
+    {
+        int tab_index = 0;
+        return node != nullptr
+            && !node->attributes.contains("disabled")
+            && is_effectively_visible_for_focus(node)
+            && (try_tab_index(node, tab_index) || is_natively_focusable(node));
+    }
+
+    static bool is_pointer_focusable(const dom_node* node)
+    {
+        return is_programmatically_focusable(node);
+    }
+
+    dom_node* nearest_pointer_focusable(dom_node* node)
+    {
+        for (auto* current_node = node; current_node != nullptr; current_node = current_node->parent) {
+            if (is_pointer_focusable(current_node)) return current_node;
+        }
+        return nullptr;
+    }
+
+    std::vector<dom_node*> sequential_focus_order()
+    {
+        struct candidate final {
+            dom_node* node;
+            int tab_index;
+            size_t order;
+        };
+        std::vector<candidate> candidates;
+        size_t order = 0;
+        const std::function<void(dom_node&)> visit = [&](dom_node& node) {
+            if (!node.tag.starts_with('#') && !node.attributes.contains("disabled")
+                && is_effectively_visible_for_focus(&node)) {
+                int tab_index = 0;
+                const auto explicit_tab_index = try_tab_index(&node, tab_index);
+                if ((explicit_tab_index && tab_index >= 0)
+                    || (!explicit_tab_index && is_natively_focusable(&node))) {
+                    candidates.push_back(candidate{&node, tab_index, order});
+                }
+                ++order;
+            }
+            for (auto* child : node.children) visit(*child);
+        };
+        visit(active_root());
+        std::stable_sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+            const auto left_positive = left.tab_index > 0;
+            const auto right_positive = right.tab_index > 0;
+            if (left_positive != right_positive) return left_positive;
+            if (left_positive && left.tab_index != right.tab_index) {
+                return left.tab_index < right.tab_index;
+            }
+            return left.order < right.order;
+        });
+        std::vector<dom_node*> result;
+        result.reserve(candidates.size());
+        for (const auto& entry : candidates) result.push_back(entry.node);
+        return result;
+    }
+
+    dom_node* nearest_text_control(dom_node* node)
+    {
+        for (auto* current_node = node; current_node != nullptr; current_node = current_node->parent) {
+            if (is_text_control(current_node)) return current_node;
+        }
+        return nullptr;
+    }
+
+    uint32_t focus_document_owner(const dom_node* node) const
+    {
+        for (auto* ancestor = node; ancestor != nullptr; ancestor = ancestor->parent) {
+            if (ancestor->tag == "iframe") return ancestor->id;
+            for (const auto& [frame_id, body] : provisional_frame_bodies) {
+                if (ancestor == body) return frame_id;
+            }
+        }
+        return 0;
+    }
+
+    static dom_node* find_node_by_native_id(dom_node& root, uint32_t id)
+    {
+        if (root.id == id) return &root;
+        for (auto* child : root.children) {
+            if (child == nullptr) continue;
+            if (auto* match = find_node_by_native_id(*child, id); match != nullptr) return match;
+        }
+        return nullptr;
+    }
+
+    void recascade_focus_subject(dom_node& subject, std::string_view reason)
+    {
+        // :focus and :focus-visible can restyle the subject, its descendants,
+        // and siblings selected through +/~. They cannot restyle an ancestor
+        // without :has(), which this runtime does not advertise. Recomputing
+        // the subject's parent subtree therefore preserves all supported
+        // selector semantics without cascading the unrelated chart document.
+        auto* invalidation_root = subject.parent == nullptr ? &subject : subject.parent;
+        recascade_connected_subtree(*invalidation_root, reason);
+    }
+
+    bool set_active_element(dom_node* next, const htmlml_input_event& input)
+    {
+        if (active_element == next) return true;
+        auto* previous = active_element;
+        auto* related_target = previous != nullptr && next != nullptr
+                && focus_document_owner(previous) == focus_document_owner(next)
+            ? next
+            : nullptr;
+        if (previous != nullptr) {
+            previous->input_focused = false;
+            previous->caret_visible = false;
+            // The document regains focus before blur/focusout listeners run.
+            // This also allows a listener to focus another element without
+            // recursively blurring the element whose transition is in flight.
+            active_element = nullptr;
+            recascade_focus_subject(*previous, "focus-before-blur");
+            current_related_target = related_target;
+            if (!dispatch_input_event_type(input, "blur", *previous)) {
+                current_related_target = nullptr;
+                return false;
+            }
+            current_related_target = related_target;
+            if (!dispatch_input_event_type(input, "focusout", *previous)) {
+                current_related_target = nullptr;
+                return false;
+            }
+            // A focus/blur listener may have completed a newer focus change.
+            // Preserve that result instead of overwriting it with this request.
+            if (active_element != nullptr) {
+                current_related_target = nullptr;
+                document.mark_dirty();
+                return true;
+            }
+        }
+        active_element = next;
+        // Focus styles are observable synchronously from focus listeners.
+        // Recompute them before dispatching focus/focusin, not only after the
+        // event sequence has completed. When `next` is null, the transition to
+        // an unfocused document was already recomputed before blur above.
+        if (next != nullptr) {
+            recascade_focus_subject(*next, "focus-before-focus");
+        }
+        if (next != nullptr) {
+            next->input_focused = is_text_control(next);
+            next->caret_visible = next->input_focused;
+            caret_blink_epoch_ms = last_animation_frame_timestamp_ms;
+            related_target = previous != nullptr
+                    && focus_document_owner(previous) == focus_document_owner(next)
+                ? previous
+                : nullptr;
+            current_related_target = related_target;
+            if (!dispatch_input_event_type(input, "focus", *next)) {
+                current_related_target = nullptr;
+                return false;
+            }
+            current_related_target = related_target;
+            if (!dispatch_input_event_type(input, "focusin", *next)) {
+                current_related_target = nullptr;
+                return false;
+            }
+        }
+        current_related_target = nullptr;
+        // The active element has not changed since the pre-event recascade.
+        // DOM/class/style writes performed by focus listeners invalidate their
+        // own affected subtrees, so a duplicate whole-document pass here only
+        // delays publication without changing computed style.
+        document.mark_dirty();
+        return true;
+    }
+
+    static bool subtree_contains(const dom_node& root, const dom_node* candidate)
+    {
+        for (auto* current_node = candidate; current_node != nullptr;
+             current_node = current_node->parent) {
+            if (current_node == &root) return true;
+        }
+        return false;
+    }
+
+    bool blur_active_element_before_detach(dom_node& detached_root)
+    {
+        if (!subtree_contains(detached_root, active_element)) return true;
+        htmlml_input_event synthetic{};
+        if (!set_active_element(nullptr, synthetic)) return false;
+
+        // A blur/focusout listener can synchronously focus another node. Preserve
+        // focus outside the subtree, but never retain a node that is about to be
+        // detached as document.activeElement.
+        if (subtree_contains(detached_root, active_element)) {
+            auto* detached_active_element = active_element;
+            detached_active_element->input_focused = false;
+            detached_active_element->caret_visible = false;
+            active_element = nullptr;
+            recascade_focus_subject(
+                *detached_active_element,
+                "focus-detached-reentrant");
+            document.mark_dirty();
+        }
+        return true;
+    }
+
+    bool blur_active_descendant_before_replacing_children(dom_node& parent)
+    {
+        for (auto* child : parent.children) {
+            if (child != nullptr && subtree_contains(*child, active_element)) {
+                return blur_active_element_before_detach(*child);
+            }
+        }
+        return true;
+    }
+
+    void ensure_form_value(dom_node& node)
+    {
+        if (node.form_value_initialized) return;
+        const auto value = node.attributes.find("value");
+        node.form_value = value == node.attributes.end() ? std::string{} : value->second;
+        node.form_value_initialized = true;
+        node.selection_start = node.form_value.size();
+        node.selection_end = node.form_value.size();
+        node.selection_direction = "none";
+    }
+
+    static size_t previous_utf8_boundary(const std::string& value, size_t index)
+    {
+        if (index == 0) return 0;
+        --index;
+        while (index > 0
+            && (static_cast<unsigned char>(value[index]) & 0xC0U) == 0x80U) {
+            --index;
+        }
+        return index;
+    }
+
+    static size_t next_utf8_boundary(const std::string& value, size_t index)
+    {
+        if (index >= value.size()) return value.size();
+        ++index;
+        while (index < value.size()
+            && (static_cast<unsigned char>(value[index]) & 0xC0U) == 0x80U) {
+            ++index;
+        }
+        return index;
+    }
+
+    bool dispatch_keyboard_or_text(const htmlml_input_event& input)
+    {
+        auto* target = active_element == nullptr ? &active_root() : active_element;
+        if (input.kind == HTMLML_INPUT_KEY_UP) {
+            return dispatch_input_event_type(input, "keyup", *target);
+        }
+
+        if (input.kind == HTMLML_INPUT_TEXT) {
+            if (!is_text_control(target)) return true;
+            bool prevented = false;
+            if (!dispatch_input_event_type(input, "beforeinput", *target, &prevented)) return false;
+            if (prevented) return true;
+            ensure_form_value(*target);
+            const auto text = utf8_scalar(static_cast<uint32_t>(input.x));
+            const auto start = std::min(target->selection_start, target->form_value.size());
+            const auto end = std::min(
+                std::max(target->selection_start, target->selection_end),
+                target->form_value.size());
+            target->form_value.replace(start, end - start, text);
+            target->selection_start = start + text.size();
+            target->selection_end = target->selection_start;
+            target->selection_direction = "none";
+            target->caret_visible = true;
+            caret_blink_epoch_ms = last_animation_frame_timestamp_ms;
+            document.mark_dirty();
+            return dispatch_input_event_type(input, "input", *target);
+        }
+
+        bool prevented = false;
+        if (!dispatch_input_event_type(input, "keydown", *target, &prevented)) return false;
+        const auto key_code = static_cast<int>(input.x);
+        if (!prevented && key_code == 9) {
+            const auto focus_order = sequential_focus_order();
+            if (!focus_order.empty()) {
+                const auto current = std::find(focus_order.begin(), focus_order.end(), active_element);
+                const auto backwards = (input.flags & HTMLML_INPUT_MODIFIER_SHIFT) != 0U;
+                dom_node* next = nullptr;
+                if (current == focus_order.end()) {
+                    next = backwards ? focus_order.back() : focus_order.front();
+                } else if (backwards) {
+                    next = current == focus_order.begin() ? focus_order.back() : *(current - 1);
+                } else {
+                    next = current + 1 == focus_order.end() ? focus_order.front() : *(current + 1);
+                }
+                focus_visible = true;
+                return set_active_element(next, input);
+            }
+        }
+        if (prevented || !is_text_control(target)) return true;
+        ensure_form_value(*target);
+        auto start = std::min(target->selection_start, target->form_value.size());
+        auto end = std::min(
+            std::max(target->selection_start, target->selection_end),
+            target->form_value.size());
+        bool changed = false;
+        const auto shift = (input.flags & HTMLML_INPUT_MODIFIER_SHIFT) != 0U;
+        if (key_code == 8) {
+            if (start == end) start = previous_utf8_boundary(target->form_value, start);
+            changed = end > start;
+        } else if (key_code == 46) {
+            if (start == end) end = next_utf8_boundary(target->form_value, end);
+            changed = end > start;
+        } else if (key_code == 37 || key_code == 38
+            || key_code == 39 || key_code == 40
+            || key_code == 36 || key_code == 35) {
+            const auto moving_backward = key_code == 37 || key_code == 38 || key_code == 36;
+            const auto boundary = key_code == 36 || key_code == 38
+                ? size_t{0}
+                : key_code == 35 || key_code == 40
+                    ? target->form_value.size()
+                    : moving_backward
+                        ? previous_utf8_boundary(target->form_value, start)
+                        : next_utf8_boundary(target->form_value, end);
+            if (!shift) {
+                const auto position = start != end && (key_code == 37 || key_code == 38)
+                    ? start
+                    : start != end && (key_code == 39 || key_code == 40)
+                        ? end
+                        : boundary;
+                target->selection_start = target->selection_end = position;
+                target->selection_direction = "none";
+            } else {
+                const auto anchor = target->selection_direction == "backward" ? end : start;
+                const auto focus = target->selection_direction == "backward" ? start : end;
+                const auto next_focus = key_code == 36 || key_code == 38
+                    ? size_t{0}
+                    : key_code == 35 || key_code == 40
+                        ? target->form_value.size()
+                        : moving_backward
+                            ? previous_utf8_boundary(target->form_value, focus)
+                            : next_utf8_boundary(target->form_value, focus);
+                target->selection_start = std::min(anchor, next_focus);
+                target->selection_end = std::max(anchor, next_focus);
+                target->selection_direction = next_focus < anchor
+                    ? "backward"
+                    : next_focus > anchor ? "forward" : "none";
+            }
+        }
+        if (changed) {
+            bool before_input_prevented = false;
+            if (!dispatch_input_event_type(input, "beforeinput", *target, &before_input_prevented)) {
+                return false;
+            }
+            if (!before_input_prevented) {
+                target->form_value.erase(start, end - start);
+                target->selection_start = target->selection_end = start;
+                target->selection_direction = "none";
+                if (!dispatch_input_event_type(input, "input", *target)) return false;
+            }
+        }
+        target->caret_visible = true;
+        caret_blink_epoch_ms = last_animation_frame_timestamp_ms;
+        document.mark_dirty();
         return true;
     }
 
@@ -1876,6 +5140,17 @@ struct v8_dom_runtime::implementation final {
             : frame_context.Get(isolate);
         v8::Context::Scope context_scope(local_context);
         ensure_layout();
+        v8::TryCatch try_catch(isolate);
+        if (input.kind == HTMLML_INPUT_KEY_DOWN
+            || input.kind == HTMLML_INPUT_KEY_UP
+            || input.kind == HTMLML_INPUT_TEXT) {
+            if (!dispatch_keyboard_or_text(input)) {
+                last_error = "Native keyboard input dispatch failed: "
+                    + describe_exception(try_catch, local_context);
+                return false;
+            }
+            return true;
+        }
         auto* hit_target = document.hit_test(
             active_root(),
             static_cast<float>(input.x),
@@ -1892,7 +5167,6 @@ struct v8_dom_runtime::implementation final {
             last_pointer_y = input.y;
             has_pointer_position = true;
         }
-        v8::TryCatch try_catch(isolate);
         if ((input.kind == HTMLML_INPUT_POINTER_MOVE
                 || input.kind == HTMLML_INPUT_POINTER_DOWN)
             && hit_target != hover_target) {
@@ -1901,13 +5175,44 @@ struct v8_dom_runtime::implementation final {
             // Event handlers are therefore allowed to observe the new
             // computed style synchronously from mouseover/pointerover.
             hover_target = hit_target;
-            recascade_connected_subtree(active_root());
+            recascade_hover_transition(
+                previous_hover_target,
+                hover_target,
+                "hover-target-change");
+            dom_node* common_ancestor = previous_hover_target;
+            while (common_ancestor != nullptr) {
+                auto* candidate = hit_target;
+                while (candidate != nullptr && candidate != common_ancestor) {
+                    candidate = candidate->parent;
+                }
+                if (candidate == common_ancestor) break;
+                common_ancestor = common_ancestor->parent;
+            }
             if (previous_hover_target != nullptr) {
                 current_related_target = hit_target;
-                constexpr const char* exit_types[] = {
-                    "pointerout", "mouseout", "pointerleave", "mouseleave"};
-                for (const auto* type : exit_types) {
-                    if (!dispatch_input_event_type(input, type, *previous_hover_target)) {
+                if (!dispatch_input_event_type(input, "pointerout", *previous_hover_target)) {
+                    last_error = "Native input transition dispatch failed: "
+                        + describe_exception(try_catch, local_context);
+                    return false;
+                }
+                for (auto* exited = previous_hover_target;
+                     exited != nullptr && exited != common_ancestor;
+                     exited = exited->parent) {
+                    if (!dispatch_input_event_type(input, "pointerleave", *exited)) {
+                        last_error = "Native input transition dispatch failed: "
+                            + describe_exception(try_catch, local_context);
+                        return false;
+                    }
+                }
+                if (!dispatch_input_event_type(input, "mouseout", *previous_hover_target)) {
+                    last_error = "Native input transition dispatch failed: "
+                        + describe_exception(try_catch, local_context);
+                    return false;
+                }
+                for (auto* exited = previous_hover_target;
+                     exited != nullptr && exited != common_ancestor;
+                     exited = exited->parent) {
+                    if (!dispatch_input_event_type(input, "mouseleave", *exited)) {
                         last_error = "Native input transition dispatch failed: "
                             + describe_exception(try_catch, local_context);
                         return false;
@@ -1915,10 +5220,32 @@ struct v8_dom_runtime::implementation final {
                 }
             }
             current_related_target = previous_hover_target;
-            constexpr const char* enter_types[] = {
-                "pointerover", "mouseover", "pointerenter", "mouseenter"};
-            for (const auto* type : enter_types) {
-                if (!dispatch_input_event_type(input, type, *hit_target)) {
+            std::vector<dom_node*> entered_nodes;
+            for (auto* entered = hit_target;
+                 entered != nullptr && entered != common_ancestor;
+                 entered = entered->parent) {
+                entered_nodes.push_back(entered);
+            }
+            std::reverse(entered_nodes.begin(), entered_nodes.end());
+            if (!dispatch_input_event_type(input, "pointerover", *hit_target)) {
+                last_error = "Native input transition dispatch failed: "
+                    + describe_exception(try_catch, local_context);
+                return false;
+            }
+            for (auto* entered : entered_nodes) {
+                if (!dispatch_input_event_type(input, "pointerenter", *entered)) {
+                    last_error = "Native input transition dispatch failed: "
+                        + describe_exception(try_catch, local_context);
+                    return false;
+                }
+            }
+            if (!dispatch_input_event_type(input, "mouseover", *hit_target)) {
+                last_error = "Native input transition dispatch failed: "
+                    + describe_exception(try_catch, local_context);
+                return false;
+            }
+            for (auto* entered : entered_nodes) {
+                if (!dispatch_input_event_type(input, "mouseenter", *entered)) {
                     last_error = "Native input transition dispatch failed: "
                         + describe_exception(try_catch, local_context);
                     return false;
@@ -1944,8 +5271,12 @@ struct v8_dom_runtime::implementation final {
                 target = hit_target;
             }
             if (hover_target != hit_target) {
+                auto* previous_hover_target = hover_target;
                 hover_target = hit_target;
-                recascade_connected_subtree(active_root());
+                recascade_hover_transition(
+                    previous_hover_target,
+                    hover_target,
+                    "hover-target-replaced");
             }
         }
         const char* types[3]{};
@@ -1954,6 +5285,29 @@ struct v8_dom_runtime::implementation final {
         dom_node* activated_form_control = nullptr;
         bool activate_label_control_after_click = false;
         dom_node* click_target = nullptr;
+        dom_node* auxiliary_click_target = nullptr;
+        dom_node* context_menu_target = nullptr;
+        const auto encoded_button = static_cast<int>((input.flags >> 8U) & 0xffU);
+        const auto changed_button = encoded_button == 0 ? 0 : encoded_button - 1;
+        if (std::getenv("HTMLML_PROBE_PROFILE_INPUT") != nullptr
+            && (input.kind == HTMLML_INPUT_POINTER_MOVE
+                || input.kind == HTMLML_INPUT_POINTER_DOWN
+                || input.kind == HTMLML_INPUT_POINTER_UP)) {
+            std::cerr << "[Native Engine Probe] input dispatch"
+                << ", kind=" << input.kind
+                << ", sequence=" << input.sequence
+                << ", hit=" << hit_target->id
+                << ", target=" << target->id
+                << ", capture-target="
+                << (pointer_capture_target == nullptr
+                    ? 0U : pointer_capture_target->id)
+                << ", flags=" << input.flags
+                << ", x=" << input.x
+                << ", y=" << input.y
+                << ", movement-x=" << current_movement_x
+                << ", movement-y=" << current_movement_y
+                << '\n';
+        }
         switch (input.kind) {
         case HTMLML_INPUT_POINTER_MOVE:
             types[type_count++] = "pointermove";
@@ -1965,6 +5319,7 @@ struct v8_dom_runtime::implementation final {
             pointer_down_y = input.y;
             types[type_count++] = "pointerdown";
             types[type_count++] = "mousedown";
+            if (changed_button == 2) context_menu_target = target;
             break;
         case HTMLML_INPUT_POINTER_UP:
             types[type_count++] = "pointerup";
@@ -1975,25 +5330,30 @@ struct v8_dom_runtime::implementation final {
                 // ancestor of the press and release targets. Interactive rows
                 // reveal/replace icon children on hover, so requiring the same
                 // leaf suppressed an otherwise valid click between down/up.
-                click_target = pointer_down_target;
-                while (click_target != nullptr) {
+                auto* common_target = pointer_down_target;
+                while (common_target != nullptr) {
                     auto* release_ancestor = hit_target;
                     while (release_ancestor != nullptr
-                        && release_ancestor != click_target) {
+                        && release_ancestor != common_target) {
                         release_ancestor = release_ancestor->parent;
                     }
-                    if (release_ancestor == click_target) break;
-                    click_target = click_target->parent;
+                    if (release_ancestor == common_target) break;
+                    common_target = common_target->parent;
                 }
-                if (click_target == nullptr) click_target = &active_root();
-                activated_form_control = label_control_for_click(*click_target);
-                activate_label_control_after_click = activated_form_control != nullptr
-                    && activated_form_control != click_target;
-                if (activated_form_control != nullptr && !activate_label_control_after_click) {
-                    // For a direct input activation the checked state changes
-                    // before the input's click listeners run, matching HTML.
-                    form_control_changed = apply_form_control_click_default(
-                        *activated_form_control);
+                if (common_target == nullptr) common_target = &active_root();
+                if (changed_button == 0) {
+                    click_target = common_target;
+                    activated_form_control = label_control_for_click(*click_target);
+                    activate_label_control_after_click = activated_form_control != nullptr
+                        && activated_form_control != click_target;
+                    if (activated_form_control != nullptr && !activate_label_control_after_click) {
+                        // For a direct input activation the checked state changes
+                        // before the input's click listeners run, matching HTML.
+                        form_control_changed = apply_form_control_click_default(
+                            *activated_form_control);
+                    }
+                } else {
+                    auxiliary_click_target = common_target;
                 }
             }
             break;
@@ -2003,15 +5363,117 @@ struct v8_dom_runtime::implementation final {
         default:
             return true;
         }
+        bool wheel_default_prevented = false;
+        bool pointer_focus_default_prevented = false;
         for (size_t index = 0; index < type_count; ++index) {
-            if (!dispatch_input_event_type(input, types[index], *target)) {
+            bool event_default_prevented = false;
+            const auto observe_default = input.kind == HTMLML_INPUT_WHEEL
+                || input.kind == HTMLML_INPUT_POINTER_DOWN;
+            if (!dispatch_input_event_type(
+                    input,
+                    types[index],
+                    *target,
+                    observe_default ? &event_default_prevented : nullptr)) {
                 last_error = "Native input dispatch failed: " + describe_exception(try_catch, local_context);
                 return false;
             }
+            if (input.kind == HTMLML_INPUT_WHEEL) {
+                wheel_default_prevented = wheel_default_prevented || event_default_prevented;
+            } else if (input.kind == HTMLML_INPUT_POINTER_DOWN) {
+                pointer_focus_default_prevented = pointer_focus_default_prevented
+                    || event_default_prevented;
+            }
         }
-        if (click_target != nullptr
-            && !dispatch_input_event_type(input, "click", *click_target)) {
-            last_error = "Native click dispatch failed: "
+        if (input.kind == HTMLML_INPUT_WHEEL && !wheel_default_prevented) {
+            for (auto* scroll_target = target; scroll_target != nullptr;
+                scroll_target = scroll_target->parent) {
+                // A loaded document exposes HTML beneath the retained native
+                // viewport.  Geometry accessors project that HTML root onto
+                // the viewport scroll owner, so wheel defaults must skip the
+                // exposed wrapper and mutate the same owner as scrollTop.
+                if (scroll_target->tag == "html"
+                    && scroll_target->parent == &document.body()) {
+                    continue;
+                }
+                const auto maximum_x = std::max(
+                    0.0F,
+                    scroll_target->scroll_content_width - scroll_target->scroll_viewport_width);
+                const auto maximum_y = std::max(
+                    0.0F,
+                    scroll_target->scroll_content_height - scroll_target->scroll_viewport_height);
+                const auto* exposed_root = &active_root();
+                const auto root_viewport_scroll_x = scroll_target == &document.body()
+                    && (exposed_root->style.overflow_x == overflow_mode::visible
+                        || exposed_root->style.scroll_x_enabled);
+                const auto root_viewport_scroll_y = scroll_target == &document.body()
+                    && (exposed_root->style.overflow_y == overflow_mode::visible
+                        || exposed_root->style.scroll_y_enabled);
+                const auto next_x = (scroll_target->style.scroll_x_enabled
+                        || root_viewport_scroll_x)
+                    ? std::clamp(
+                        scroll_target->scroll_left + static_cast<float>(input.delta_x),
+                        0.0F,
+                        maximum_x)
+                    : scroll_target->scroll_left;
+                const auto next_y = (scroll_target->style.scroll_y_enabled
+                        || root_viewport_scroll_y)
+                    ? std::clamp(
+                        scroll_target->scroll_top + static_cast<float>(input.delta_y),
+                        0.0F,
+                        maximum_y)
+                    : scroll_target->scroll_top;
+                if (std::abs(next_x - scroll_target->scroll_left) <= 0.01F
+                    && std::abs(next_y - scroll_target->scroll_top) <= 0.01F) {
+                    continue;
+                }
+                scroll_target->scroll_left = next_x;
+                scroll_target->scroll_top = next_y;
+                document.mark_dirty();
+                if (!dispatch_input_event_type(input, "scroll", *scroll_target)) {
+                    last_error = "Native scroll dispatch failed: "
+                        + describe_exception(try_catch, local_context);
+                    return false;
+                }
+                break;
+            }
+        }
+        if (input.kind == HTMLML_INPUT_POINTER_DOWN
+            && changed_button == 0
+            && !pointer_focus_default_prevented) {
+            auto* focus_target = nearest_pointer_focusable(target);
+            focus_visible = false;
+            if ((focus_target != nullptr || active_element != nullptr)
+                && !set_active_element(focus_target, input)) {
+                last_error = "Native focus dispatch failed: "
+                    + describe_exception(try_catch, local_context);
+                return false;
+            }
+        }
+        if (context_menu_target != nullptr
+            && !dispatch_input_event_type(input, "contextmenu", *context_menu_target)) {
+            last_error = "Native contextmenu dispatch failed: "
+                + describe_exception(try_catch, local_context);
+            return false;
+        }
+        bool click_default_prevented = false;
+        if (click_target != nullptr) {
+            if (!dispatch_input_event_type(
+                    input,
+                    "click",
+                    *click_target,
+                    &click_default_prevented)) {
+                last_error = "Native click dispatch failed: "
+                    + describe_exception(try_catch, local_context);
+                return false;
+            }
+            if (!click_default_prevented && !queue_external_navigation(*click_target)) {
+                last_error = "Native external navigation host request could not be queued";
+                return false;
+            }
+        }
+        if (auxiliary_click_target != nullptr
+            && !dispatch_input_event_type(input, "auxclick", *auxiliary_click_target)) {
+            last_error = "Native auxiliary click dispatch failed: "
                 + describe_exception(try_catch, local_context);
             return false;
         }
@@ -2038,7 +5500,342 @@ struct v8_dom_runtime::implementation final {
             pointer_capture_target = nullptr;
             pointer_down_target = nullptr;
         }
+        if (input.kind == HTMLML_INPUT_POINTER_MOVE
+            || input.kind == HTMLML_INPUT_POINTER_DOWN
+            || input.kind == HTMLML_INPUT_POINTER_UP) {
+            ensure_layout();
+            auto* cursor_target = document.hit_test(
+                active_root(),
+                static_cast<float>(input.x),
+                static_cast<float>(input.y));
+            current_cursor_kind_value = cursor_target == nullptr
+                ? HTMLML_CURSOR_DEFAULT
+                : cursor_kind_for(*cursor_target);
+        }
         return true;
+    }
+
+    static std::string resolve_resource_url(std::string value, const std::string& base)
+    {
+        if (value.empty()) return {};
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+            value.pop_back();
+        }
+        const auto scheme = value.find(':');
+        if (scheme != std::string::npos
+            && scheme > 0U
+            && std::all_of(value.begin(), value.begin() + static_cast<std::ptrdiff_t>(scheme),
+                [](unsigned char character) {
+                    return std::isalnum(character) || character == '+' || character == '-' || character == '.';
+                })) {
+            return value;
+        }
+        const auto base_scheme = base.find("://");
+        if (value.starts_with("//")) {
+            return base_scheme == std::string::npos
+                ? value
+                : base.substr(0U, base_scheme) + ":" + value;
+        }
+        if (base_scheme == std::string::npos) return value;
+        const auto authority_end = base.find('/', base_scheme + 3U);
+        const auto origin = authority_end == std::string::npos ? base : base.substr(0U, authority_end);
+        if (value.starts_with('/')) return origin + value;
+
+        const auto value_suffix_offset = value.find_first_of("?#");
+        const auto value_suffix = value_suffix_offset == std::string::npos
+            ? std::string{}
+            : value.substr(value_suffix_offset);
+        if (value_suffix_offset != std::string::npos) value.resize(value_suffix_offset);
+        const auto preserve_trailing_slash = value.ends_with('/');
+        auto clean_base = base.substr(0U, base.find_first_of("?#"));
+        const auto slash = clean_base.rfind('/');
+        auto combined = (slash == std::string::npos ? clean_base + '/' : clean_base.substr(0U, slash + 1U)) + value;
+        const auto combined_authority_end = combined.find('/', base_scheme + 3U);
+        if (combined_authority_end == std::string::npos) return combined;
+        const auto prefix = combined.substr(0U, combined_authority_end);
+        const auto suffix = combined.substr(combined_authority_end + 1U);
+        std::vector<std::string> segments;
+        size_t cursor = 0U;
+        while (cursor <= suffix.size()) {
+            auto end = suffix.find('/', cursor);
+            if (end == std::string::npos) end = suffix.size();
+            const auto segment = suffix.substr(cursor, end - cursor);
+            if (segment == "..") {
+                if (!segments.empty()) segments.pop_back();
+            } else if (!segment.empty() && segment != ".") {
+                segments.push_back(segment);
+            }
+            if (end == suffix.size()) break;
+            cursor = end + 1U;
+        }
+        std::ostringstream result;
+        result << prefix << '/';
+        for (size_t index = 0U; index < segments.size(); ++index) {
+            if (index != 0U) result << '/';
+            result << segments[index];
+        }
+        if (preserve_trailing_slash && !segments.empty()) result << '/';
+        result << value_suffix;
+        return result.str();
+    }
+
+    static std::string resource_leaf_name(std::string value)
+    {
+        if (const auto suffix = value.find_first_of("?#"); suffix != std::string::npos) {
+            value.resize(suffix);
+        }
+        const auto slash = value.find_last_of("/\\");
+        return slash == std::string::npos ? value : value.substr(slash + 1U);
+    }
+
+    static std::string resource_kind_name(uint32_t kind)
+    {
+        switch (kind) {
+        case HTMLML_RESOURCE_DOCUMENT: return "document";
+        case HTMLML_RESOURCE_SCRIPT: return "script";
+        case HTMLML_RESOURCE_STYLESHEET: return "stylesheet";
+        case HTMLML_RESOURCE_IMAGE: return "image";
+        default: return "kind-" + std::to_string(kind);
+        }
+    }
+
+    static std::string resource_scheme(const std::string& address)
+    {
+        const auto separator = address.find(':');
+        return separator == std::string::npos
+            ? "filesystem"
+            : lower_html_name(address.substr(0U, separator));
+    }
+
+    bool load_text_resource(
+        const std::string& value,
+        const std::string& base,
+        uint32_t kind,
+        std::string& content,
+        std::string& resolved_name)
+    {
+        resolved_name = resolve_resource_url(value, base);
+        record_feature(
+            "resource",
+            "type:" + resource_kind_name(kind),
+            "supported",
+            {},
+            "resource-loader");
+        record_feature(
+            "resource",
+            "scheme:" + resource_scheme(resolved_name),
+            "supported",
+            {},
+            "resource-loader");
+        ++resource_cache_request_count;
+        const auto cache_key = resource_key_digest(kind, resolved_name);
+        cached_text_resource cached;
+        auto has_cached = false;
+        auto has_prefetched = false;
+        prefetched_resource prefetched;
+        const auto prefetch_key = resource_prefetch_key(kind, resolved_name);
+        if (auto known = prefetched_resources.find(prefetch_key);
+            known != prefetched_resources.end()) {
+            prefetched = known->second.get();
+            prefetched_resources.erase(known);
+            cached = std::move(prefetched.cached);
+            has_cached = prefetched.has_cached;
+            has_prefetched = true;
+            if (prefetched.from_fresh_cache) {
+                record_feature(
+                    "resource", "cache:fresh-prefetch", "supported", {}, "resource-loader");
+                content = std::move(cached.content);
+                ++resource_cache_hit_count;
+                resource_cache_bytes_read_count += content.size();
+                return true;
+            }
+        } else {
+            has_cached = read_resource_cache(cache_key, kind, cached);
+        }
+        const auto now_unix_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (has_cached && cached.fresh_until_unix_seconds > now_unix_seconds) {
+            record_feature(
+                "resource", "cache:fresh", "supported", {}, "resource-loader");
+            content = std::move(cached.content);
+            ++resource_cache_hit_count;
+            resource_cache_bytes_read_count += content.size();
+            return true;
+        }
+        if (load_resource_callback && !resolved_name.empty()) {
+            binding_callback_timer timer(profile_startup ? &startup_resource_read : nullptr);
+            resource_response response;
+            auto loaded = false;
+            if (has_prefetched) {
+                response = std::move(prefetched.response);
+                loaded = prefetched.loaded;
+            } else {
+                loaded = load_resource_callback(
+                    kind,
+                    resolved_name,
+                    has_cached ? cached.entity_tag : std::string{},
+                    has_cached ? cached.last_modified_unix_seconds : 0,
+                    response);
+            }
+            if (loaded) {
+                if (response.not_modified && has_cached) {
+                    record_feature(
+                        "resource", "cache:revalidated-304", "supported", {}, "resource-loader");
+                    content = std::move(cached.content);
+                    ++resource_cache_hit_count;
+                    resource_cache_bytes_read_count += content.size();
+                    if (response.cacheable) {
+                        write_resource_cache(
+                            cache_key,
+                            kind,
+                            content,
+                            response.entity_tag.empty() ? cached.entity_tag : response.entity_tag,
+                            response.last_modified_unix_seconds == 0
+                                ? cached.last_modified_unix_seconds
+                                : response.last_modified_unix_seconds,
+                            response.fresh_until_unix_seconds);
+                    } else {
+                        remove_resource_cache(cache_key);
+                    }
+                    return true;
+                }
+                content = std::move(response.content);
+                record_feature(
+                    "resource",
+                    response.cacheable ? "network:cacheable-200" : "network:uncacheable-200",
+                    "supported",
+                    {},
+                    "resource-loader");
+                ++resource_cache_miss_count;
+                if (response.cacheable) {
+                    write_resource_cache(
+                        cache_key,
+                        kind,
+                        content,
+                        response.entity_tag,
+                        response.last_modified_unix_seconds,
+                        response.fresh_until_unix_seconds);
+                } else {
+                    remove_resource_cache(cache_key);
+                }
+                return true;
+            }
+            if (has_cached) {
+                record_feature(
+                    "resource", "cache:stale-fallback", "supported", {}, "resource-loader");
+                content = std::move(cached.content);
+                ++resource_cache_hit_count;
+                resource_cache_bytes_read_count += content.size();
+                return true;
+            }
+        }
+        ++resource_cache_miss_count;
+        const auto path = resolve_resource_path(value);
+        if (path.empty() || !profiled_read_text_file(path, content)) {
+            record_feature(
+                "resource", "load:failed", "unsupported", {}, "resource-loader");
+            return false;
+        }
+        record_feature(
+            "resource", "filesystem:read", "supported", {}, "resource-loader");
+        resolved_name = path.string();
+        write_resource_cache(cache_key, kind, content, {}, 0, 0);
+        return true;
+    }
+
+    static std::string resource_prefetch_key(uint32_t kind, const std::string& resolved_name)
+    {
+        return std::to_string(kind) + ':' + resolved_name;
+    }
+
+    void start_resource_prefetch(
+        const std::string& value,
+        const std::string& base,
+        uint32_t kind)
+    {
+        if (!load_resource_callback || prefetched_resources.size() >= maximum_resource_prefetches) {
+            return;
+        }
+        const auto resolved_name = resolve_resource_url(value, base);
+        if (resolved_name.empty()) return;
+        const auto key = resource_prefetch_key(kind, resolved_name);
+        if (prefetched_resources.contains(key)) return;
+
+        cached_text_resource cached;
+        const auto cache_key = resource_key_digest(kind, resolved_name);
+        const auto has_cached = read_resource_cache(cache_key, kind, cached);
+        const auto now_unix_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (has_cached && cached.fresh_until_unix_seconds > now_unix_seconds) {
+            prefetched_resource result;
+            result.cached = std::move(cached);
+            result.has_cached = true;
+            result.from_fresh_cache = true;
+            std::promise<prefetched_resource> promise;
+            auto future = promise.get_future();
+            promise.set_value(std::move(result));
+            prefetched_resources.emplace(key, std::move(future));
+            return;
+        }
+
+        auto loader = load_resource_callback;
+        auto entity_tag = has_cached ? cached.entity_tag : std::string{};
+        const auto last_modified = has_cached ? cached.last_modified_unix_seconds : 0;
+        prefetched_resources.emplace(
+            key,
+            std::async(
+                std::launch::async,
+                [loader = std::move(loader), kind, resolved_name,
+                    entity_tag = std::move(entity_tag), last_modified,
+                    cached = std::move(cached), has_cached]() mutable {
+                    prefetched_resource result;
+                    result.cached = std::move(cached);
+                    result.has_cached = has_cached;
+                    try {
+                        result.loaded = loader(
+                            kind,
+                            resolved_name,
+                            entity_tag,
+                            last_modified,
+                            result.response);
+                    } catch (...) {
+                        result.loaded = false;
+                    }
+                    return result;
+                }));
+    }
+
+    void prefetch_connected_resources()
+    {
+        if (!load_resource_callback || connected_resources.empty()) return;
+        for (auto& task : connected_resources) {
+            if (prefetched_resources.size() >= maximum_resource_prefetches) return;
+            if (task.node == nullptr) continue;
+            auto task_context = task.context.Get(isolate);
+            if (task_context.IsEmpty()) continue;
+            v8::Context::Scope task_context_scope(task_context);
+            const auto& base = in_frame_context() ? frame_base_address : document_base_address;
+            if (task.node->tag == "link") {
+                const auto href = task.node->attributes.find("href");
+                if (href != task.node->attributes.end()) {
+                    start_resource_prefetch(
+                        href->second,
+                        base,
+                        HTMLML_RESOURCE_STYLESHEET);
+                }
+            } else if (task.node->tag == "script") {
+                const auto source = task.node->attributes.find("src");
+                if (source != task.node->attributes.end() && !source->second.empty()) {
+                    start_resource_prefetch(
+                        source->second,
+                        base,
+                        HTMLML_RESOURCE_SCRIPT);
+                }
+            }
+        }
     }
 
     std::filesystem::path resolve_resource_path(std::string value) const
@@ -2076,31 +5873,50 @@ struct v8_dom_runtime::implementation final {
         if (node.tag == "link") {
             const auto href_iterator = node.attributes.find("href");
             if (href_iterator != node.attributes.end()) {
-                const auto path = resolve_resource_path(href_iterator->second);
-                if (!path.empty()) {
-                    std::string stylesheet;
-                    if (!profiled_read_text_file(path, stylesheet)) {
-                        frame_last_error_value = "Unable to load connected stylesheet: " + path.string();
-                        ++frame_script_error_count;
-                        return false;
-                    }
-                    const auto first_new_rule = add_stylesheet(std::move(stylesheet));
+                std::string stylesheet;
+                std::string stylesheet_name;
+                const auto& base = in_frame_context() ? frame_base_address : document_base_address;
+                if (load_text_resource(
+                        href_iterator->second,
+                        base,
+                        HTMLML_RESOURCE_STYLESHEET,
+                        stylesheet,
+                        stylesheet_name)) {
+                    const auto first_new_rule = add_stylesheet(
+                        std::move(stylesheet),
+                        stylesheet_name);
                     binding_callback_timer recascade_timer(
                         profile_startup ? &startup_stylesheet_recascade : nullptr);
+                    const auto custom_properties_changed = appended_css_rules_define_custom_properties(
+                        first_new_rule);
                     for (auto* existing : document.query_selector_all(document.body(), "*")) {
                         if (profile_startup) ++startup_stylesheet_recascade_nodes;
                         apply_appended_css_rules(*existing, first_new_rule);
                     }
+                    if (custom_properties_changed) {
+                        for (auto* existing : document.query_selector_all(document.body(), "*")) {
+                            reapply_css_variable_dependent_rules(*existing);
+                        }
+                    }
+                } else {
+                    frame_last_error_value = "Unable to load connected stylesheet: " + href_iterator->second;
+                    ++frame_script_error_count;
+                    return false;
                 }
             }
         } else if (node.tag == "script") {
             const auto source_iterator = node.attributes.find("src");
             if (source_iterator == node.attributes.end() || source_iterator->second.empty()) return true;
-            const auto path = resolve_resource_path(source_iterator->second);
-            if (path.empty()) return true;
             std::string source;
-            if (!profiled_read_text_file(path, source)) {
-                frame_last_error_value = "Unable to load connected script: " + path.string();
+            std::string script_name;
+            const auto& base = in_frame_context() ? frame_base_address : document_base_address;
+            if (!load_text_resource(
+                    source_iterator->second,
+                    base,
+                    HTMLML_RESOURCE_SCRIPT,
+                    source,
+                    script_name)) {
+                frame_last_error_value = "Unable to load connected script: " + source_iterator->second;
                 ++frame_script_error_count;
                 return false;
             }
@@ -2109,12 +5925,12 @@ struct v8_dom_runtime::implementation final {
             // browser task. Promise reactions must not run between evaluating
             // the script and dispatching load, otherwise Webpack can re-enter a
             // module graph while an export is still in its TDZ.
-            if (!execute_in_context(local_context, source, path.string(), error, false)) {
+            if (!execute_in_context(local_context, source, script_name, error, false)) {
                 frame_last_error_value = "Connected script failed: " + error;
                 ++frame_script_error_count;
                 return false;
             }
-            loaded_resource_names.push_back(path.filename().generic_string());
+            loaded_resource_names.push_back(resource_leaf_name(script_name));
             ++frame_script_execution_count;
         }
 
@@ -2167,7 +5983,8 @@ struct v8_dom_runtime::implementation final {
     {
         if (!document.dirty()) return;
         binding_callback_timer timer(profile_startup ? &startup_layout : nullptr);
-        const auto [width, height] = viewport_provider();
+        const auto [width, height, device_scale_factor] = viewport_provider();
+        static_cast<void>(device_scale_factor);
         document.layout(width, height);
     }
 
@@ -2180,10 +5997,45 @@ struct v8_dom_runtime::implementation final {
         return root == nullptr ? document.body() : *root;
     }
 
+    static dom_node& exposed_body_for_root(dom_node& root)
+    {
+        auto* html = root.tag == "html" ? &root : nullptr;
+        if (html == nullptr) {
+            const auto found = std::find_if(
+                root.children.begin(),
+                root.children.end(),
+                [](const auto* child) { return child != nullptr && child->tag == "html"; });
+            if (found != root.children.end()) html = *found;
+        }
+        if (html != nullptr) {
+            const auto found = std::find_if(
+                html->children.begin(),
+                html->children.end(),
+                [](const auto* child) { return child != nullptr && child->tag == "body"; });
+            if (found != html->children.end()) return **found;
+        }
+        return root;
+    }
+
     bool in_frame_context() const
     {
         if (frame_context.IsEmpty()) return false;
         return isolate->GetCurrentContext() == frame_context.Get(isolate);
+    }
+
+    bool is_document_object(v8::Local<v8::Object> candidate) const
+    {
+        if (!document_object.IsEmpty()
+            && candidate->StrictEquals(document_object.Get(isolate))) return true;
+        for (const auto& [_, document_value] : frame_documents) {
+            if (!document_value.IsEmpty()
+                && candidate->StrictEquals(document_value.Get(isolate))) return true;
+        }
+        for (const auto& [_, document_value] : actual_frame_documents) {
+            if (!document_value.IsEmpty()
+                && candidate->StrictEquals(document_value.Get(isolate))) return true;
+        }
+        return false;
     }
 
     uint64_t wrapper_key(const dom_node& node) const
@@ -2191,13 +6043,314 @@ struct v8_dom_runtime::implementation final {
         return static_cast<uint64_t>(node.id) | (in_frame_context() ? (1ULL << 63U) : 0ULL);
     }
 
+    template <typename Callback>
+    static void visit_subtree(dom_node& root, Callback&& callback)
+    {
+        callback(root);
+        for (auto* child : root.children) {
+            if (child != nullptr) visit_subtree(*child, callback);
+        }
+    }
+
+    void weaken_detached_subtree_wrappers(dom_node& root)
+    {
+        // A persistent V8 handle is a GC root. Keeping every historical DOM
+        // wrapper strong therefore retains React's expando graph forever after
+        // the corresponding native node is removed. Model a detached DOM tree
+        // as one weakly rooted object graph: any JavaScript reference to any
+        // wrapper keeps the complete tree alive, while an unreachable tree can
+        // be reclaimed by V8 as a cycle.
+        for (const auto frame_realm : {false, true}) {
+            if (frame_realm && frame_context.IsEmpty()) continue;
+            auto local_context = frame_realm ? frame_context.Get(isolate) : context.Get(isolate);
+            if (local_context.IsEmpty()) continue;
+            v8::Context::Scope context_scope(local_context);
+            std::vector<v8::Local<v8::Object>> wrappers;
+            const auto collect = [&](auto& cache, uint64_t key) {
+                const auto known = cache.find(key);
+                if (known == cache.end() || known->second.IsEmpty()) return;
+                wrappers.push_back(known->second.Get(isolate));
+            };
+            visit_subtree(root, [&](dom_node& node) {
+                const auto key = static_cast<uint64_t>(node.id)
+                    | (frame_realm ? (1ULL << 63U) : 0ULL);
+                collect(node_wrappers, key);
+                collect(class_list_wrappers, key);
+                collect(style_wrappers, key);
+                collect(computed_style_wrappers, key);
+                collect(canvas_contexts, key);
+            });
+            if (wrappers.empty()) continue;
+
+            auto anchor = v8::Object::New(isolate);
+            auto members = v8::Array::New(isolate, static_cast<int>(wrappers.size()));
+            for (size_t index = 0; index < wrappers.size(); ++index) {
+                members->Set(
+                    local_context,
+                    static_cast<uint32_t>(index),
+                    wrappers[index]).Check();
+            }
+            anchor->Set(
+                local_context,
+                js_string(isolate, "members"),
+                members).Check();
+            const auto anchor_key = v8::Private::ForApi(
+                isolate,
+                js_string(isolate, "htmlml.detached-dom-anchor"));
+            for (auto wrapper : wrappers) {
+                wrapper->SetPrivate(local_context, anchor_key, anchor).Check();
+            }
+
+            const auto weaken = [](auto& cache, uint64_t key) {
+                const auto known = cache.find(key);
+                if (known != cache.end() && !known->second.IsEmpty()
+                    && !known->second.IsWeak()) {
+                    known->second.SetWeak();
+                }
+            };
+            visit_subtree(root, [&](dom_node& node) {
+                const auto key = static_cast<uint64_t>(node.id)
+                    | (frame_realm ? (1ULL << 63U) : 0ULL);
+                weaken(node_wrappers, key);
+                weaken(class_list_wrappers, key);
+                weaken(style_wrappers, key);
+                weaken(computed_style_wrappers, key);
+                weaken(canvas_contexts, key);
+            });
+        }
+        register_detached_subtree(root);
+    }
+
+    void retain_connected_subtree_wrappers(dom_node& root)
+    {
+        for (const auto frame_realm : {false, true}) {
+            if (frame_realm && frame_context.IsEmpty()) continue;
+            auto local_context = frame_realm ? frame_context.Get(isolate) : context.Get(isolate);
+            if (local_context.IsEmpty()) continue;
+            v8::Context::Scope context_scope(local_context);
+            const auto anchor_key = v8::Private::ForApi(
+                isolate,
+                js_string(isolate, "htmlml.detached-dom-anchor"));
+            const auto retain = [&](auto& cache, uint64_t key) {
+                const auto known = cache.find(key);
+                if (known == cache.end() || known->second.IsEmpty()) return;
+                if (known->second.IsWeak()) known->second.ClearWeak();
+                known->second.Get(isolate)->DeletePrivate(local_context, anchor_key).Check();
+            };
+            visit_subtree(root, [&](dom_node& node) {
+                const auto key = static_cast<uint64_t>(node.id)
+                    | (frame_realm ? (1ULL << 63U) : 0ULL);
+                retain(node_wrappers, key);
+                retain(class_list_wrappers, key);
+                retain(style_wrappers, key);
+                retain(computed_style_wrappers, key);
+                retain(canvas_contexts, key);
+            });
+        }
+    }
+
+    void detach_all_children(dom_node& parent)
+    {
+        auto children = parent.children;
+        auto stylesheets_changed = false;
+        for (auto* child : children) {
+            if (child != nullptr) {
+                stylesheets_changed |= deactivate_connected_stylesheets(*child, false);
+            }
+        }
+        document.remove_all_children(parent);
+        for (auto* child : children) {
+            if (child != nullptr) weaken_detached_subtree_wrappers(*child);
+        }
+        if (stylesheets_changed) recascade_after_stylesheet_change();
+    }
+
+    void register_detached_subtree(dom_node& root)
+    {
+        if (&root == &document.body() || root.parent != nullptr) return;
+        for (const auto known_id : detached_dom_roots) {
+            const auto* known = document.find_by_native_id(known_id);
+            if (known != nullptr && subtree_contains(*known, &root)) return;
+        }
+        std::vector<uint32_t> retained_roots;
+        retained_roots.reserve(detached_dom_roots.size() + 1U);
+        for (const auto known_id : detached_dom_roots) {
+            const auto* known = document.find_by_native_id(known_id);
+            if (known != nullptr && !subtree_contains(root, known)) {
+                retained_roots.push_back(known_id);
+            }
+        }
+        size_t count = 0U;
+        visit_subtree(root, [&](const dom_node&) { ++count; });
+        retained_roots.push_back(root.id);
+        detached_dom_roots = std::move(retained_roots);
+        detached_nodes_since_gc += count;
+        if (detached_nodes_since_gc >= detached_dom_gc_threshold) {
+            detached_dom_gc_requested = true;
+        }
+    }
+
+    bool subtree_has_live_wrappers(dom_node& root) const
+    {
+        auto live = false;
+        const auto inspect = [&](const auto& cache, uint64_t key) {
+            const auto known = cache.find(key);
+            return known != cache.end() && !known->second.IsEmpty();
+        };
+        visit_subtree(root, [&](dom_node& node) {
+            for (const auto frame_realm : {false, true}) {
+                const auto key = static_cast<uint64_t>(node.id)
+                    | (frame_realm ? (1ULL << 63U) : 0ULL);
+                live = live
+                    || inspect(node_wrappers, key)
+                    || inspect(class_list_wrappers, key)
+                    || inspect(style_wrappers, key)
+                    || inspect(computed_style_wrappers, key)
+                    || inspect(canvas_contexts, key);
+            }
+        });
+        return live;
+    }
+
+    void release_detached_subtree(dom_node& root)
+    {
+        std::unordered_set<dom_node*> nodes;
+        std::unordered_set<uint32_t> node_ids;
+        visit_subtree(root, [&](dom_node& node) {
+            nodes.insert(&node);
+            node_ids.insert(node.id);
+        });
+        const auto erase_wrappers = [&](auto& cache) {
+            std::erase_if(cache, [&](const auto& entry) {
+                return node_ids.contains(static_cast<uint32_t>(entry.first));
+            });
+        };
+        erase_wrappers(node_wrappers);
+        erase_wrappers(class_list_wrappers);
+        erase_wrappers(style_wrappers);
+        erase_wrappers(computed_style_wrappers);
+        erase_wrappers(canvas_contexts);
+        std::erase_if(canvas_states, [&](const auto& entry) {
+            return node_ids.contains(static_cast<uint32_t>(entry.first));
+        });
+        std::erase_if(pending_frame_hydrations, [&](const auto* node) {
+            return nodes.contains(const_cast<dom_node*>(node));
+        });
+        std::erase_if(connected_resources, [&](const auto& resource) {
+            return nodes.contains(resource.node);
+        });
+        for (auto& observer : resize_observers) {
+            std::erase_if(observer->nodes, [&](const auto* node) {
+                return nodes.contains(const_cast<dom_node*>(node));
+            });
+            for (const auto id : node_ids) observer->delivered_sizes.erase(id);
+        }
+        std::erase_if(provisional_frame_bodies, [&](const auto& entry) {
+            return node_ids.contains(entry.first) || nodes.contains(entry.second);
+        });
+        for (const auto id : node_ids) {
+            frame_documents.erase(id);
+            frame_windows.erase(id);
+            actual_frame_windows.erase(id);
+            actual_frame_documents.erase(id);
+            frame_session_storage.erase(id);
+            frame_load_listeners.erase(id);
+        }
+        if (!frame_context.IsEmpty()) {
+            auto local_frame_context = frame_context.Get(isolate);
+            auto* frame_root = static_cast<dom_node*>(
+                local_frame_context->GetAlignedPointerFromEmbedderData(
+                    1,
+                    v8::kEmbedderDataTypeTagDefault));
+            if (nodes.contains(frame_root)) {
+                frame_context.Reset();
+                frame_base_address.clear();
+            }
+        }
+        for (auto& [type, targets] : frame_event_listener_targets) {
+            auto& callbacks = frame_event_listeners[type];
+            auto& contexts = frame_event_listener_contexts[type];
+            auto& captures = frame_event_listener_captures[type];
+            auto& once = frame_event_listener_once[type];
+            auto& names = frame_event_listener_names[type];
+            auto& sequences = frame_event_listener_registration_sequences[type];
+            for (size_t index = targets.size(); index-- > 0;) {
+                if (!node_ids.contains(targets[index])) continue;
+                targets.erase(targets.begin() + static_cast<std::ptrdiff_t>(index));
+                if (index < callbacks.size()) callbacks.erase(
+                    callbacks.begin() + static_cast<std::ptrdiff_t>(index));
+                if (index < contexts.size()) contexts.erase(
+                    contexts.begin() + static_cast<std::ptrdiff_t>(index));
+                if (index < captures.size()) captures.erase(
+                    captures.begin() + static_cast<std::ptrdiff_t>(index));
+                if (index < once.size()) once.erase(
+                    once.begin() + static_cast<std::ptrdiff_t>(index));
+                if (index < names.size()) names.erase(
+                    names.begin() + static_cast<std::ptrdiff_t>(index));
+                if (index < sequences.size()) sequences.erase(
+                    sequences.begin() + static_cast<std::ptrdiff_t>(index));
+            }
+        }
+        if (nodes.contains(active_element)) active_element = nullptr;
+        if (nodes.contains(pointer_capture_target)) pointer_capture_target = nullptr;
+        if (nodes.contains(pointer_down_target)) pointer_down_target = nullptr;
+        if (nodes.contains(hover_target)) hover_target = nullptr;
+        if (nodes.contains(current_related_target)) current_related_target = nullptr;
+        released_detached_dom_nodes += document.erase_detached_subtree(root);
+    }
+
+    void collect_detached_dom_if_requested()
+    {
+        if (!detached_dom_gc_requested) return;
+        detached_dom_gc_requested = false;
+        detached_nodes_since_gc = 0U;
+        std::vector<uint32_t> disconnected_roots;
+        std::vector<uint32_t> reconnected_roots;
+        disconnected_roots.reserve(detached_dom_roots.size());
+        reconnected_roots.reserve(detached_dom_roots.size());
+        for (const auto root_id : detached_dom_roots) {
+            auto* root = document.find_by_native_id(root_id);
+            if (root == nullptr) continue;
+            if (is_connected(*root)) reconnected_roots.push_back(root_id);
+            else disconnected_roots.push_back(root_id);
+        }
+        detached_dom_roots = std::move(disconnected_roots);
+        for (const auto root_id : reconnected_roots) {
+            if (auto* root = document.find_by_native_id(root_id); root != nullptr) {
+                retain_connected_subtree_wrappers(*root);
+            }
+        }
+        isolate->LowMemoryNotification();
+        size_t index = 0U;
+        while (index < detached_dom_roots.size()) {
+            auto* root = document.find_by_native_id(detached_dom_roots[index]);
+            if (root == nullptr || is_connected(*root)) {
+                detached_dom_roots.erase(
+                    detached_dom_roots.begin() + static_cast<std::ptrdiff_t>(index));
+                continue;
+            }
+            if (subtree_has_live_wrappers(*root)) {
+                ++index;
+                continue;
+            }
+            std::unordered_set<dom_node*> released;
+            visit_subtree(*root, [&](dom_node& node) { released.insert(&node); });
+            std::erase_if(detached_dom_roots, [&](const auto candidate_id) {
+                return released.contains(document.find_by_native_id(candidate_id));
+            });
+            release_detached_subtree(*root);
+        }
+    }
+
     v8::Local<v8::Object> wrap_node(dom_node& node)
     {
         const auto key = wrapper_key(node);
         auto known = node_wrappers.find(key);
-        if (known != node_wrappers.end()) {
+        if (known != node_wrappers.end() && !known->second.IsEmpty()) {
+            if (is_connected(node) && known->second.IsWeak()) known->second.ClearWeak();
             return known->second.Get(isolate);
         }
+        if (known != node_wrappers.end()) node_wrappers.erase(known);
         auto local_context = isolate->GetCurrentContext();
         auto object = element_template.Get(isolate)
             ->InstanceTemplate()
@@ -2207,7 +6360,17 @@ struct v8_dom_runtime::implementation final {
             0,
             &node,
             v8::kEmbedderDataTypeTagDefault);
-        node_wrappers[key].Reset(isolate, object);
+        if (node.tag == "button" || node.tag == "fieldset" || node.tag == "input"
+            || node.tag == "object" || node.tag == "output" || node.tag == "select"
+            || node.tag == "textarea") {
+            object->SetNativeDataProperty(
+                local_context,
+                js_string(isolate, "form"),
+                get_form_owner).Check();
+        }
+        auto& wrapper = node_wrappers[key];
+        wrapper.Reset(isolate, object);
+        if (!is_connected(node)) wrapper.SetWeak();
         return object;
     }
 
@@ -2215,9 +6378,11 @@ struct v8_dom_runtime::implementation final {
     {
         const auto key = wrapper_key(node);
         auto known = style_wrappers.find(key);
-        if (known != style_wrappers.end()) {
+        if (known != style_wrappers.end() && !known->second.IsEmpty()) {
+            if (is_connected(node) && known->second.IsWeak()) known->second.ClearWeak();
             return known->second.Get(isolate);
         }
+        if (known != style_wrappers.end()) style_wrappers.erase(known);
         auto object = style_template.Get(isolate)
             ->NewInstance(isolate->GetCurrentContext())
             .ToLocalChecked();
@@ -2226,7 +6391,46 @@ struct v8_dom_runtime::implementation final {
             &node,
             v8::kEmbedderDataTypeTagDefault);
         object->SetInternalField(1, v8::False(isolate));
-        style_wrappers[key].Reset(isolate, object);
+        auto& wrapper = style_wrappers[key];
+        wrapper.Reset(isolate, object);
+        if (!is_connected(node)) wrapper.SetWeak();
+        return object;
+    }
+
+    v8::Local<v8::Object> wrap_class_list(dom_node& node)
+    {
+        const auto key = wrapper_key(node);
+        auto known = class_list_wrappers.find(key);
+        if (known != class_list_wrappers.end() && !known->second.IsEmpty()) {
+            if (is_connected(node) && known->second.IsWeak()) known->second.ClearWeak();
+            return known->second.Get(isolate);
+        }
+        if (known != class_list_wrappers.end()) class_list_wrappers.erase(known);
+        auto local_context = isolate->GetCurrentContext();
+        auto data = v8::External::New(
+            isolate,
+            &node,
+            v8::kExternalPointerTypeTagDefault);
+        auto object = v8::Object::New(isolate);
+        object->Set(
+            local_context,
+            js_string(isolate, "add"),
+            v8::Function::New(local_context, class_list_add, data).ToLocalChecked()).Check();
+        object->Set(
+            local_context,
+            js_string(isolate, "remove"),
+            v8::Function::New(local_context, class_list_remove, data).ToLocalChecked()).Check();
+        object->Set(
+            local_context,
+            js_string(isolate, "contains"),
+            v8::Function::New(local_context, class_list_contains, data).ToLocalChecked()).Check();
+        object->Set(
+            local_context,
+            js_string(isolate, "toggle"),
+            v8::Function::New(local_context, class_list_toggle, data).ToLocalChecked()).Check();
+        auto& wrapper = class_list_wrappers[key];
+        wrapper.Reset(isolate, object);
+        if (!is_connected(node)) wrapper.SetWeak();
         return object;
     }
 
@@ -2234,9 +6438,11 @@ struct v8_dom_runtime::implementation final {
     {
         const auto key = wrapper_key(node);
         auto known = computed_style_wrappers.find(key);
-        if (known != computed_style_wrappers.end()) {
+        if (known != computed_style_wrappers.end() && !known->second.IsEmpty()) {
+            if (is_connected(node) && known->second.IsWeak()) known->second.ClearWeak();
             return known->second.Get(isolate);
         }
+        if (known != computed_style_wrappers.end()) computed_style_wrappers.erase(known);
         auto object = style_template.Get(isolate)
             ->NewInstance(isolate->GetCurrentContext())
             .ToLocalChecked();
@@ -2245,7 +6451,9 @@ struct v8_dom_runtime::implementation final {
             &node,
             v8::kEmbedderDataTypeTagDefault);
         object->SetInternalField(1, v8::True(isolate));
-        computed_style_wrappers[key].Reset(isolate, object);
+        auto& wrapper = computed_style_wrappers[key];
+        wrapper.Reset(isolate, object);
+        if (!is_connected(node)) wrapper.SetWeak();
         return object;
     }
 
@@ -2254,6 +6462,23 @@ struct v8_dom_runtime::implementation final {
         v8::Local<v8::Object> wrapper,
         v8::Local<v8::Context> resource_context)
     {
+        if (node.tag == "script") {
+            const auto authored_type = node.attributes.find("type");
+            if (authored_type != node.attributes.end()) {
+                auto type = lower_html_name(authored_type->second);
+                const auto first = type.find_first_not_of(" \t\r\n\f");
+                const auto last = type.find_last_not_of(" \t\r\n\f");
+                type = first == std::string::npos
+                    ? std::string{}
+                    : type.substr(first, last - first + 1U);
+                const auto executable = type.empty() || type == "module"
+                    || type == "text/javascript"
+                    || type == "application/javascript"
+                    || type == "application/ecmascript"
+                    || type == "text/ecmascript";
+                if (!executable) return;
+            }
+        }
         auto resource_element = node.tag == "link" || node.tag == "script";
         v8::Local<v8::Value> onload;
         const auto has_onload = wrapper->Get(
@@ -2267,17 +6492,42 @@ struct v8_dom_runtime::implementation final {
             v8::Global<v8::Object>(isolate, wrapper)});
     }
 
+    void enqueue_iframe_hydration_if_needed(dom_node& node)
+    {
+        if (node.tag != "iframe" || !is_connected(node)) return;
+        const auto source = node.attributes.find("src");
+        if (source != node.attributes.end()) {
+            const auto object = object_urls.find(source->second);
+            if (object != object_urls.end()) node.attributes["object-html"] = object->second;
+        }
+        if (!node.attributes.contains("object-html")
+            && !node.attributes.contains("frame-html")) return;
+        if (std::find(pending_frame_hydrations.begin(), pending_frame_hydrations.end(), &node)
+            == pending_frame_hydrations.end()) {
+            pending_frame_hydrations.push_back(&node);
+        }
+    }
+
     v8::Local<v8::Object> frame_document(dom_node& node)
     {
         auto known = frame_documents.find(node.id);
         if (known != frame_documents.end()) return known->second.Get(isolate);
         auto local_context = isolate->GetCurrentContext();
         auto object = frame_document_template.Get(isolate)->NewInstance(local_context).ToLocalChecked();
+        object->Set(local_context, js_string(isolate, "readyState"), js_string(isolate, "complete")).Check();
+        object->Set(local_context, js_string(isolate, "oninput"), v8::Null(isolate)).Check();
+        const auto source = node.attributes.contains("src")
+            ? resolve_resource_url(node.attributes["src"], document_base_address)
+            : std::string("about:blank");
+        set_document_address(local_context, object, source);
+        auto& body = document.create_element("body");
+        document.append_child(node, body);
         object->SetAlignedPointerInInternalField(
             0,
-            &node,
+            &body,
             v8::kEmbedderDataTypeTagDefault);
-        object->Set(local_context, js_string(isolate, "readyState"), js_string(isolate, "complete")).Check();
+        provisional_frame_bodies[node.id] = &body;
+        object->Set(local_context, js_string(isolate, "body"), wrap_node(body)).Check();
         frame_documents[node.id].Reset(isolate, object);
         return object;
     }
@@ -2300,6 +6550,7 @@ struct v8_dom_runtime::implementation final {
         object->Set(local_context, js_string(isolate, "window"), object).Check();
         object->Set(local_context, js_string(isolate, "self"), object).Check();
         object->Set(local_context, js_string(isolate, "parent"), local_context->Global()).Check();
+        install_screen(local_context, object);
         frame_windows[node.id].Reset(isolate, object);
         return object;
     }
@@ -2308,12 +6559,177 @@ struct v8_dom_runtime::implementation final {
         dom_node& node,
         std::string_view selector,
         bool include_node,
-        std::vector<dom_node*>& result) const
+        std::vector<dom_node*>& result,
+        const dom_node* scope_root) const
     {
-        if (include_node && css_selector_list_matches(node, selector)) result.push_back(&node);
+        if (include_node
+            && !node.tag.empty()
+            && node.tag.front() != '#'
+            && css_selector_list_matches(node, selector, scope_root)) result.push_back(&node);
         for (auto* child : node.children) {
-            if (child != nullptr) collect_selector_matches(*child, selector, true, result);
+            if (child != nullptr) collect_selector_matches(
+                *child,
+                selector,
+                true,
+                result,
+                scope_root);
         }
+    }
+
+    static bool is_valid_dom_selector_list(std::string_view selector)
+    {
+        selector = trim_css_view(selector);
+        if (selector.empty()) return false;
+
+        static const std::unordered_set<std::string> recognized_pseudo_classes{
+            "root", "scope", "empty",
+            "first-child", "last-child", "only-child",
+            "first-of-type", "last-of-type", "only-of-type",
+            "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type",
+            "not", "is", "where", "has",
+            "hover", "active", "focus", "focus-visible", "focus-within",
+            "disabled", "enabled", "checked", "indeterminate", "default",
+            "required", "optional", "valid", "invalid", "in-range", "out-of-range",
+            "read-only", "read-write", "placeholder-shown", "autofill",
+            "link", "visited", "any-link", "local-link", "target", "target-within",
+            "lang", "dir", "defined", "fullscreen", "modal", "open",
+            "picture-in-picture", "user-valid", "user-invalid", "blank"};
+        static const std::unordered_set<std::string> recognized_pseudo_elements{
+            "before", "after", "first-letter", "first-line", "selection", "marker",
+            "placeholder", "backdrop", "file-selector-button", "cue", "cue-region",
+            "grammar-error", "spelling-error", "target-text"};
+        static const std::unordered_set<std::string> selector_argument_pseudos{
+            "not", "is", "where", "has"};
+        static const std::unordered_set<std::string> value_argument_pseudos{
+            "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type", "lang", "dir"};
+
+        auto bracket_depth = 0;
+        auto parenthesis_depth = 0;
+        char quote = 0;
+        auto item_has_token = false;
+        for (size_t index = 0; index < selector.size(); ++index) {
+            const auto character = selector[index];
+            if (quote != 0) {
+                if (character == quote && (index == 0U || selector[index - 1U] != '\\')) quote = 0;
+                continue;
+            }
+            if (character == '\\') {
+                index = skip_css_escape_sequence(selector, index) - 1U;
+                item_has_token = true;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+                item_has_token = true;
+                continue;
+            }
+            if (character == '[') {
+                ++bracket_depth;
+                item_has_token = true;
+                continue;
+            }
+            if (character == ']') {
+                if (--bracket_depth < 0) return false;
+                continue;
+            }
+            if (bracket_depth != 0) continue;
+            if (character == '(') {
+                ++parenthesis_depth;
+                continue;
+            }
+            if (character == ')') {
+                if (--parenthesis_depth < 0) return false;
+                continue;
+            }
+            if (character == ',' && parenthesis_depth == 0) {
+                if (!item_has_token) return false;
+                item_has_token = false;
+                continue;
+            }
+            if (std::isspace(static_cast<unsigned char>(character))) continue;
+            if (character == '{' || character == '}' || character == '<' || character == '%') {
+                return false;
+            }
+            if (character == '.' || character == '#') {
+                auto cursor = index + 1U;
+                if (cursor >= selector.size()) return false;
+                const auto identifier = read_css_identifier(selector, cursor);
+                if (identifier.empty()) return false;
+                index = cursor - 1U;
+                item_has_token = true;
+                continue;
+            }
+            if (character != ':') {
+                item_has_token = true;
+                continue;
+            }
+
+            auto cursor = index + 1U;
+            auto is_pseudo_element = cursor < selector.size() && selector[cursor] == ':';
+            if (is_pseudo_element) ++cursor;
+            auto name = lower_html_name(read_css_identifier(selector, cursor));
+            if (name.empty()) return false;
+            is_pseudo_element = is_pseudo_element || name == "before" || name == "after";
+            if (is_pseudo_element
+                ? !recognized_pseudo_elements.contains(name)
+                : !recognized_pseudo_classes.contains(name)) return false;
+
+            const auto has_argument = cursor < selector.size() && selector[cursor] == '(';
+            const auto requires_argument = selector_argument_pseudos.contains(name)
+                || value_argument_pseudos.contains(name);
+            if (requires_argument != has_argument || (is_pseudo_element && has_argument)) return false;
+            if (has_argument) {
+                const auto argument_start = cursor + 1U;
+                auto nested_depth = 1;
+                char argument_quote = 0;
+                auto close = argument_start;
+                for (; close < selector.size() && nested_depth > 0; ++close) {
+                    const auto nested = selector[close];
+                    if (argument_quote != 0) {
+                        if (nested == argument_quote
+                            && (close == 0U || selector[close - 1U] != '\\')) argument_quote = 0;
+                    } else if (nested == '\\') {
+                        close = skip_css_escape_sequence(selector, close) - 1U;
+                    } else if (nested == '\'' || nested == '"') {
+                        argument_quote = nested;
+                    } else if (nested == '(') {
+                        ++nested_depth;
+                    } else if (nested == ')') {
+                        --nested_depth;
+                    }
+                }
+                if (nested_depth != 0 || close <= argument_start + 1U
+                    || trim_css_view(selector.substr(argument_start, close - argument_start - 1U)).empty()) {
+                    return false;
+                }
+            }
+            index = cursor - 1U;
+            item_has_token = true;
+        }
+        return quote == 0 && bracket_depth == 0 && parenthesis_depth == 0 && item_has_token;
+    }
+
+    static void throw_selector_syntax_error(
+        const v8::FunctionCallbackInfo<v8::Value>& info,
+        std::string_view selector)
+    {
+        auto* isolate = info.GetIsolate();
+        const auto context = isolate->GetCurrentContext();
+        v8::Local<v8::Value> constructor_value;
+        if (context->Global()->Get(context, js_string(isolate, "DOMException")).ToLocal(&constructor_value)
+            && constructor_value->IsFunction()) {
+            const auto message = "'" + std::string(selector) + "' is not a valid selector.";
+            v8::Local<v8::Value> arguments[]{
+                js_string(isolate, message.c_str()),
+                js_string(isolate, "SyntaxError")};
+            v8::Local<v8::Object> exception;
+            if (constructor_value.As<v8::Function>()->NewInstance(context, 2, arguments).ToLocal(&exception)) {
+                isolate->ThrowException(exception);
+                return;
+            }
+        }
+        isolate->ThrowException(v8::Exception::SyntaxError(
+            js_string(isolate, "The selector is not valid.")));
     }
 
     std::vector<dom_node*> query_selector_nodes(
@@ -2322,7 +6738,7 @@ struct v8_dom_runtime::implementation final {
         bool include_root) const
     {
         std::vector<dom_node*> result;
-        collect_selector_matches(root, selector, include_root, result);
+        collect_selector_matches(root, selector, include_root, result, &root);
         return result;
     }
 
@@ -2378,17 +6794,321 @@ struct v8_dom_runtime::implementation final {
                 : v8::Local<v8::Value>(v8::Null(info.GetIsolate())));
     }
 
-    static void get_body(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    static void get_body(
+        v8::Local<v8::Name> property,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
-        info.GetReturnValue().Set(self->wrap_node(self->active_root()));
+        self->record_feature(
+            "dom", "Document.location", "supported", {}, "dom-binding");
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root == nullptr) root = &self->active_root();
+        const auto property_name = to_utf8(info.GetIsolate(), property);
+        if (root->xml_mode && root->tag == "#document-root") {
+            if (property_name == "documentElement") {
+                const auto found = std::find_if(
+                    root->children.begin(),
+                    root->children.end(),
+                    [](const auto* child) {
+                        return child != nullptr && !child->tag.starts_with('#');
+                    });
+                info.GetReturnValue().Set(found == root->children.end()
+                    ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+                    : v8::Local<v8::Value>(self->wrap_node(**found)));
+            } else {
+                info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
+            }
+            return;
+        }
+        auto* html = root->tag == "html" ? root : nullptr;
+        if (html == nullptr && root->tag == "body") {
+            if (root->parent != nullptr && root->parent->tag == "html") {
+                html = root->parent;
+            } else {
+                const auto found = std::find_if(
+                    root->children.begin(),
+                    root->children.end(),
+                    [](const auto* child) { return child != nullptr && child->tag == "html"; });
+                if (found != root->children.end()) html = *found;
+            }
+        }
+        if (html != nullptr && property_name == "documentElement") {
+            info.GetReturnValue().Set(self->wrap_node(*html));
+            return;
+        }
+        if (html != nullptr) {
+            const auto tag = property_name == "head" ? "head" : "body";
+            const auto found = std::find_if(
+                html->children.begin(),
+                html->children.end(),
+                [tag](const auto* child) { return child != nullptr && child->tag == tag; });
+            if (found != html->children.end()) {
+                info.GetReturnValue().Set(self->wrap_node(**found));
+                return;
+            }
+        }
+        info.GetReturnValue().Set(self->wrap_node(*root));
+    }
+
+    static void get_document_implementation(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        info.GetReturnValue().Set(self->dom_implementation_object.Get(info.GetIsolate()));
+    }
+
+    static void get_scrolling_element(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->record_feature(
+            "dom",
+            "Document.scrollingElement",
+            "partially-supported",
+            "standards-mode documentElement projection onto the native viewport scroll owner",
+            "dom-binding");
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root == nullptr) root = &self->active_root();
+        auto* html = root->tag == "html" ? root : nullptr;
+        if (html == nullptr) {
+            const auto found = std::find_if(
+                root->children.begin(),
+                root->children.end(),
+                [](const auto* child) { return child != nullptr && child->tag == "html"; });
+            if (found != root->children.end()) html = *found;
+        }
+        info.GetReturnValue().Set(self->wrap_node(html == nullptr ? *root : *html));
+    }
+
+    static void get_document_location(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->record_feature(
+            "dom", "Document.links", "supported", {}, "dom-binding");
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root != nullptr && self->detached_document_roots.contains(root->id)) {
+            info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
+            return;
+        }
+        auto local_context = info.GetIsolate()->GetCurrentContext();
+        v8::Local<v8::Value> location;
+        if (local_context->Global()->Get(
+                local_context,
+                js_string(info.GetIsolate(), "location")).ToLocal(&location)) {
+            info.GetReturnValue().Set(location);
+        }
+    }
+
+    static void get_document_links(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root == nullptr) root = &self->active_root();
+        std::vector<dom_node*> links;
+        for (auto* node : self->document.query_selector_all(*root, "a")) {
+            if (node != nullptr && node->attributes.contains("href")) links.push_back(node);
+        }
+        for (auto* node : self->document.query_selector_all(*root, "area")) {
+            if (node != nullptr && node->attributes.contains("href")) links.push_back(node);
+        }
+        auto collection = v8::Array::New(
+            info.GetIsolate(),
+            static_cast<int>(links.size()));
+        auto local_context = info.GetIsolate()->GetCurrentContext();
+        for (uint32_t index = 0; index < links.size(); ++index) {
+            collection->Set(local_context, index, self->wrap_node(*links[index])).Check();
+        }
+        collection->Set(
+            local_context,
+            js_string(info.GetIsolate(), "item"),
+            v8::Function::New(local_context, collection_item).ToLocalChecked()).Check();
+        info.GetReturnValue().Set(collection);
+    }
+
+    static void get_document_cookie(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->record_feature(
+            "dom",
+            "Document.cookie",
+            "partially-supported",
+            "same-engine script-readable name/value jar; no HTTP cookie ingress, domain/path scoping, expiry, SameSite, Secure, or HttpOnly enforcement",
+            "dom-binding");
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root != nullptr && self->detached_document_roots.contains(root->id)) {
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), ""));
+            return;
+        }
+        std::string value;
+        for (const auto& [name, cookie_value] : self->document_cookies) {
+            if (!value.empty()) value += "; ";
+            value += name + "=" + cookie_value;
+        }
+        info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
+    }
+
+    static void set_document_cookie(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> raw_value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root != nullptr && self->detached_document_roots.contains(root->id)) return;
+        auto assignment = to_utf8(info.GetIsolate(), raw_value);
+        const auto attributes = assignment.find(';');
+        if (attributes != std::string::npos) assignment.resize(attributes);
+        const auto equals = assignment.find('=');
+        if (equals == std::string::npos) return;
+        const auto trim = [](std::string value) {
+            const auto first = value.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos) return std::string{};
+            const auto last = value.find_last_not_of(" \t\r\n");
+            return value.substr(first, last - first + 1U);
+        };
+        auto name = trim(assignment.substr(0U, equals));
+        auto value = trim(assignment.substr(equals + 1U));
+        if (name.empty()) return;
+        const auto known = std::find_if(
+            self->document_cookies.begin(),
+            self->document_cookies.end(),
+            [&name](const auto& entry) { return entry.first == name; });
+        if (known == self->document_cookies.end()) {
+            self->document_cookies.emplace_back(std::move(name), std::move(value));
+        } else {
+            known->second = std::move(value);
+        }
+    }
+
+    static void create_html_document(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        const auto local_context = info.GetIsolate()->GetCurrentContext();
+        self->record_feature(
+            "dom",
+            "DOMImplementation.createHTMLDocument",
+            "supported",
+            {},
+            "dom-api");
+
+        auto& html = self->document.create_element("html");
+        auto& head = self->document.create_element("head");
+        auto& body = self->document.create_element("body");
+        self->document.append_child(html, head);
+        self->document.append_child(html, body);
+        self->detached_document_roots.insert(html.id);
+
+        if (info.Length() > 0) {
+            const auto title_text = to_utf8(info.GetIsolate(), info[0]);
+            if (!title_text.empty()) {
+                auto& title = self->document.create_element("title");
+                auto& text = self->document.create_element("#text");
+                text.text_content = title_text;
+                self->document.append_child(title, text);
+                self->document.append_child(head, title);
+            }
+        }
+
+        auto detached = self->document_template.Get(info.GetIsolate())
+            ->NewInstance(local_context).ToLocalChecked();
+        detached->SetAlignedPointerInInternalField(
+            0,
+            &html,
+            v8::kEmbedderDataTypeTagDefault);
+        detached->Set(
+            local_context,
+            js_string(info.GetIsolate(), "oninput"),
+            v8::Null(info.GetIsolate())).Check();
+        self->set_document_address(local_context, detached, "about:blank");
+        info.GetReturnValue().Set(detached);
+    }
+
+    static v8::Local<v8::Object> wrap_detached_document(
+        implementation& self,
+        dom_node& root,
+        v8::Local<v8::Context> local_context,
+        const char* address)
+    {
+        auto detached = self.document_template.Get(self.isolate)
+            ->NewInstance(local_context).ToLocalChecked();
+        detached->SetAlignedPointerInInternalField(
+            0,
+            &root,
+            v8::kEmbedderDataTypeTagDefault);
+        detached->Set(
+            local_context,
+            js_string(self.isolate, "oninput"),
+            v8::Null(self.isolate)).Check();
+        self.set_document_address(local_context, detached, address);
+        return detached;
+    }
+
+    static void create_xml_document(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        const auto local_context = info.GetIsolate()->GetCurrentContext();
+        auto& root = self->document.create_element("#document-root");
+        root.visible = false;
+        root.xml_mode = true;
+        self->detached_document_roots.insert(root.id);
+        if (info.Length() > 1) {
+            const auto qualified_name = to_utf8(info.GetIsolate(), info[1]);
+            if (!qualified_name.empty()) {
+                auto& element = self->document.create_element(qualified_name);
+                element.xml_mode = true;
+                if (info.Length() > 0) {
+                    const auto namespace_uri = to_utf8(info.GetIsolate(), info[0]);
+                    if (!namespace_uri.empty()) element.attributes["namespace"] = namespace_uri;
+                }
+                self->document.append_child(root, element);
+            }
+        }
+        info.GetReturnValue().Set(wrap_detached_document(
+            *self,
+            root,
+            local_context,
+            "about:blank"));
     }
 
     static void create_element(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         auto tag = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string("div");
+        auto* document_root = info.This()->InternalFieldCount() > 0
+            ? static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+                0,
+                v8::kEmbedderDataTypeTagDefault))
+            : nullptr;
+        const auto xml_mode = document_root != nullptr && document_root->xml_mode;
+        if (!xml_mode) tag = lower_html_name(tag);
+        self->record_feature(
+            "html",
+            "element:" + tag,
+            "supported",
+            {},
+            "html-element");
         auto& node = self->document.create_element(std::move(tag));
+        node.xml_mode = xml_mode;
         self->apply_css_rules(node);
         info.GetReturnValue().Set(self->wrap_node(node));
     }
@@ -2397,6 +7117,12 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         auto tag = info.Length() > 1 ? to_utf8(info.GetIsolate(), info[1]) : std::string("svg");
+        self->record_feature(
+            "html",
+            "element:" + lower_html_name(tag),
+            "supported",
+            {},
+            "html-element");
         auto& node = self->document.create_element(std::move(tag));
         node.attributes["namespace"] = info.Length() > 0
             ? to_utf8(info.GetIsolate(), info[0])
@@ -2409,14 +7135,64 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         auto& node = self->document.create_element("#text");
-        node.text_content = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
+        auto* document_root = info.This()->InternalFieldCount() > 0
+            ? static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+                0,
+                v8::kEmbedderDataTypeTagDefault))
+            : nullptr;
+        node.xml_mode = document_root != nullptr && document_root->xml_mode;
+        node.text_content = info.Length() > 0 ? to_wtf8(info.GetIsolate(), info[0]) : std::string{};
         info.GetReturnValue().Set(self->wrap_node(node));
+    }
+
+    static void create_comment(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto& node = self->document.create_element("#comment");
+        auto* document_root = info.This()->InternalFieldCount() > 0
+            ? static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+                0,
+                v8::kEmbedderDataTypeTagDefault))
+            : nullptr;
+        node.xml_mode = document_root != nullptr && document_root->xml_mode;
+        node.visible = false;
+        node.text_content = info.Length() > 0 ? to_wtf8(info.GetIsolate(), info[0]) : std::string{};
+        info.GetReturnValue().Set(self->wrap_node(node));
+    }
+
+    static void create_attribute(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        const auto local_context = info.GetIsolate()->GetCurrentContext();
+        auto name = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
+        auto* document_root = info.This()->InternalFieldCount() > 0
+            ? static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+                0,
+                v8::kEmbedderDataTypeTagDefault))
+            : nullptr;
+        if (document_root == nullptr || !document_root->xml_mode) name = lower_html_name(name);
+        auto attribute = v8::Object::New(info.GetIsolate());
+        attribute->Set(local_context, js_string(info.GetIsolate(), "nodeType"), v8::Integer::New(info.GetIsolate(), 2)).Check();
+        attribute->Set(local_context, js_string(info.GetIsolate(), "name"), js_dom_string(info.GetIsolate(), name)).Check();
+        attribute->Set(local_context, js_string(info.GetIsolate(), "localName"), js_dom_string(info.GetIsolate(), name)).Check();
+        attribute->Set(local_context, js_string(info.GetIsolate(), "nodeName"), js_dom_string(info.GetIsolate(), name)).Check();
+        attribute->Set(local_context, js_string(info.GetIsolate(), "value"), js_string(info.GetIsolate(), "")).Check();
+        attribute->Set(local_context, js_string(info.GetIsolate(), "nodeValue"), js_string(info.GetIsolate(), "")).Check();
+        attribute->Set(local_context, js_string(info.GetIsolate(), "ownerDocument"), info.This()).Check();
+        self->record_feature("dom", "Document.createAttribute", "supported", {}, "dom-api");
+        info.GetReturnValue().Set(attribute);
     }
 
     static void create_document_fragment(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         auto& node = self->document.create_element("#document-fragment");
+        auto* document_root = info.This()->InternalFieldCount() > 0
+            ? static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+                0,
+                v8::kEmbedderDataTypeTagDefault))
+            : nullptr;
+        node.xml_mode = document_root != nullptr && document_root->xml_mode;
         node.visible = false;
         info.GetReturnValue().Set(self->wrap_node(node));
     }
@@ -2436,6 +7212,12 @@ struct v8_dom_runtime::implementation final {
             clone.id_attribute = original.id_attribute;
             clone.class_name = original.class_name;
             clone.text_content = original.text_content;
+            clone.xml_mode = original.xml_mode;
+            clone.selectedness_initialized = original.selectedness_initialized;
+            clone.selectedness = original.selectedness;
+            clone.selection_explicitly_empty = original.selection_explicitly_empty;
+            clone.checkedness_initialized = original.checkedness_initialized;
+            clone.checkedness = original.checkedness;
             clone.attributes = original.attributes;
             clone.style = original.style;
             clone.visible = true;
@@ -2454,8 +7236,14 @@ struct v8_dom_runtime::implementation final {
     static void get_element_by_id(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
-        const auto id = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
-        auto matches = self->query_selector_nodes(self->active_root(), "#" + id, true);
+        const auto id = info.Length() > 0 ? to_wtf8(info.GetIsolate(), info[0]) : std::string{};
+        auto* root = static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        auto matches = self->query_selector_nodes(
+            root == nullptr ? self->active_root() : *root,
+            "#" + id,
+            true);
         auto* node = matches.empty() ? nullptr : matches.front();
         if (node == nullptr) {
             info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
@@ -2468,16 +7256,45 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_query));
-        const auto selector = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
-        info.GetReturnValue().Set(self->selector_results(self->active_root(), selector));
+        const auto selector = info.Length() > 0 ? to_wtf8(info.GetIsolate(), info[0]) : std::string{};
+        if (!is_valid_dom_selector_list(selector)) {
+            throw_selector_syntax_error(info, selector);
+            return;
+        }
+        auto* root = static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        auto& query_root = root == nullptr ? self->active_root() : *root;
+        const auto include_root = &query_root != &self->document.body()
+            || std::none_of(
+                query_root.children.begin(),
+                query_root.children.end(),
+                [](const auto* child) { return child != nullptr && child->tag == "html"; });
+        info.GetReturnValue().Set(self->selector_results(
+            query_root,
+            selector,
+            include_root));
     }
 
     static void document_query_selector(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_query));
-        const auto selector = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
-        auto matches = self->query_selector_nodes(self->active_root(), selector, true);
+        const auto selector = info.Length() > 0 ? to_wtf8(info.GetIsolate(), info[0]) : std::string{};
+        if (!is_valid_dom_selector_list(selector)) {
+            throw_selector_syntax_error(info, selector);
+            return;
+        }
+        auto* root = static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        auto& query_root = root == nullptr ? self->active_root() : *root;
+        const auto include_root = &query_root != &self->document.body()
+            || std::none_of(
+                query_root.children.begin(),
+                query_root.children.end(),
+                [](const auto* child) { return child != nullptr && child->tag == "html"; });
+        auto matches = self->query_selector_nodes(query_root, selector, include_root);
         info.GetReturnValue().Set(matches.empty()
             ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
             : v8::Local<v8::Value>(self->wrap_node(*matches.front())));
@@ -2487,12 +7304,18 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         self->ensure_layout();
+        auto* root = static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
         const auto local_context = info.GetIsolate()->GetCurrentContext();
         const auto x = info.Length() > 0
             ? static_cast<float>(info[0]->NumberValue(local_context).FromMaybe(0)) : 0;
         const auto y = info.Length() > 1
             ? static_cast<float>(info[1]->NumberValue(local_context).FromMaybe(0)) : 0;
-        auto* node = self->document.hit_test(self->active_root(), x, y);
+        auto* node = self->document.hit_test(
+            root == nullptr ? self->active_root() : *root,
+            x,
+            y);
         info.GetReturnValue().Set(node == nullptr
             ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
             : v8::Local<v8::Value>(self->wrap_node(*node)));
@@ -2502,7 +7325,16 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         const auto tag = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
-        info.GetReturnValue().Set(self->selector_results(self->active_root(), tag));
+        auto* root = static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        auto& query_root = root == nullptr ? self->active_root() : *root;
+        const auto include_root = &query_root != &self->document.body()
+            || std::none_of(
+                query_root.children.begin(),
+                query_root.children.end(),
+                [](const auto* child) { return child != nullptr && child->tag == "html"; });
+        info.GetReturnValue().Set(self->selector_results(query_root, tag, include_root));
     }
 
     static void document_get_elements_by_class_name(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2510,7 +7342,12 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_query));
         const auto names = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
-        info.GetReturnValue().Set(self->class_results(self->active_root(), names));
+        auto* root = static_cast<dom_node*>(info.This()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        info.GetReturnValue().Set(self->class_results(
+            root == nullptr ? self->active_root() : *root,
+            names));
     }
 
     static void element_query_selector_all(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2519,7 +7356,11 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_query));
         auto* root = unwrap_node(info.This());
         if (root == nullptr) return;
-        const auto selector = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
+        const auto selector = info.Length() > 0 ? to_wtf8(info.GetIsolate(), info[0]) : std::string{};
+        if (!is_valid_dom_selector_list(selector)) {
+            throw_selector_syntax_error(info, selector);
+            return;
+        }
         info.GetReturnValue().Set(self->selector_results(*root, selector, false));
     }
 
@@ -2529,7 +7370,11 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_query));
         auto* root = unwrap_node(info.This());
         if (root == nullptr) return;
-        const auto selector = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
+        const auto selector = info.Length() > 0 ? to_wtf8(info.GetIsolate(), info[0]) : std::string{};
+        if (!is_valid_dom_selector_list(selector)) {
+            throw_selector_syntax_error(info, selector);
+            return;
+        }
         auto matches = self->query_selector_nodes(*root, selector, false);
         info.GetReturnValue().Set(matches.empty()
             ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
@@ -2570,6 +7415,67 @@ struct v8_dom_runtime::implementation final {
         info.GetReturnValue().Set(v8::False(info.GetIsolate()));
     }
 
+    static void element_compare_document_position(
+        const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* reference = unwrap_node(info.This());
+        auto* other = info.Length() > 0 && info[0]->IsObject()
+            ? unwrap_node(info[0].As<v8::Object>())
+            : nullptr;
+        if (reference == other && reference != nullptr) {
+            info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 0));
+            return;
+        }
+        if (reference == nullptr || other == nullptr) {
+            info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 1 | 32));
+            return;
+        }
+
+        const auto build_path = [](dom_node* node) {
+            std::vector<dom_node*> path;
+            for (; node != nullptr; node = node->parent) path.push_back(node);
+            std::reverse(path.begin(), path.end());
+            return path;
+        };
+        const auto reference_path = build_path(reference);
+        const auto other_path = build_path(other);
+        if (reference_path.empty() || other_path.empty()
+            || reference_path.front() != other_path.front()) {
+            const auto order = other->id < reference->id ? 2 : 4;
+            info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 1 | 32 | order));
+            return;
+        }
+
+        size_t shared = 0U;
+        const auto maximum_shared = std::min(reference_path.size(), other_path.size());
+        while (shared < maximum_shared && reference_path[shared] == other_path[shared]) {
+            ++shared;
+        }
+        if (shared == other_path.size()) {
+            info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 2 | 8));
+            return;
+        }
+        if (shared == reference_path.size()) {
+            info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 4 | 16));
+            return;
+        }
+
+        auto* parent = reference_path[shared - 1U];
+        auto* reference_child = reference_path[shared];
+        auto* other_child = other_path[shared];
+        for (auto* child : parent->children) {
+            if (child == other_child) {
+                info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 2));
+                return;
+            }
+            if (child == reference_child) {
+                info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 4));
+                return;
+            }
+        }
+        info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 1 | 32));
+    }
+
     static void element_matches(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
@@ -2578,10 +7484,53 @@ struct v8_dom_runtime::implementation final {
             info.GetReturnValue().Set(v8::False(info.GetIsolate()));
             return;
         }
-        const auto selector = to_utf8(info.GetIsolate(), info[0]);
+        const auto selector = to_wtf8(info.GetIsolate(), info[0]);
+        if (!is_valid_dom_selector_list(selector)) {
+            throw_selector_syntax_error(info, selector);
+            return;
+        }
         info.GetReturnValue().Set(v8::Boolean::New(
             info.GetIsolate(),
-            self->css_selector_list_matches(*node, selector)));
+            self->css_selector_list_matches(*node, selector, node)));
+    }
+
+    static bool nodes_are_equal(const dom_node& left, const dom_node& right)
+    {
+        if (left.tag != right.tag
+            || left.text_content != right.text_content
+            || left.attributes != right.attributes
+            || left.children.size() != right.children.size()) return false;
+        for (size_t index = 0; index < left.children.size(); ++index) {
+            const auto* left_child = left.children[index];
+            const auto* right_child = right.children[index];
+            if (left_child == nullptr || right_child == nullptr) {
+                if (left_child != right_child) return false;
+                continue;
+            }
+            if (!nodes_are_equal(*left_child, *right_child)) return false;
+        }
+        return true;
+    }
+
+    static void element_is_same_node(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* other = info.Length() > 0 && info[0]->IsObject()
+            ? unwrap_node(info[0].As<v8::Object>())
+            : nullptr;
+        info.GetReturnValue().Set(v8::Boolean::New(
+            info.GetIsolate(),
+            unwrap_node(info.This()) == other && other != nullptr));
+    }
+
+    static void element_is_equal_node(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.This());
+        auto* other = info.Length() > 0 && info[0]->IsObject()
+            ? unwrap_node(info[0].As<v8::Object>())
+            : nullptr;
+        info.GetReturnValue().Set(v8::Boolean::New(
+            info.GetIsolate(),
+            node != nullptr && other != nullptr && nodes_are_equal(*node, *other)));
     }
 
     static void element_closest(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2592,7 +7541,11 @@ struct v8_dom_runtime::implementation final {
             info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
             return;
         }
-        const auto selector = to_utf8(info.GetIsolate(), info[0]);
+        const auto selector = to_wtf8(info.GetIsolate(), info[0]);
+        if (!is_valid_dom_selector_list(selector)) {
+            throw_selector_syntax_error(info, selector);
+            return;
+        }
         for (auto* candidate = node; candidate != nullptr; candidate = candidate->parent) {
             if (self->css_selector_list_matches(*candidate, selector)) {
                 info.GetReturnValue().Set(self->wrap_node(*candidate));
@@ -2606,14 +7559,20 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.This());
-        if (node != nullptr) self->active_element = node;
+        if (is_programmatically_focusable(node)) {
+            htmlml_input_event synthetic{};
+            self->set_active_element(node, synthetic);
+        }
     }
 
     static void element_blur(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.This());
-        if (self->active_element == node) self->active_element = nullptr;
+        if (self->active_element == node) {
+            htmlml_input_event synthetic{};
+            self->set_active_element(nullptr, synthetic);
+        }
     }
 
     static void element_click(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2632,13 +7591,21 @@ struct v8_dom_runtime::implementation final {
                 }
             }
             node->attributes["selected"] = std::string{};
-            self->recascade_connected_subtree(*node);
+            self->recascade_connected_subtree(*node, "id-property");
         }
         htmlml_input_event synthetic{};
         synthetic.kind = HTMLML_INPUT_POINTER_UP;
         synthetic.x = node->layout.x + node->layout.width / 2.0;
         synthetic.y = node->layout.y + node->layout.height / 2.0;
-        self->dispatch_input_event_type(synthetic, "click", *node);
+        bool default_prevented = false;
+        if (self->dispatch_input_event_type(
+                synthetic,
+                "click",
+                *node,
+                &default_prevented)
+            && !default_prevented) {
+            self->queue_external_navigation(*node);
+        }
     }
 
     static void element_set_selection_range(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2670,7 +7637,10 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.This());
-        if (node != nullptr) self->active_element = node;
+        if (node != nullptr) {
+            htmlml_input_event synthetic{};
+            self->set_active_element(node, synthetic);
+        }
         auto local_context = info.GetIsolate()->GetCurrentContext();
         v8::Local<v8::Value> value;
         auto length = 0;
@@ -2702,10 +7672,68 @@ struct v8_dom_runtime::implementation final {
         const v8::PropertyCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
-        auto* node = self->active_element == nullptr
-            ? &self->active_root()
-            : self->active_element;
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root == nullptr) root = &self->active_root();
+        auto* node = &exposed_body_for_root(*root);
+        if (self->active_element != nullptr) {
+            const auto root_owner = self->focus_document_owner(root);
+            const auto active_owner = self->focus_document_owner(self->active_element);
+            if (root_owner == active_owner && subtree_contains(*root, self->active_element)) {
+                node = self->active_element;
+            } else if (root_owner == 0U && active_owner != 0U) {
+                if (auto* owner = find_node_by_native_id(*root, active_owner); owner != nullptr) {
+                    node = owner;
+                }
+            }
+        }
         info.GetReturnValue().Set(self->wrap_node(*node));
+    }
+
+    static void get_provisional_frame_active_element(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* frame = provisional_frame_owner(info.Holder());
+        if (frame == nullptr) return;
+        const auto known = self->provisional_frame_bodies.find(frame->id);
+        if (known == self->provisional_frame_bodies.end() || known->second == nullptr) return;
+        auto* root = known->second;
+        auto* node = self->active_element != nullptr
+                && subtree_contains(*root, self->active_element)
+            ? self->active_element
+            : root;
+        info.GetReturnValue().Set(self->wrap_node(*node));
+    }
+
+    static void get_provisional_frame_default_view(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* frame = provisional_frame_owner(info.Holder());
+        if (frame != nullptr) info.GetReturnValue().Set(self->frame_window(*frame));
+    }
+
+    static dom_node* provisional_frame_owner(v8::Local<v8::Object> document)
+    {
+        auto* node = unwrap_node(document);
+        if (node != nullptr && node->tag == "body"
+            && node->parent != nullptr && node->parent->tag == "iframe") {
+            return node->parent;
+        }
+        return node != nullptr && node->tag == "iframe" ? node : nullptr;
+    }
+
+    static void get_provisional_frame_element(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* frame = unwrap_node(info.Holder());
+        if (frame != nullptr) info.GetReturnValue().Set(self->wrap_node(*frame));
     }
 
     static void document_has_focus(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2739,6 +7767,26 @@ struct v8_dom_runtime::implementation final {
         info.GetReturnValue().Set(selection);
     }
 
+    static bool insertion_would_create_cycle(
+        const dom_node* parent,
+        const dom_node* child) noexcept
+    {
+        if (parent == nullptr || child == nullptr) return false;
+        for (auto* ancestor = parent; ancestor != nullptr; ancestor = ancestor->parent) {
+            if (ancestor == child) return true;
+        }
+        return false;
+    }
+
+    static void throw_hierarchy_request(v8::Isolate* isolate, std::string_view operation)
+    {
+        const auto message = std::string(operation)
+            + " cannot insert an ancestor into its descendant";
+        isolate->ThrowException(v8::Exception::TypeError(js_string(
+            isolate,
+            message.c_str())));
+    }
+
     static void append_child(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
@@ -2747,7 +7795,21 @@ struct v8_dom_runtime::implementation final {
         auto* child = info.Length() > 0 && info[0]->IsObject()
             ? unwrap_node(info[0].As<v8::Object>())
             : nullptr;
+        if (parent == nullptr || child == nullptr) {
+            info.GetIsolate()->ThrowException(v8::Exception::TypeError(
+                js_string(info.GetIsolate(), "appendChild requires a native node")));
+            return;
+        }
         if (parent != nullptr && child != nullptr && child->tag == "#document-fragment") {
+            if (std::any_of(
+                    child->children.begin(),
+                    child->children.end(),
+                    [parent](const auto* fragment_child) {
+                        return insertion_would_create_cycle(parent, fragment_child);
+                    })) {
+                throw_hierarchy_request(info.GetIsolate(), "appendChild");
+                return;
+            }
             auto children = std::move(child->children);
             child->children.clear();
             for (auto* fragment_child : children) {
@@ -2761,16 +7823,21 @@ struct v8_dom_runtime::implementation final {
                     *fragment_child,
                     self->wrap_node(*fragment_child),
                     info.GetIsolate()->GetCurrentContext());
+                self->enqueue_iframe_hydration_if_needed(*fragment_child);
             }
             self->document.mark_dirty();
             info.GetReturnValue().Set(info[0]);
+            return;
+        }
+        if (insertion_would_create_cycle(parent, child)) {
+            throw_hierarchy_request(info.GetIsolate(), "appendChild");
             return;
         }
         if (child != nullptr && child->parent != nullptr) {
             std::erase(child->parent->children, child);
             child->parent = nullptr;
         }
-        if (parent == nullptr || child == nullptr || !self->document.append_child(*parent, *child)) {
+        if (!self->document.append_child(*parent, *child)) {
             info.GetIsolate()->ThrowException(v8::Exception::TypeError(
                 js_string(info.GetIsolate(), "appendChild requires a detached native node")));
             return;
@@ -2781,7 +7848,76 @@ struct v8_dom_runtime::implementation final {
             *child,
             info[0].As<v8::Object>(),
             info.GetIsolate()->GetCurrentContext());
+        self->enqueue_iframe_hydration_if_needed(*child);
         info.GetReturnValue().Set(info[0]);
+    }
+
+    static void append_nodes(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        binding_callback_timer binding_timer(self->profile(binding_category::dom_mutation));
+        auto* parent = unwrap_node(info.This());
+        if (parent == nullptr) return;
+
+        std::vector<dom_node*> candidates;
+        candidates.reserve(static_cast<size_t>(info.Length()));
+        for (int index = 0; index < info.Length(); ++index) {
+            dom_node* candidate = nullptr;
+            if (info[index]->IsObject()) {
+                candidate = unwrap_node(info[index].As<v8::Object>());
+            }
+            if (candidate == nullptr) {
+                auto& text = self->document.create_element("#text");
+                text.text_content = to_wtf8(info.GetIsolate(), info[index]);
+                candidate = &text;
+            }
+            if (candidate->tag == "#document-fragment") {
+                for (auto* child : candidate->children) {
+                    if (insertion_would_create_cycle(parent, child)) {
+                        throw_hierarchy_request(info.GetIsolate(), "append");
+                        return;
+                    }
+                }
+            } else if (insertion_would_create_cycle(parent, candidate)) {
+                throw_hierarchy_request(info.GetIsolate(), "append");
+                return;
+            }
+            candidates.push_back(candidate);
+        }
+
+        std::vector<dom_node*> inserted;
+        for (auto* candidate : candidates) {
+            if (candidate == nullptr) continue;
+            if (candidate->tag == "#document-fragment") {
+                auto children = std::move(candidate->children);
+                candidate->children.clear();
+                for (auto* child : children) {
+                    if (child == nullptr) continue;
+                    child->parent = nullptr;
+                    child->visible = true;
+                    if (self->document.append_child(*parent, *child)) inserted.push_back(child);
+                }
+                continue;
+            }
+            if (candidate->parent != nullptr) {
+                std::erase(candidate->parent->children, candidate);
+                candidate->parent = nullptr;
+            }
+            candidate->visible = true;
+            if (self->document.append_child(*parent, *candidate)) inserted.push_back(candidate);
+        }
+
+        for (auto* child : inserted) {
+            if (child == nullptr) continue;
+            self->recascade_connected_subtree(*child);
+            self->enqueue_connected_resource_if_needed(
+                *child,
+                self->wrap_node(*child),
+                info.GetIsolate()->GetCurrentContext());
+            self->enqueue_iframe_hydration_if_needed(*child);
+        }
+        self->activate_connected_stylesheet(*parent);
+        self->document.mark_dirty();
     }
 
     static void remove_child(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2792,11 +7928,66 @@ struct v8_dom_runtime::implementation final {
         auto* child = info.Length() > 0 && info[0]->IsObject()
             ? unwrap_node(info[0].As<v8::Object>())
             : nullptr;
-        if (parent == nullptr || child == nullptr || child->parent != parent) return;
+        if (parent == nullptr || child == nullptr || child->parent != parent) {
+            info.GetIsolate()->ThrowException(v8::Exception::TypeError(
+                js_string(info.GetIsolate(), "removeChild requires a child of this native node")));
+            return;
+        }
+        if (!self->blur_active_element_before_detach(*child)) return;
+        self->deactivate_connected_stylesheets(*child);
         std::erase(parent->children, child);
         child->parent = nullptr;
+        self->weaken_detached_subtree_wrappers(*child);
         self->document.mark_dirty();
         info.GetReturnValue().Set(info[0]);
+    }
+
+    static void replace_child(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* parent = unwrap_node(info.This());
+        auto* replacement = info.Length() > 0 && info[0]->IsObject()
+            ? unwrap_node(info[0].As<v8::Object>())
+            : nullptr;
+        auto* previous = info.Length() > 1 && info[1]->IsObject()
+            ? unwrap_node(info[1].As<v8::Object>())
+            : nullptr;
+        if (parent == nullptr || replacement == nullptr || previous == nullptr
+            || previous->parent != parent) {
+            info.GetIsolate()->ThrowException(v8::Exception::TypeError(
+                js_string(info.GetIsolate(), "replaceChild requires a child of this native node")));
+            return;
+        }
+        if (replacement == previous) {
+            info.GetReturnValue().Set(info[1]);
+            return;
+        }
+        if (insertion_would_create_cycle(parent, replacement)) {
+            throw_hierarchy_request(info.GetIsolate(), "replaceChild");
+            return;
+        }
+        if (replacement->parent != nullptr) {
+            std::erase(replacement->parent->children, replacement);
+            replacement->parent = nullptr;
+        }
+        const auto iterator = std::find(parent->children.begin(), parent->children.end(), previous);
+        if (iterator == parent->children.end()) return;
+        if (!self->blur_active_element_before_detach(*previous)) return;
+        self->deactivate_connected_stylesheets(*previous, false);
+        *iterator = replacement;
+        replacement->parent = parent;
+        replacement->visible = true;
+        previous->parent = nullptr;
+        self->weaken_detached_subtree_wrappers(*previous);
+        self->recascade_connected_subtree(*replacement);
+        self->activate_connected_stylesheet(*replacement);
+        self->enqueue_connected_resource_if_needed(
+            *replacement,
+            info[0].As<v8::Object>(),
+            info.GetIsolate()->GetCurrentContext());
+        self->enqueue_iframe_hydration_if_needed(*replacement);
+        self->document.mark_dirty();
+        info.GetReturnValue().Set(info[1]);
     }
 
     static void replace_children(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2804,7 +7995,16 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         auto* parent = unwrap_node(info.This());
         if (parent == nullptr) return;
-        self->document.remove_all_children(*parent);
+        for (int index = 0; index < info.Length(); ++index) {
+            if (!info[index]->IsObject()) continue;
+            auto* child = unwrap_node(info[index].As<v8::Object>());
+            if (insertion_would_create_cycle(parent, child)) {
+                throw_hierarchy_request(info.GetIsolate(), "replaceChildren");
+                return;
+            }
+        }
+        if (!self->blur_active_descendant_before_replacing_children(*parent)) return;
+        self->detach_all_children(*parent);
         for (int index = 0; index < info.Length(); ++index) {
             if (!info[index]->IsObject()) continue;
             auto* child = unwrap_node(info[index].As<v8::Object>());
@@ -2816,6 +8016,7 @@ struct v8_dom_runtime::implementation final {
             self->document.append_child(*parent, *child);
         }
         self->recascade_connected_subtree(*parent);
+        self->activate_connected_stylesheet(*parent);
     }
 
     static void remove_element(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2823,9 +8024,12 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.This());
         if (node == nullptr || node->parent == nullptr) return;
+        if (!self->blur_active_element_before_detach(*node)) return;
+        self->deactivate_connected_stylesheets(*node);
         std::erase(node->parent->children, node);
         node->parent = nullptr;
         node->visible = false;
+        self->weaken_detached_subtree_wrappers(*node);
         self->document.mark_dirty();
     }
 
@@ -2854,6 +8058,10 @@ struct v8_dom_runtime::implementation final {
         } else {
             return;
         }
+        if (insertion_would_create_cycle(parent, child)) {
+            throw_hierarchy_request(info.GetIsolate(), "insertAdjacentElement");
+            return;
+        }
         if (child->parent != nullptr) {
             auto* old_parent = child->parent;
             const auto old = std::find(old_parent->children.begin(), old_parent->children.end(), child);
@@ -2869,6 +8077,7 @@ struct v8_dom_runtime::implementation final {
         parent->children.insert(parent->children.begin() + static_cast<std::ptrdiff_t>(index), child);
         self->document.mark_dirty();
         self->recascade_connected_subtree(*child);
+        self->activate_connected_stylesheet(*child);
         info.GetReturnValue().Set(info[1]);
     }
 
@@ -2879,6 +8088,10 @@ struct v8_dom_runtime::implementation final {
         auto* child = info.Length() > 0 && info[0]->IsObject()
             ? unwrap_node(info[0].As<v8::Object>()) : nullptr;
         if (parent == nullptr || child == nullptr || parent == child) return;
+        if (insertion_would_create_cycle(parent, child)) {
+            throw_hierarchy_request(info.GetIsolate(), "prepend");
+            return;
+        }
         if (child->parent != nullptr) {
             std::erase(child->parent->children, child);
             child->parent = nullptr;
@@ -2887,6 +8100,7 @@ struct v8_dom_runtime::implementation final {
         parent->children.insert(parent->children.begin(), child);
         self->document.mark_dirty();
         self->recascade_connected_subtree(*child);
+        self->activate_connected_stylesheet(*child);
         info.GetReturnValue().Set(info[0]);
     }
 
@@ -2901,6 +8115,10 @@ struct v8_dom_runtime::implementation final {
         if (reference == nullptr || reference->parent == nullptr || child == nullptr
             || reference == child) return;
         auto* parent = reference->parent;
+        if (insertion_would_create_cycle(parent, child)) {
+            throw_hierarchy_request(info.GetIsolate(), after ? "after" : "before");
+            return;
+        }
         if (child->parent != nullptr) {
             std::erase(child->parent->children, child);
             child->parent = nullptr;
@@ -2911,6 +8129,7 @@ struct v8_dom_runtime::implementation final {
         parent->children.insert(position + (after ? 1 : 0), child);
         self->document.mark_dirty();
         self->recascade_connected_subtree(*child);
+        self->activate_connected_stylesheet(*child);
     }
 
     static void insert_before_self(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2927,6 +8146,12 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_mutation));
+        self->record_feature(
+            "dom",
+            "method:Node.insertBefore",
+            "supported",
+            {},
+            "dom-binding");
         auto* parent = unwrap_node(info.This());
         auto* child = info.Length() > 0 && info[0]->IsObject()
             ? unwrap_node(info[0].As<v8::Object>())
@@ -2936,6 +8161,15 @@ struct v8_dom_runtime::implementation final {
             : nullptr;
         if (parent == nullptr || child == nullptr) return;
         if (child->tag == "#document-fragment") {
+            if (std::any_of(
+                    child->children.begin(),
+                    child->children.end(),
+                    [parent](const auto* fragment_child) {
+                        return insertion_would_create_cycle(parent, fragment_child);
+                    })) {
+                throw_hierarchy_request(info.GetIsolate(), "insertBefore");
+                return;
+            }
             auto position = before == nullptr
                 ? parent->children.end()
                 : std::find(parent->children.begin(), parent->children.end(), before);
@@ -2955,10 +8189,43 @@ struct v8_dom_runtime::implementation final {
                     parent->children.begin() + static_cast<std::ptrdiff_t>(insertion_index++),
                     fragment_child);
                 self->recascade_connected_subtree(*fragment_child);
+                self->activate_connected_stylesheet(*fragment_child);
             }
             self->document.mark_dirty();
             info.GetReturnValue().Set(info[0]);
             return;
+        }
+        if (insertion_would_create_cycle(parent, child)) {
+            throw_hierarchy_request(info.GetIsolate(), "insertBefore");
+            return;
+        }
+        // The DOM pre-insertion algorithm validates the reference before it
+        // mutates either tree. In particular, insertBefore(node, node) on the
+        // node's current parent is a no-op. Detaching first made that valid
+        // self-reference disappear from parent->children, then incorrectly
+        // threw and left the node detached. It also made every rejected
+        // foreign reference partially mutate the source tree.
+        if (before != nullptr) {
+            const auto reference = std::find(
+                parent->children.begin(), parent->children.end(), before);
+            if (reference == parent->children.end()) {
+                info.GetIsolate()->ThrowException(v8::Exception::TypeError(
+                    js_string(info.GetIsolate(), "insertBefore reference is not a child")));
+                return;
+            }
+            if (before == child) {
+                self->record_feature(
+                    "dom",
+                    "insertBefore:self-reference",
+                    "supported",
+                    {},
+                    "dom-pre-insertion");
+                self->record_composition(
+                    "dom-insertbefore-self-reference",
+                    child->id);
+                info.GetReturnValue().Set(info[0]);
+                return;
+            }
         }
         if (child->parent != nullptr) {
             std::erase(child->parent->children, child);
@@ -2967,20 +8234,20 @@ struct v8_dom_runtime::implementation final {
         if (before == nullptr) {
             if (self->document.append_child(*parent, *child)) {
                 self->recascade_connected_subtree(*child);
+                self->activate_connected_stylesheet(*child);
                 info.GetReturnValue().Set(info[0]);
             }
             return;
         }
         const auto position = std::find(parent->children.begin(), parent->children.end(), before);
-        if (position == parent->children.end()) {
-            info.GetIsolate()->ThrowException(v8::Exception::TypeError(
-                js_string(info.GetIsolate(), "insertBefore reference is not a child")));
-            return;
-        }
+        // `before` was validated before detaching `child`; because the
+        // self-reference case returned above, it must still be present.
+        if (position == parent->children.end()) return;
         child->parent = parent;
         parent->children.insert(position, child);
         self->document.mark_dirty();
         self->recascade_connected_subtree(*child);
+        self->activate_connected_stylesheet(*child);
         info.GetReturnValue().Set(info[0]);
     }
 
@@ -2997,7 +8264,7 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
         auto* node = unwrap_node(info.Holder());
-        if (node != nullptr) info.GetReturnValue().Set(js_string(info.GetIsolate(), node->id_attribute.c_str()));
+        if (node != nullptr) info.GetReturnValue().Set(js_dom_string(info.GetIsolate(), node->id_attribute));
     }
 
     static void set_id(
@@ -3009,8 +8276,11 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
         auto* node = unwrap_node(info.Holder());
         if (node != nullptr) {
-            node->id_attribute = to_utf8(info.GetIsolate(), value);
-            self->recascade_connected_subtree(*node);
+            self->record_feature(
+                "html", "attribute:id", "supported", {}, "html-attribute");
+            node->id_attribute = to_wtf8(info.GetIsolate(), value);
+            node->attributes["id"] = node->id_attribute;
+            self->recascade_connected_subtree(*node, "className-property");
         }
     }
 
@@ -3019,7 +8289,7 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
         auto* node = unwrap_node(info.Holder());
-        if (node != nullptr) info.GetReturnValue().Set(js_string(info.GetIsolate(), node->class_name.c_str()));
+        if (node != nullptr) info.GetReturnValue().Set(js_dom_string(info.GetIsolate(), node->class_name));
     }
 
     static void set_class_name(
@@ -3031,8 +8301,16 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
         auto* node = unwrap_node(info.Holder());
         if (node != nullptr) {
-            node->class_name = to_utf8(info.GetIsolate(), value);
-            self->recascade_connected_subtree(*node);
+            self->record_feature(
+                "html", "attribute:class", "supported", {}, "html-attribute");
+            const auto class_name = to_wtf8(info.GetIsolate(), value);
+            if (node->class_name == class_name
+                && node->attributes.contains("class")) {
+                return;
+            }
+            node->class_name = class_name;
+            node->attributes["class"] = node->class_name;
+            self->recascade_connected_subtree(*node, "setAttribute");
         }
     }
 
@@ -3046,7 +8324,7 @@ struct v8_dom_runtime::implementation final {
         auto* ancestor = node;
         while (ancestor != nullptr && ancestor->tag != "svg") ancestor = ancestor->parent;
         const auto svg = node->attributes.contains("namespace") || ancestor != nullptr;
-        if (!svg) {
+        if (!node->xml_mode && !svg) {
             std::transform(tag.begin(), tag.end(), tag.begin(), [](unsigned char value) {
                 return static_cast<char>(std::toupper(value));
             });
@@ -3067,12 +8345,24 @@ struct v8_dom_runtime::implementation final {
         auto* node = unwrap_node(info.Holder());
         const auto type = node != nullptr && node->tag == "#text"
             ? 3
+            : node != nullptr && node->tag == "#comment"
+                ? 8
             : node != nullptr && (node->tag == "#document-fragment" || node->tag == "#fragment")
                 ? 11
                 : 1;
         info.GetReturnValue().Set(v8::Integer::New(
             info.GetIsolate(),
             type));
+    }
+
+    static void get_native_node_id(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        info.GetReturnValue().Set(v8::Integer::NewFromUnsigned(
+            info.GetIsolate(),
+            node == nullptr ? 0U : node->id));
     }
 
     static void append_node_text(const dom_node& node, std::string& value)
@@ -3089,7 +8379,7 @@ struct v8_dom_runtime::implementation final {
         if (node == nullptr) return;
         std::string value;
         append_node_text(*node, value);
-        info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
+        info.GetReturnValue().Set(js_dom_string(info.GetIsolate(), value));
     }
 
     static void set_text_content(
@@ -3100,10 +8390,13 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.Holder());
         if (node == nullptr) return;
-        if (node->tag != "#text") self->document.remove_all_children(*node);
+        if (node->tag != "#text") {
+            if (!self->blur_active_descendant_before_replacing_children(*node)) return;
+            self->detach_all_children(*node);
+        }
         node->text_content = raw_value->IsNullOrUndefined()
             ? std::string{}
-            : to_utf8(info.GetIsolate(), raw_value);
+            : to_wtf8(info.GetIsolate(), raw_value);
         self->activate_connected_stylesheet(*node);
         self->document.mark_dirty();
     }
@@ -3113,9 +8406,28 @@ struct v8_dom_runtime::implementation final {
         info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), 9));
     }
 
+    static void get_document_node_name(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        info.GetReturnValue().Set(js_string(info.GetIsolate(), "#document"));
+    }
+
     static void get_default_view(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
     {
-        info.GetReturnValue().Set(info.GetIsolate()->GetCurrentContext()->Global());
+        auto* self = current(info.GetIsolate());
+        auto* root = static_cast<dom_node*>(info.Holder()->GetAlignedPointerFromInternalField(
+            0,
+            v8::kEmbedderDataTypeTagDefault));
+        if (root != nullptr && self->detached_document_roots.contains(root->id)) {
+            info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
+            return;
+        }
+        const auto frame_document_root = root != nullptr && root->tag == "body"
+            && root->parent != nullptr && root->parent->tag == "iframe";
+        if (frame_document_root && !self->frame_context.IsEmpty()) {
+            info.GetReturnValue().Set(self->frame_context.Get(info.GetIsolate())->Global());
+            return;
+        }
+        info.GetReturnValue().Set(self->context.Get(info.GetIsolate())->Global());
     }
 
     static void get_namespace_uri(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
@@ -3155,8 +8467,16 @@ struct v8_dom_runtime::implementation final {
                 js_string(info.GetIsolate(), attributes[index].first.c_str())).Check();
             attribute->Set(
                 local_context,
+                js_string(info.GetIsolate(), "nodeName"),
+                js_string(info.GetIsolate(), attributes[index].first.c_str())).Check();
+            attribute->Set(
+                local_context,
                 js_string(info.GetIsolate(), "value"),
-                js_string(info.GetIsolate(), attributes[index].second.c_str())).Check();
+                js_dom_string(info.GetIsolate(), attributes[index].second)).Check();
+            attribute->Set(
+                local_context,
+                js_string(info.GetIsolate(), "nodeValue"),
+                js_dom_string(info.GetIsolate(), attributes[index].second)).Check();
             result->Set(local_context, index, attribute).Check();
         }
         result->Set(
@@ -3190,7 +8510,7 @@ struct v8_dom_runtime::implementation final {
             : v8::Local<v8::Value>(self->wrap_node(*node->parent)));
     }
 
-    static void get_first_element_child(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    static void get_first_child(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
@@ -3200,6 +8520,27 @@ struct v8_dom_runtime::implementation final {
             : v8::Local<v8::Value>(self->wrap_node(*node->children.front())));
     }
 
+    static void get_first_element_child(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
+        auto* node = unwrap_node(info.Holder());
+        dom_node* child = nullptr;
+        if (node != nullptr) {
+            const auto found = std::find_if(
+                node->children.begin(), node->children.end(),
+                [](const auto* candidate) {
+                    return candidate != nullptr && !candidate->tag.starts_with('#');
+                });
+            if (found != node->children.end()) child = *found;
+        }
+        info.GetReturnValue().Set(child == nullptr
+            ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+            : v8::Local<v8::Value>(self->wrap_node(*child)));
+    }
+
     static void get_last_child(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
@@ -3207,6 +8548,26 @@ struct v8_dom_runtime::implementation final {
         info.GetReturnValue().Set(node == nullptr || node->children.empty()
             ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
             : v8::Local<v8::Value>(self->wrap_node(*node->children.back())));
+    }
+
+    static void get_last_element_child(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        dom_node* child = nullptr;
+        if (node != nullptr) {
+            const auto found = std::find_if(
+                node->children.rbegin(), node->children.rend(),
+                [](const auto* candidate) {
+                    return candidate != nullptr && !candidate->tag.starts_with('#');
+                });
+            if (found != node->children.rend()) child = *found;
+        }
+        info.GetReturnValue().Set(child == nullptr
+            ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+            : v8::Local<v8::Value>(self->wrap_node(*child)));
     }
 
     static dom_node* sibling_of(dom_node* node, int offset)
@@ -3232,6 +8593,37 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         auto* sibling = sibling_of(unwrap_node(info.Holder()), -1);
+        info.GetReturnValue().Set(sibling == nullptr
+            ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+            : v8::Local<v8::Value>(self->wrap_node(*sibling)));
+    }
+
+    static dom_node* element_sibling_of(dom_node* node, int offset)
+    {
+        auto* sibling = sibling_of(node, offset);
+        while (sibling != nullptr && sibling->tag.starts_with('#')) {
+            sibling = sibling_of(sibling, offset);
+        }
+        return sibling;
+    }
+
+    static void get_next_element_sibling(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* sibling = element_sibling_of(unwrap_node(info.Holder()), 1);
+        info.GetReturnValue().Set(sibling == nullptr
+            ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+            : v8::Local<v8::Value>(self->wrap_node(*sibling)));
+    }
+
+    static void get_previous_element_sibling(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* sibling = element_sibling_of(unwrap_node(info.Holder()), -1);
         info.GetReturnValue().Set(sibling == nullptr
             ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
             : v8::Local<v8::Value>(self->wrap_node(*sibling)));
@@ -3313,9 +8705,14 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.Holder());
         if (node == nullptr || property->IsSymbol()) return v8::Intercepted::kNo;
-        node->attributes[dataset_attribute_name(info.GetIsolate(), property)] =
-            to_utf8(info.GetIsolate(), value);
-        self->recascade_connected_subtree(*node);
+        const auto name = dataset_attribute_name(info.GetIsolate(), property);
+        self->record_html_attribute_feature(name, "dataset-binding");
+        node->attributes[name] = to_utf8(info.GetIsolate(), value);
+        if (self->attribute_requires_recascade(name)) {
+            self->recascade_connected_subtree(*node, "setAttributeNS");
+        } else {
+            self->document.mark_dirty();
+        }
         return v8::Intercepted::kYes;
     }
 
@@ -3339,8 +8736,13 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.Holder());
         if (node == nullptr || property->IsSymbol()) return v8::Intercepted::kNo;
-        node->attributes.erase(dataset_attribute_name(info.GetIsolate(), property));
-        self->recascade_connected_subtree(*node);
+        const auto name = dataset_attribute_name(info.GetIsolate(), property);
+        node->attributes.erase(name);
+        if (self->attribute_requires_recascade(name)) {
+            self->recascade_connected_subtree(*node, "removeAttribute");
+        } else {
+            self->document.mark_dirty();
+        }
         info.GetReturnValue().Set(true);
         return v8::Intercepted::kYes;
     }
@@ -3415,13 +8817,17 @@ struct v8_dom_runtime::implementation final {
     static bool has_class(const dom_node& node, std::string_view value)
     {
         const std::string_view classes(node.class_name);
+        const auto html_whitespace = [](unsigned char character) {
+            return character == ' ' || character == '\t' || character == '\n'
+                || character == '\f' || character == '\r';
+        };
         size_t cursor = 0;
         while (cursor < classes.size()) {
             while (cursor < classes.size()
-                && std::isspace(static_cast<unsigned char>(classes[cursor]))) ++cursor;
+                && html_whitespace(static_cast<unsigned char>(classes[cursor]))) ++cursor;
             const auto start = cursor;
             while (cursor < classes.size()
-                && !std::isspace(static_cast<unsigned char>(classes[cursor]))) ++cursor;
+                && !html_whitespace(static_cast<unsigned char>(classes[cursor]))) ++cursor;
             if (classes.substr(start, cursor - start) == value) return true;
         }
         return false;
@@ -3430,15 +8836,26 @@ struct v8_dom_runtime::implementation final {
     static bool remove_class(dom_node& node, const std::string& removed)
     {
         if (!has_class(node, removed)) return false;
-        std::istringstream classes(node.class_name);
-        std::ostringstream result;
-        std::string item;
-        while (classes >> item) {
-            if (item == removed) continue;
-            if (result.tellp() > 0) result << ' ';
-            result << item;
+        const auto html_whitespace = [](unsigned char character) {
+            return character == ' ' || character == '\t' || character == '\n'
+                || character == '\f' || character == '\r';
+        };
+        std::string result;
+        size_t cursor = 0;
+        while (cursor < node.class_name.size()) {
+            while (cursor < node.class_name.size()
+                && html_whitespace(static_cast<unsigned char>(node.class_name[cursor]))) ++cursor;
+            const auto start = cursor;
+            while (cursor < node.class_name.size()
+                && !html_whitespace(static_cast<unsigned char>(node.class_name[cursor]))) ++cursor;
+            const auto item = node.class_name.substr(start, cursor - start);
+            if (item.empty() || item == removed) continue;
+            if (!result.empty()) result.push_back(' ');
+            result += item;
         }
-        node.class_name = std::move(result).str();
+        node.class_name = std::move(result);
+        if (node.class_name.empty()) node.attributes.erase("class");
+        else node.attributes["class"] = node.class_name;
         return true;
     }
 
@@ -3454,10 +8871,11 @@ struct v8_dom_runtime::implementation final {
             if (!value.empty() && !has_class(*node, value)) {
                 if (!node->class_name.empty()) node->class_name.push_back(' ');
                 node->class_name += value;
+                node->attributes["class"] = node->class_name;
                 changed = true;
             }
         }
-        if (changed) self->recascade_connected_subtree(*node);
+        if (changed) self->recascade_connected_subtree(*node, "classList.add");
     }
 
     static void class_list_remove(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -3466,8 +8884,11 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_mutation));
         auto* node = class_list_node(info);
         if (node == nullptr || info.Length() < 1) return;
-        const auto removed = to_utf8(info.GetIsolate(), info[0]);
-        if (remove_class(*node, removed)) self->recascade_connected_subtree(*node);
+        auto changed = false;
+        for (int index = 0; index < info.Length(); ++index) {
+            changed |= remove_class(*node, to_utf8(info.GetIsolate(), info[index]));
+        }
+        if (changed) self->recascade_connected_subtree(*node, "classList.remove");
     }
 
     static void class_list_contains(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -3494,11 +8915,12 @@ struct v8_dom_runtime::implementation final {
         if (enabled && !present) {
             if (!node->class_name.empty()) node->class_name.push_back(' ');
             node->class_name += value;
+            node->attributes["class"] = node->class_name;
             changed = true;
         } else if (!enabled && present) {
             changed = remove_class(*node, value);
         }
-        if (changed) self->recascade_connected_subtree(*node);
+        if (changed) self->recascade_connected_subtree(*node, "classList.toggle");
         info.GetReturnValue().Set(v8::Boolean::New(info.GetIsolate(), enabled));
     }
 
@@ -3510,15 +8932,7 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
         auto* node = unwrap_node(info.Holder());
         if (node == nullptr) return;
-        auto isolate = info.GetIsolate();
-        auto local_context = isolate->GetCurrentContext();
-        auto data = v8::External::New(isolate, node, v8::kExternalPointerTypeTagDefault);
-        auto result = v8::Object::New(isolate);
-        result->Set(local_context, js_string(isolate, "add"), v8::Function::New(local_context, class_list_add, data).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "remove"), v8::Function::New(local_context, class_list_remove, data).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "contains"), v8::Function::New(local_context, class_list_contains, data).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "toggle"), v8::Function::New(local_context, class_list_toggle, data).ToLocalChecked()).Check();
-        info.GetReturnValue().Set(result);
+        info.GetReturnValue().Set(self->wrap_class_list(*node));
     }
 
     static void range_select_node_contents(const v8::FunctionCallbackInfo<v8::Value>&)
@@ -3563,7 +8977,25 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_geometry));
         self->ensure_layout();
         auto* node = unwrap_node(info.Holder());
-        if (node != nullptr) info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), node->layout.width));
+        const auto is_browsing_context_root = node != nullptr
+            && node->tag == "body"
+            && (node->parent == nullptr || node->parent->tag == "iframe");
+        if (node != nullptr && node->tag == "html"
+            && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        if (node != nullptr) {
+            for (auto* current_node = node; current_node != nullptr;
+                 current_node = current_node->parent) {
+                if (current_node->style.display != display_mode::none) continue;
+                info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), 0));
+                return;
+            }
+            const auto width = is_browsing_context_root
+                ? self->viewport_provider().width
+                : node->layout.width;
+            info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), width));
+        }
     }
 
     static void get_client_height(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
@@ -3572,7 +9004,251 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_geometry));
         self->ensure_layout();
         auto* node = unwrap_node(info.Holder());
-        if (node != nullptr) info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), node->layout.height));
+        const auto is_browsing_context_root = node != nullptr
+            && node->tag == "body"
+            && (node->parent == nullptr || node->parent->tag == "iframe");
+        if (node != nullptr && node->tag == "html"
+            && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        if (node != nullptr) {
+            for (auto* current_node = node; current_node != nullptr;
+                 current_node = current_node->parent) {
+                if (current_node->style.display != display_mode::none) continue;
+                info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), 0));
+                return;
+            }
+            const auto height = is_browsing_context_root
+                ? self->viewport_provider().height
+                : node->layout.height;
+            info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), height));
+        }
+    }
+
+    static void get_scroll_width(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->ensure_layout();
+        auto* node = unwrap_node(info.Holder());
+        if (node != nullptr && node->tag == "html"
+            && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        if (node != nullptr) {
+            info.GetReturnValue().Set(v8::Number::New(
+                info.GetIsolate(),
+                std::max(node->layout.width, node->scroll_content_width)));
+        }
+    }
+
+    static void get_scroll_height(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->ensure_layout();
+        auto* node = unwrap_node(info.Holder());
+        if (node != nullptr && node->tag == "html"
+            && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        if (node != nullptr) {
+            info.GetReturnValue().Set(v8::Number::New(
+                info.GetIsolate(),
+                std::max(node->layout.height, node->scroll_content_height)));
+        }
+    }
+
+    static void get_scroll_left(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node != nullptr && node->tag == "html"
+            && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        if (node != nullptr) {
+            info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), node->scroll_left));
+        }
+    }
+
+    static void get_scroll_top(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node != nullptr && node->tag == "html"
+            && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        if (node != nullptr) {
+            info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), node->scroll_top));
+        }
+    }
+
+    static void set_scroll_left(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->ensure_layout();
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        if (node->tag == "html" && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        const auto maximum = std::max(
+            0.0F,
+            node->scroll_content_width - node->scroll_viewport_width);
+        const auto next = std::clamp(
+            static_cast<float>(value->NumberValue(
+                info.GetIsolate()->GetCurrentContext()).FromMaybe(0)),
+            0.0F,
+            maximum);
+        if (std::abs(next - node->scroll_left) <= 0.01F) return;
+        node->scroll_left = next;
+        self->document.mark_dirty();
+        htmlml_input_event input{};
+        input.sequence = self->current_input_sequence;
+        v8::TryCatch try_catch(info.GetIsolate());
+        if (!self->dispatch_input_event_type(input, "scroll", *node)) {
+            const auto error = self->describe_exception(
+                try_catch,
+                info.GetIsolate()->GetCurrentContext());
+            self->last_error = "Programmatic scrollLeft dispatch failed: " + error;
+            info.GetIsolate()->ThrowException(v8::Exception::Error(
+                js_string(info.GetIsolate(), self->last_error.c_str())));
+        }
+    }
+
+    static void set_scroll_top(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->ensure_layout();
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        if (node->tag == "html" && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
+        const auto maximum = std::max(
+            0.0F,
+            node->scroll_content_height - node->scroll_viewport_height);
+        const auto next = std::clamp(
+            static_cast<float>(value->NumberValue(
+                info.GetIsolate()->GetCurrentContext()).FromMaybe(0)),
+            0.0F,
+            maximum);
+        if (std::abs(next - node->scroll_top) <= 0.01F) return;
+        node->scroll_top = next;
+        self->document.mark_dirty();
+        htmlml_input_event input{};
+        input.sequence = self->current_input_sequence;
+        v8::TryCatch try_catch(info.GetIsolate());
+        if (!self->dispatch_input_event_type(input, "scroll", *node)) {
+            const auto error = self->describe_exception(
+                try_catch,
+                info.GetIsolate()->GetCurrentContext());
+            self->last_error = "Programmatic scrollTop dispatch failed: " + error;
+            info.GetIsolate()->ThrowException(v8::Exception::Error(
+                js_string(info.GetIsolate(), self->last_error.c_str())));
+        }
+    }
+
+    static void element_scroll_into_view(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        self->ensure_layout();
+        auto* node = info.This()->IsObject()
+            ? unwrap_node(info.This().As<v8::Object>())
+            : nullptr;
+        if (node == nullptr) return;
+
+        auto block = std::string("start");
+        auto inline_alignment = std::string("nearest");
+        if (info.Length() > 0) {
+            if (info[0]->IsBoolean()) {
+                block = info[0]->BooleanValue(info.GetIsolate()) ? "start" : "end";
+            } else if (info[0]->IsObject()) {
+                auto context = info.GetIsolate()->GetCurrentContext();
+                auto options = info[0].As<v8::Object>();
+                v8::Local<v8::Value> value;
+                if (options->Get(context, js_string(info.GetIsolate(), "block")).ToLocal(&value)
+                    && value->IsString()) {
+                    block = to_utf8(info.GetIsolate(), value);
+                }
+                if (options->Get(context, js_string(info.GetIsolate(), "inline")).ToLocal(&value)
+                    && value->IsString()) {
+                    inline_alignment = to_utf8(info.GetIsolate(), value);
+                }
+            }
+        }
+
+        const auto aligned_offset = [](
+            std::string_view alignment,
+            float item_start,
+            float item_end,
+            float viewport_start,
+            float viewport_end) {
+            if (alignment == "center") {
+                return (item_start + item_end - viewport_start - viewport_end) * 0.5F;
+            }
+            if (alignment == "end") return item_end - viewport_end;
+            if (alignment == "nearest") {
+                if (item_start < viewport_start && item_end > viewport_end) return 0.0F;
+                if (item_start < viewport_start) return item_start - viewport_start;
+                if (item_end > viewport_end) return item_end - viewport_end;
+                return 0.0F;
+            }
+            return item_start - viewport_start;
+        };
+
+        for (auto* ancestor = node->parent; ancestor != nullptr; ancestor = ancestor->parent) {
+            const auto maximum_x = std::max(
+                0.0F,
+                ancestor->scroll_content_width - ancestor->scroll_viewport_width);
+            const auto maximum_y = std::max(
+                0.0F,
+                ancestor->scroll_content_height - ancestor->scroll_viewport_height);
+            const auto viewport_width = ancestor->scroll_viewport_width > 0.0F
+                ? ancestor->scroll_viewport_width
+                : ancestor->layout.width;
+            const auto viewport_height = ancestor->scroll_viewport_height > 0.0F
+                ? ancestor->scroll_viewport_height
+                : ancestor->layout.height;
+            auto changed = false;
+            const auto root_viewport_scroll_x = ancestor == &self->active_root()
+                && ancestor->style.overflow_x == overflow_mode::visible;
+            const auto root_viewport_scroll_y = ancestor == &self->active_root()
+                && ancestor->style.overflow_y == overflow_mode::visible;
+            if ((ancestor->style.scroll_x_enabled || root_viewport_scroll_x)
+                && maximum_x > 0.0F) {
+                const auto delta = aligned_offset(
+                    inline_alignment,
+                    node->layout.x,
+                    node->layout.x + node->layout.width,
+                    ancestor->layout.x,
+                    ancestor->layout.x + viewport_width);
+                const auto next = std::clamp(ancestor->scroll_left + delta, 0.0F, maximum_x);
+                changed = changed || std::abs(next - ancestor->scroll_left) > 0.01F;
+                ancestor->scroll_left = next;
+            }
+            if ((ancestor->style.scroll_y_enabled || root_viewport_scroll_y)
+                && maximum_y > 0.0F) {
+                const auto delta = aligned_offset(
+                    block,
+                    node->layout.y,
+                    node->layout.y + node->layout.height,
+                    ancestor->layout.y,
+                    ancestor->layout.y + viewport_height);
+                const auto next = std::clamp(ancestor->scroll_top + delta, 0.0F, maximum_y);
+                changed = changed || std::abs(next - ancestor->scroll_top) > 0.01F;
+                ancestor->scroll_top = next;
+            }
+            if (!changed) continue;
+            self->document.mark_dirty();
+            self->ensure_layout();
+        }
     }
 
     static dom_node* find_offset_parent(dom_node& node)
@@ -3595,9 +9271,14 @@ struct v8_dom_runtime::implementation final {
         if (node == nullptr) return;
         const auto* offset_parent = find_offset_parent(*node);
         const auto parent_x = offset_parent == nullptr ? 0.0F : offset_parent->layout.x;
+        auto restored_scroll = 0.0F;
+        for (auto* ancestor = node->parent; ancestor != nullptr; ancestor = ancestor->parent) {
+            restored_scroll += ancestor->scroll_left;
+            if (ancestor == offset_parent) break;
+        }
         info.GetReturnValue().Set(v8::Number::New(
             info.GetIsolate(),
-            node->layout.x - parent_x));
+            node->layout.x - parent_x + restored_scroll));
     }
 
     static void get_offset_top(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
@@ -3609,9 +9290,14 @@ struct v8_dom_runtime::implementation final {
         if (node == nullptr) return;
         const auto* offset_parent = find_offset_parent(*node);
         const auto parent_y = offset_parent == nullptr ? 0.0F : offset_parent->layout.y;
+        auto restored_scroll = 0.0F;
+        for (auto* ancestor = node->parent; ancestor != nullptr; ancestor = ancestor->parent) {
+            restored_scroll += ancestor->scroll_top;
+            if (ancestor == offset_parent) break;
+        }
         info.GetReturnValue().Set(v8::Number::New(
             info.GetIsolate(),
-            node->layout.y - parent_y));
+            node->layout.y - parent_y + restored_scroll));
     }
 
     static void get_offset_parent(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
@@ -3712,6 +9398,67 @@ struct v8_dom_runtime::implementation final {
         }
     }
 
+    static void get_tab_index(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        int value = 0;
+        if (!try_tab_index(node, value)) {
+            value = is_natively_focusable(node) ? 0 : -1;
+        }
+        info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), value));
+    }
+
+    static void set_tab_index(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        const auto tab_index = value->Int32Value(
+            info.GetIsolate()->GetCurrentContext()).FromMaybe(0);
+        self->record_html_attribute_feature("tabindex", "dom-property-set");
+        node->attributes["tabindex"] = std::to_string(tab_index);
+        self->recascade_connected_subtree(*node, "style.cssText");
+    }
+
+    static void get_table_cell_span(
+        v8::Local<v8::Name> property,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        const auto property_name = to_utf8(info.GetIsolate(), property);
+        const auto attribute_name = property_name == "rowSpan" ? "rowspan" : "colspan";
+        auto found = node->attributes.find(attribute_name);
+        if (found == node->attributes.end()) found = node->attributes.find(property_name);
+        const auto span = found == node->attributes.end()
+            ? 1
+            : std::max(1, static_cast<int>(std::strtol(found->second.c_str(), nullptr, 10)));
+        info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), span));
+    }
+
+    static void set_table_cell_span(
+        v8::Local<v8::Name> property,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        const auto property_name = to_utf8(info.GetIsolate(), property);
+        const auto attribute_name = property_name == "rowSpan" ? "rowspan" : "colspan";
+        const auto span = std::max(
+            1,
+            value->Int32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(1));
+        node->attributes[attribute_name] = std::to_string(span);
+        self->document.mark_dirty();
+    }
+
     static void get_element_type(
         v8::Local<v8::Name>,
         const v8::PropertyCallbackInfo<v8::Value>& info)
@@ -3723,6 +9470,9 @@ struct v8_dom_runtime::implementation final {
             ? iterator->second
             : node->tag == "input" ? std::string("text")
             : node->tag == "button" ? std::string("submit")
+            : node->tag == "select" && node->attributes.contains("multiple")
+                ? std::string("select-multiple")
+            : node->tag == "select" ? std::string("select-one")
             : std::string{};
         info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
     }
@@ -3732,8 +9482,480 @@ struct v8_dom_runtime::implementation final {
         v8::Local<v8::Value> value,
         const v8::PropertyCallbackInfo<void>& info)
     {
+        auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.Holder());
-        if (node != nullptr) node->attributes["type"] = to_utf8(info.GetIsolate(), value);
+        if (node == nullptr) return;
+        node->attributes["type"] = to_utf8(info.GetIsolate(), value);
+        self->recascade_connected_subtree(*node);
+    }
+
+    static void get_reflected_string_attribute(
+        v8::Local<v8::Name> property,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        auto name = to_utf8(info.GetIsolate(), property);
+        if (!node->xml_mode) name = lower_html_name(name);
+        if (!node->xml_mode && name == "htmlfor") name = "for";
+        const auto found = node->attributes.find(name);
+        info.GetReturnValue().Set(js_string(
+            info.GetIsolate(),
+            found == node->attributes.end() ? "" : found->second.c_str()));
+    }
+
+    static void set_reflected_string_attribute(
+        v8::Local<v8::Name> property,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        auto name = to_utf8(info.GetIsolate(), property);
+        if (!node->xml_mode) name = lower_html_name(name);
+        if (!node->xml_mode && name == "htmlfor") name = "for";
+        node->attributes[name] = to_utf8(info.GetIsolate(), value);
+        self->document.mark_dirty();
+    }
+
+    static void get_default_value(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || (node->tag != "input" && node->tag != "textarea")) return;
+        const auto authored = node->attributes.find("value");
+        info.GetReturnValue().Set(js_dom_string(
+            info.GetIsolate(),
+            authored == node->attributes.end() ? std::string{} : authored->second));
+    }
+
+    static void set_default_value(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || (node->tag != "input" && node->tag != "textarea")) return;
+        node->attributes["value"] = to_wtf8(info.GetIsolate(), value);
+        self->document.mark_dirty();
+    }
+
+    static void get_max_length(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || (node->tag != "input" && node->tag != "textarea")) return;
+        const auto authored = node->attributes.find("maxlength");
+        const auto value = authored == node->attributes.end()
+            ? -1
+            : static_cast<int>(std::strtol(authored->second.c_str(), nullptr, 10));
+        info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), value));
+    }
+
+    static void set_max_length(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || (node->tag != "input" && node->tag != "textarea")) return;
+        node->attributes["maxlength"] = std::to_string(
+            value->Int32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(-1));
+        self->document.mark_dirty();
+    }
+
+    static void get_read_only(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || (node->tag != "input" && node->tag != "textarea")) return;
+        info.GetReturnValue().Set(v8::Boolean::New(
+            info.GetIsolate(), node->attributes.contains("readonly")));
+    }
+
+    static void set_read_only(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        set_boolean_attribute(value, info, "readonly");
+    }
+
+    static void collect_descendants_by_tag(
+        dom_node& root,
+        std::string_view tag,
+        std::vector<dom_node*>& result)
+    {
+        for (auto* child : root.children) {
+            if (child == nullptr) continue;
+            if (child->tag == tag) result.push_back(child);
+            collect_descendants_by_tag(*child, tag, result);
+        }
+    }
+
+    static std::string option_value(const dom_node& option)
+    {
+        const auto authored = option.attributes.find("value");
+        if (authored != option.attributes.end()) return authored->second;
+        std::string value;
+        append_node_text(option, value);
+        std::string normalized;
+        normalized.reserve(value.size());
+        auto pending_space = false;
+        const auto ascii_whitespace = [](unsigned char character) {
+            return character == ' ' || character == '\t' || character == '\n'
+                || character == '\f' || character == '\r';
+        };
+        for (const auto character : value) {
+            if (ascii_whitespace(static_cast<unsigned char>(character))) {
+                pending_space = !normalized.empty();
+                continue;
+            }
+            if (pending_space) normalized.push_back(' ');
+            normalized.push_back(character);
+            pending_space = false;
+        }
+        return normalized;
+    }
+
+    static dom_node* containing_select(dom_node& option)
+    {
+        auto* select = option.parent;
+        while (select != nullptr && select->tag != "select") select = select->parent;
+        return select;
+    }
+
+    static bool option_is_selected(dom_node& option)
+    {
+        if (option.selectedness_initialized) return option.selectedness;
+        auto* select = containing_select(option);
+        if (select == nullptr) return option.attributes.contains("selected");
+        if (select->selection_explicitly_empty) return false;
+        std::vector<dom_node*> options;
+        collect_descendants_by_tag(*select, "option", options);
+        const auto has_live_selection = std::any_of(
+            options.begin(), options.end(), [](const auto* candidate) {
+                return candidate != nullptr
+                    && candidate->selectedness_initialized
+                    && candidate->selectedness;
+            });
+        if (has_live_selection) return false;
+        const auto authored = std::find_if(
+            options.begin(),
+            options.end(),
+            [](const auto* candidate) {
+                return candidate != nullptr && candidate->attributes.contains("selected");
+            });
+        if (authored != options.end()) {
+            return select->attributes.contains("multiple")
+                ? option.attributes.contains("selected")
+                : *authored == &option;
+        }
+        if (select->attributes.contains("multiple")) return false;
+        return !options.empty() && options.front() == &option;
+    }
+
+    static void set_select_selected_index(dom_node& select, int32_t selected)
+    {
+        std::vector<dom_node*> options;
+        collect_descendants_by_tag(select, "option", options);
+        const auto valid = selected >= 0 && static_cast<size_t>(selected) < options.size();
+        select.selection_explicitly_empty = !valid;
+        for (uint32_t index = 0; index < options.size(); ++index) {
+            options[index]->selectedness_initialized = true;
+            options[index]->selectedness = valid && static_cast<int32_t>(index) == selected;
+        }
+    }
+
+    static void get_select_options(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || node->tag != "select") return;
+        std::vector<dom_node*> options;
+        collect_descendants_by_tag(*node, "option", options);
+        auto local_context = info.GetIsolate()->GetCurrentContext();
+        auto result = v8::Array::New(info.GetIsolate(), static_cast<int>(options.size()));
+        for (uint32_t index = 0; index < options.size(); ++index) {
+            result->Set(local_context, index, self->wrap_node(*options[index])).Check();
+        }
+        info.GetReturnValue().Set(result);
+    }
+
+    static bool is_form_associated_control(const dom_node& node)
+    {
+        return node.tag == "button" || node.tag == "fieldset" || node.tag == "input"
+            || node.tag == "object" || node.tag == "output" || node.tag == "select"
+            || node.tag == "textarea";
+    }
+
+    static void collect_form_controls(dom_node& root, std::vector<dom_node*>& result)
+    {
+        for (auto* child : root.children) {
+            if (child == nullptr) continue;
+            if (is_form_associated_control(*child)) result.push_back(child);
+            collect_form_controls(*child, result);
+        }
+    }
+
+    static void get_form_elements(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || node->tag != "form") return;
+        std::vector<dom_node*> controls;
+        collect_form_controls(*node, controls);
+        auto local_context = info.GetIsolate()->GetCurrentContext();
+        auto result = v8::Array::New(info.GetIsolate(), static_cast<int>(controls.size()));
+        for (uint32_t index = 0; index < controls.size(); ++index) {
+            result->Set(local_context, index, self->wrap_node(*controls[index])).Check();
+        }
+        info.GetReturnValue().Set(result);
+    }
+
+    static void get_selected_index(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || node->tag != "select") return;
+        std::vector<dom_node*> options;
+        collect_descendants_by_tag(*node, "option", options);
+        int32_t selected = -1;
+        for (uint32_t index = 0; index < options.size(); ++index) {
+            if (!option_is_selected(*options[index])) continue;
+            selected = static_cast<int32_t>(index);
+            break;
+        }
+        info.GetReturnValue().Set(v8::Integer::New(info.GetIsolate(), selected));
+    }
+
+    static void set_selected_index(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || node->tag != "select") return;
+        const auto selected = value->Int32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(-1);
+        set_select_selected_index(*node, selected);
+        self->document.mark_dirty();
+    }
+
+    static void get_form_value(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        if (node->tag == "option") {
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), option_value(*node).c_str()));
+            return;
+        }
+        if (node->tag == "select") {
+            std::vector<dom_node*> options;
+            collect_descendants_by_tag(*node, "option", options);
+            dom_node* selected = nullptr;
+            for (auto* option : options) {
+                if (!option_is_selected(*option)) continue;
+                selected = option;
+                break;
+            }
+            const auto value = selected == nullptr ? std::string{} : option_value(*selected);
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
+            return;
+        }
+        if (node->tag == "progress" || node->tag == "meter") {
+            const auto authored = node->attributes.find("value");
+            const auto numeric = authored == node->attributes.end()
+                ? 0.0
+                : std::strtod(authored->second.c_str(), nullptr);
+            info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), numeric));
+            return;
+        }
+        if (node->tag == "input") {
+            const auto type = node->attributes.find("type");
+            if ((type != node->attributes.end())
+                && (lower_html_name(type->second) == "checkbox"
+                    || lower_html_name(type->second) == "radio")
+                && !node->attributes.contains("value")
+                && !node->form_value_initialized) {
+                info.GetReturnValue().Set(js_string(info.GetIsolate(), "on"));
+                return;
+            }
+        }
+        if (!node->form_value_initialized) {
+            const auto value = node->attributes.find("value");
+            if (value != node->attributes.end()) {
+                node->form_value = value->second;
+            }
+            node->form_value_initialized = true;
+            node->selection_start = node->form_value.size();
+            node->selection_end = node->form_value.size();
+            node->selection_direction = "none";
+        }
+        info.GetReturnValue().Set(js_string(info.GetIsolate(), node->form_value.c_str()));
+    }
+
+    static void get_form_owner(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        dom_node* owner = nullptr;
+        const auto explicit_owner = node->attributes.find("form");
+        if (explicit_owner != node->attributes.end() && !explicit_owner->second.empty()) {
+            auto* candidate = self->document.find_by_id(explicit_owner->second);
+            if (candidate != nullptr && candidate->tag == "form") owner = candidate;
+        }
+        if (owner == nullptr && explicit_owner == node->attributes.end()) {
+            for (auto* ancestor = node->parent; ancestor != nullptr; ancestor = ancestor->parent) {
+                if (ancestor->tag != "form") continue;
+                owner = ancestor;
+                break;
+            }
+        }
+        info.GetReturnValue().Set(owner == nullptr
+            ? v8::Local<v8::Value>(v8::Null(info.GetIsolate()))
+            : v8::Local<v8::Value>(self->wrap_node(*owner)));
+    }
+
+    static void set_form_value(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        if (node->tag == "option") {
+            node->attributes["value"] = value->IsNullOrUndefined()
+                ? std::string{}
+                : to_utf8(info.GetIsolate(), value);
+            self->document.mark_dirty();
+            return;
+        }
+        if (node->tag == "select") {
+            const auto expected = value->IsNullOrUndefined()
+                ? std::string{}
+                : to_utf8(info.GetIsolate(), value);
+            std::vector<dom_node*> options;
+            collect_descendants_by_tag(*node, "option", options);
+            bool matched = false;
+            for (uint32_t index = 0; index < options.size(); ++index) {
+                auto* option = options[index];
+                if (!matched && option_value(*option) == expected) {
+                    option->selectedness_initialized = true;
+                    option->selectedness = true;
+                    matched = true;
+                } else {
+                    option->selectedness_initialized = true;
+                    option->selectedness = false;
+                }
+            }
+            node->selection_explicitly_empty = !matched;
+            self->document.mark_dirty();
+            return;
+        }
+        if (node->tag == "progress" || node->tag == "meter") {
+            node->attributes["value"] = to_utf8(info.GetIsolate(), value);
+            self->document.mark_dirty();
+            return;
+        }
+        node->form_value = value->IsNullOrUndefined()
+            ? std::string{}
+            : to_utf8(info.GetIsolate(), value);
+        node->form_value_initialized = true;
+        node->selection_start = std::min(node->selection_start, node->form_value.size());
+        node->selection_end = std::min(node->selection_end, node->form_value.size());
+        if (node->selection_start == node->selection_end) node->selection_direction = "none";
+        self->document.mark_dirty();
+    }
+
+    static void get_selection_start(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node != nullptr) {
+            info.GetReturnValue().Set(v8::Integer::New(
+                info.GetIsolate(), static_cast<int32_t>(node->selection_start)));
+        }
+    }
+
+    static void set_selection_start(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        const auto index = value->Int32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(0);
+        node->selection_start = std::min<size_t>(std::max(0, index), node->form_value.size());
+        node->selection_end = std::max(node->selection_end, node->selection_start);
+        if (node->selection_start == node->selection_end) node->selection_direction = "none";
+    }
+
+    static void get_selection_end(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node != nullptr) {
+            info.GetReturnValue().Set(v8::Integer::New(
+                info.GetIsolate(), static_cast<int32_t>(node->selection_end)));
+        }
+    }
+
+    static void set_selection_end(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        const auto index = value->Int32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(0);
+        node->selection_end = std::min<size_t>(std::max(0, index), node->form_value.size());
+        node->selection_start = std::min(node->selection_start, node->selection_end);
+        if (node->selection_start == node->selection_end) node->selection_direction = "none";
+    }
+
+    static void get_selection_direction(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node != nullptr) {
+            info.GetReturnValue().Set(js_string(
+                info.GetIsolate(), node->selection_direction.c_str()));
+        }
+    }
+
+    static void set_selection_direction(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        const auto direction = to_utf8(info.GetIsolate(), value);
+        node->selection_direction = direction == "forward" || direction == "backward"
+            ? direction
+            : "none";
+        if (node->selection_start == node->selection_end) node->selection_direction = "none";
     }
 
     static void get_boolean_attribute(
@@ -3761,7 +9983,13 @@ struct v8_dom_runtime::implementation final {
 
     static void get_checked(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
     {
-        get_boolean_attribute(info, "checked");
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || node->tag != "input") return;
+        info.GetReturnValue().Set(v8::Boolean::New(
+            info.GetIsolate(),
+            node->checkedness_initialized
+                ? node->checkedness
+                : node->attributes.contains("checked")));
     }
 
     static void set_checked(
@@ -3769,12 +9997,20 @@ struct v8_dom_runtime::implementation final {
         v8::Local<v8::Value> value,
         const v8::PropertyCallbackInfo<void>& info)
     {
-        set_boolean_attribute(value, info, "checked");
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || node->tag != "input") return;
+        node->checkedness_initialized = true;
+        node->checkedness = value->BooleanValue(info.GetIsolate());
+        self->document.mark_dirty();
     }
 
     static void get_selected(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
     {
-        get_boolean_attribute(info, "selected");
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr || node->tag != "option") return;
+        info.GetReturnValue().Set(v8::Boolean::New(
+            info.GetIsolate(), option_is_selected(*node)));
     }
 
     static void set_selected(
@@ -3784,25 +10020,81 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.Holder());
-        if (node == nullptr) return;
+        if (node == nullptr || node->tag != "option") return;
+        auto* select = containing_select(*node);
         if (!value->BooleanValue(info.GetIsolate())) {
-            node->attributes.erase("selected");
-            self->recascade_connected_subtree(*node);
+            node->selectedness_initialized = true;
+            node->selectedness = false;
+            if (select != nullptr) {
+                std::vector<dom_node*> options;
+                collect_descendants_by_tag(*select, "option", options);
+                select->selection_explicitly_empty = std::none_of(
+                    options.begin(), options.end(), [](auto* option) {
+                        return option != nullptr && option_is_selected(*option);
+                    });
+            }
+            self->recascade_connected_subtree(*node, "style.setProperty-custom");
             return;
         }
-        auto* select = node->parent;
-        while (select != nullptr && select->tag != "select") select = select->parent;
-        if (select != nullptr) {
+        if (select != nullptr && !select->attributes.contains("multiple")) {
             const auto clear_selected = [&](const auto& recurse, dom_node& root) -> void {
-                if (root.tag == "option") root.attributes.erase("selected");
+                if (root.tag == "option") {
+                    root.selectedness_initialized = true;
+                    root.selectedness = false;
+                }
                 for (auto* child : root.children) {
                     if (child != nullptr) recurse(recurse, *child);
                 }
             };
             clear_selected(clear_selected, *select);
         }
-        node->attributes["selected"] = std::string{};
+        node->selectedness_initialized = true;
+        node->selectedness = true;
+        if (select != nullptr) select->selection_explicitly_empty = false;
         self->recascade_connected_subtree(*node);
+    }
+
+    static void form_reset(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* form = unwrap_node(info.This());
+        if (form == nullptr || form->tag != "form") return;
+        const auto reset_subtree = [&](const auto& recurse, dom_node& node) -> void {
+            if (node.tag == "select") node.selection_explicitly_empty = false;
+            if (node.tag == "option") {
+                node.selectedness_initialized = false;
+                node.selectedness = false;
+            }
+            if (node.tag == "input" || node.tag == "textarea") {
+                const auto authored = node.attributes.find("value");
+                node.form_value = authored == node.attributes.end()
+                    ? std::string{}
+                    : authored->second;
+                node.form_value_initialized = true;
+                if (node.tag == "input") {
+                    node.checkedness_initialized = false;
+                    node.checkedness = false;
+                }
+            }
+            for (auto* child : node.children) {
+                if (child != nullptr) recurse(recurse, *child);
+            }
+        };
+        reset_subtree(reset_subtree, *form);
+        self->document.mark_dirty();
+    }
+
+    static void get_multiple(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        get_boolean_attribute(info, "multiple");
+    }
+
+    static void set_multiple(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        set_boolean_attribute(value, info, "multiple");
     }
 
     static void get_disabled(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
@@ -3831,9 +10123,14 @@ struct v8_dom_runtime::implementation final {
 
     static void set_element_src(v8::Local<v8::Name>, v8::Local<v8::Value> value, const v8::PropertyCallbackInfo<void>& info)
     {
+        auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.Holder());
         if (node == nullptr) return;
         node->attributes["src"] = to_utf8(info.GetIsolate(), value);
+        if (node->tag == "iframe") {
+            self->enqueue_iframe_hydration_if_needed(*node);
+            return;
+        }
         if (node->tag != "img") return;
         auto local_context = info.GetIsolate()->GetCurrentContext();
         info.Holder()->Set(local_context, js_string(info.GetIsolate(), "complete"), v8::True(info.GetIsolate())).Check();
@@ -3850,15 +10147,60 @@ struct v8_dom_runtime::implementation final {
         if (node != nullptr) node->attributes["href"] = to_utf8(info.GetIsolate(), value);
     }
 
-    static void canvas_no_op(const v8::FunctionCallbackInfo<v8::Value>&)
+    static void get_anchor_hash(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
     {
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        const auto iterator = node->attributes.find("href");
+        if (iterator == node->attributes.end()) {
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), ""));
+            return;
+        }
+        const auto fragment = iterator->second.find('#');
+        const auto value = fragment == std::string::npos
+            ? std::string{}
+            : iterator->second.substr(fragment);
+        info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
+    }
+
+    static void set_anchor_hash(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        auto& href = node->attributes["href"];
+        const auto fragment = href.find('#');
+        if (fragment != std::string::npos) href.erase(fragment);
+        auto next = to_utf8(info.GetIsolate(), value);
+        if (!next.empty() && next.front() != '#') next.insert(next.begin(), '#');
+        href += next;
+        self->document.mark_dirty();
+    }
+
+    static void canvas_no_op(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        const auto feature = info.Data().IsEmpty()
+            ? std::string("unknown")
+            : to_utf8(info.GetIsolate(), info.Data());
+        self->record_feature(
+            "canvas",
+            feature,
+            "unsupported",
+            {},
+            "native-binding");
     }
 
     static void canvas_text_no_op(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "fillText");
         if (state == nullptr || state->node == nullptr) return;
         ++state->node->canvas_fill_text_calls;
         if (info.Length() < 3) return;
@@ -3877,7 +10219,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "strokeText");
         if (state == nullptr || state->node == nullptr) return;
         ++state->node->canvas_stroke_text_calls;
         if (info.Length() < 3) return;
@@ -3892,8 +10234,18 @@ struct v8_dom_runtime::implementation final {
              info[2]->NumberValue(context).FromMaybe(0)});
     }
 
-    static canvas_state* canvas_path_state(const v8::FunctionCallbackInfo<v8::Value>& info)
+    static canvas_state* canvas_path_state(
+        const v8::FunctionCallbackInfo<v8::Value>& info,
+        const char* feature = nullptr)
     {
+        if (feature != nullptr) {
+            current(info.GetIsolate())->record_feature(
+                "canvas",
+                std::string("CanvasRenderingContext2D.") + feature,
+                "supported",
+                {},
+                "native-binding");
+        }
         return info.Data()->IsExternal()
             ? static_cast<canvas_state*>(info.Data().As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault))
             : nullptr;
@@ -3979,6 +10331,20 @@ struct v8_dom_runtime::implementation final {
         for (const auto argument : arguments) {
             if (index == 8U) break;
             command.data.values[index++] = argument;
+        }
+        node.canvas_commands.push_back(command);
+    }
+
+    static void canvas_append_line_dash_command(
+        dom_node& node,
+        const std::vector<double>& segments)
+    {
+        htmlml_canvas_command command{};
+        command.kind = static_cast<uint32_t>(canvas_command_kind::set_line_dash);
+        command.flags = static_cast<uint32_t>(segments.size() + 1U);
+        command.data.values[0] = static_cast<double>(segments.size());
+        for (size_t index = 0; index < segments.size() && index < 7U; ++index) {
+            command.data.values[index + 1U] = segments[index];
         }
         node.canvas_commands.push_back(command);
     }
@@ -4130,6 +10496,10 @@ struct v8_dom_runtime::implementation final {
             "lineDashOffset",
             0,
             emitted.line_dash_offset);
+        if ((first && !state.line_dash.empty()) || state.line_dash != emitted.line_dash) {
+            canvas_append_line_dash_command(*state.node, state.line_dash);
+            emitted.line_dash = state.line_dash;
+        }
         emit_string(canvas_command_kind::font, "font", "10px sans-serif", emitted.font);
         emit_string(canvas_command_kind::text_align, "textAlign", "start", emitted.text_align);
         emit_string(
@@ -4199,6 +10569,7 @@ struct v8_dom_runtime::implementation final {
         emit_number(canvas_command_kind::miter_limit, snapshot.miter_limit);
         emit_number(canvas_command_kind::global_alpha, snapshot.global_alpha);
         emit_number(canvas_command_kind::line_dash_offset, snapshot.line_dash_offset);
+        canvas_append_line_dash_command(node, snapshot.line_dash);
         emit_string(canvas_command_kind::font, snapshot.font);
         emit_string(canvas_command_kind::text_align, snapshot.text_align);
         emit_string(canvas_command_kind::text_baseline, snapshot.text_baseline);
@@ -4249,7 +10620,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_state));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "save");
         if (state == nullptr) return;
         canvas_emit_paint_state(info, *state);
         canvas_append_command(*state->node, canvas_command_kind::save);
@@ -4282,7 +10653,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_state));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "restore");
         if (state == nullptr || state->stack.empty()) return;
         auto snapshot = std::move(state->stack.back());
         state->stack.pop_back();
@@ -4290,6 +10661,9 @@ struct v8_dom_runtime::implementation final {
         state->transform = snapshot.transform;
         state->line_dash = snapshot.line_dash;
         state->has_clip = snapshot.has_clip;
+        if (state->has_emitted_paint_state) {
+            state->emitted_paint_state.line_dash = state->line_dash;
+        }
         const auto context = info.GetIsolate()->GetCurrentContext();
         info.This()->Set(context, js_string(info.GetIsolate(), "fillStyle"), js_string(info.GetIsolate(), snapshot.fill_style.c_str())).Check();
         info.This()->Set(context, js_string(info.GetIsolate(), "strokeStyle"), js_string(info.GetIsolate(), snapshot.stroke_style.c_str())).Check();
@@ -4320,7 +10694,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_transform));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "scale");
         if (state == nullptr || info.Length() < 2) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
         const auto x = info[0]->NumberValue(context).FromMaybe(1);
@@ -4334,7 +10708,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_transform));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "translate");
         if (state == nullptr || info.Length() < 2) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
         const auto x = info[0]->NumberValue(context).FromMaybe(0);
@@ -4348,7 +10722,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_transform));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "rotate");
         if (state == nullptr || info.Length() < 1) return;
         const auto angle = info[0]->NumberValue(info.GetIsolate()->GetCurrentContext()).FromMaybe(0);
         canvas_append_command(*state->node, canvas_command_kind::rotate, {angle});
@@ -4376,7 +10750,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_transform));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "transform");
         if (state == nullptr) return;
         const auto value = canvas_transform_arguments(info);
         canvas_append_command(*state->node, canvas_command_kind::transform, {
@@ -4388,7 +10762,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_transform));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "setTransform");
         if (state == nullptr) return;
         state->transform = canvas_transform_arguments(info);
         canvas_append_command(*state->node, canvas_command_kind::set_transform, {
@@ -4400,7 +10774,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_transform));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "resetTransform");
         if (state == nullptr) return;
         state->transform = {};
         canvas_append_command(*state->node, canvas_command_kind::reset_transform);
@@ -4410,7 +10784,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "beginPath");
         if (state == nullptr) return;
         canvas_append_command(*state->node, canvas_command_kind::begin_path);
         state->path.clear();
@@ -4421,7 +10795,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "moveTo");
         if (state == nullptr || info.Length() < 2) return;
         auto context = info.GetIsolate()->GetCurrentContext();
         const auto authored_x = info[0]->NumberValue(context).FromMaybe(0);
@@ -4442,7 +10816,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "lineTo");
         if (state == nullptr || info.Length() < 2) return;
         auto context = info.GetIsolate()->GetCurrentContext();
         const auto authored_x = info[0]->NumberValue(context).FromMaybe(0);
@@ -4467,7 +10841,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "closePath");
         if (state == nullptr || !state->has_current) return;
         canvas_append_command(*state->node, canvas_command_kind::close_path);
         state->path.push_back({state->current_x, state->current_y, state->start_x, state->start_y});
@@ -4479,7 +10853,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "rect");
         if (state == nullptr || info.Length() < 4) return;
         auto context = info.GetIsolate()->GetCurrentContext();
         const auto x = info[0]->NumberValue(context).FromMaybe(0);
@@ -4518,7 +10892,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "quadraticCurveTo");
         if (state == nullptr || info.Length() < 4 || !state->has_current) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
         const auto control_x = info[0]->NumberValue(context).FromMaybe(0);
@@ -4552,7 +10926,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "bezierCurveTo");
         if (state == nullptr || info.Length() < 6 || !state->has_current) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
         const auto authored_control1_x = info[0]->NumberValue(context).FromMaybe(0);
@@ -4602,7 +10976,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "arc");
         if (state == nullptr || info.Length() < 5) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
         const auto center_x = info[0]->NumberValue(context).FromMaybe(0);
@@ -4641,7 +11015,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "arcTo");
         if (state == nullptr || info.Length() < 5) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
         const auto authored_x1 = info[0]->NumberValue(context).FromMaybe(0);
@@ -4743,27 +11117,89 @@ struct v8_dom_runtime::implementation final {
         }
     }
 
+    static bool canvas_emit_path_2d(
+        const v8::FunctionCallbackInfo<v8::Value>& info,
+        canvas_state& state,
+        canvas_command_kind kind,
+        bool even_odd)
+    {
+        if (info.Length() == 0 || !info[0]->IsObject()) return false;
+        const auto context = info.GetIsolate()->GetCurrentContext();
+        const auto path = info[0].As<v8::Object>();
+        v8::Local<v8::Value> entries_value;
+        if (path->Get(
+                context,
+                js_string(info.GetIsolate(), "__htmlmlSvgPathEntries")).ToLocal(&entries_value)
+            && entries_value->IsArray()) {
+            const auto entries = entries_value.As<v8::Array>();
+            for (uint32_t index = 0; index < entries->Length(); ++index) {
+                v8::Local<v8::Value> entry_value;
+                if (!entries->Get(context, index).ToLocal(&entry_value)
+                    || !entry_value->IsObject()) continue;
+                const auto entry = entry_value.As<v8::Object>();
+                v8::Local<v8::Value> data_value;
+                if (!entry->Get(
+                        context,
+                        js_string(info.GetIsolate(), "data")).ToLocal(&data_value)
+                    || !data_value->IsString()) continue;
+                const auto number = [&](const char* name, double fallback) {
+                    v8::Local<v8::Value> value;
+                    if (!entry->Get(
+                            context,
+                            js_string(info.GetIsolate(), name)).ToLocal(&value)
+                        || !value->IsNumber()) return fallback;
+                    const auto result = value->NumberValue(context).FromMaybe(fallback);
+                    return std::isfinite(result) ? result : fallback;
+                };
+                canvas_emit_paint_state(info, state);
+                canvas_append_resource_command(
+                    *state.node,
+                    kind,
+                    canvas_intern_string(
+                        *state.node,
+                        to_utf8(info.GetIsolate(), data_value)),
+                    {number("a", 1), number("b", 0), number("c", 0),
+                     number("d", 1), number("e", 0), number("f", 0)});
+                if (even_odd) {
+                    state.node->canvas_commands.back().flags |=
+                        HTMLML_CANVAS_COMMAND_FLAG_EVEN_ODD;
+                }
+            }
+            // Empty Path2D arguments also must not paint the current context path.
+            return true;
+        }
+        v8::Local<v8::Value> path_data;
+        if (path->Get(
+                context,
+                js_string(info.GetIsolate(), "__htmlmlSvgPathData")).ToLocal(&path_data)
+            && path_data->IsString()) {
+            canvas_emit_paint_state(info, state);
+            canvas_append_resource_command(
+                *state.node,
+                kind,
+                canvas_intern_string(*state.node, to_utf8(info.GetIsolate(), path_data)),
+                {1, 0, 0, 1, 0, 0});
+            if (even_odd) {
+                state.node->canvas_commands.back().flags |=
+                    HTMLML_CANVAS_COMMAND_FLAG_EVEN_ODD;
+            }
+        }
+        // An object selects the Path2D overload, never the current-path overload.
+        return true;
+    }
+
     static void canvas_stroke(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "stroke");
         if (state == nullptr || state->node == nullptr) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
-        if (info.Length() > 0 && info[0]->IsObject()) {
-            v8::Local<v8::Value> path_data;
-            if (info[0].As<v8::Object>()->Get(
-                    context,
-                    js_string(info.GetIsolate(), "__htmlmlSvgPathData")).ToLocal(&path_data)
-                && path_data->IsString()) {
-                canvas_emit_paint_state(info, *state);
-                canvas_append_resource_command(
-                    *state->node,
-                    canvas_command_kind::stroke_svg_path,
-                    canvas_intern_string(*state->node, to_utf8(info.GetIsolate(), path_data)));
-                return;
-            }
-        }
+        if (canvas_emit_path_2d(
+                info,
+                *state,
+                canvas_command_kind::stroke_svg_path,
+                false)) return;
         if (state->path.empty()) return;
         canvas_emit_paint_state(info, *state);
         canvas_append_command(*state->node, canvas_command_kind::stroke);
@@ -4845,7 +11281,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "drawImage");
         if (state == nullptr || state->node == nullptr) return;
         ++state->node->canvas_draw_image_calls;
         if (info.Length() < 3 || !info[0]->IsObject()) {
@@ -4961,27 +11397,28 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "fill");
         if (state == nullptr || state->node == nullptr) return;
         ++state->node->canvas_fill_calls;
+        const auto fill_rule_index = info.Length() > 0 && info[0]->IsObject() ? 1 : 0;
+        const auto even_odd = info.Length() > fill_rule_index
+            && info[fill_rule_index]->IsString()
+            && to_utf8(info.GetIsolate(), info[fill_rule_index]) == "evenodd";
         if (info.Length() > 0 && info[0]->IsObject()) {
             ++state->node->canvas_path_argument_fill_calls;
-            v8::Local<v8::Value> path_data;
-            if (info[0].As<v8::Object>()->Get(
-                    info.GetIsolate()->GetCurrentContext(),
-                    js_string(info.GetIsolate(), "__htmlmlSvgPathData")).ToLocal(&path_data)
-                && path_data->IsString()) {
-                canvas_emit_paint_state(info, *state);
-                canvas_append_resource_command(
-                    *state->node,
+            if (canvas_emit_path_2d(
+                    info,
+                    *state,
                     canvas_command_kind::fill_svg_path,
-                    canvas_intern_string(*state->node, to_utf8(info.GetIsolate(), path_data)));
-                return;
-            }
+                    even_odd)) return;
         }
         if (state->path.empty()) return;
         canvas_emit_paint_state(info, *state);
         canvas_append_command(*state->node, canvas_command_kind::fill);
+        if (even_odd) {
+            state->node->canvas_commands.back().flags |=
+                HTMLML_CANVAS_COMMAND_FLAG_EVEN_ODD;
+        }
         const auto color = canvas_color(info, "fillStyle", 0x000000FFU);
         constexpr double epsilon = 0.01;
 
@@ -5076,7 +11513,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_path));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "clip");
         if (state == nullptr || state->node == nullptr) return;
         canvas_append_command(*state->node, canvas_command_kind::clip);
         state->has_clip = true;
@@ -5086,7 +11523,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "fillRect");
         if (state == nullptr || state->node == nullptr || info.Length() < 4) return;
         ++state->node->canvas_fill_rect_calls;
         const auto context = info.GetIsolate()->GetCurrentContext();
@@ -5163,7 +11600,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "strokeRect");
         if (state == nullptr || state->node == nullptr || info.Length() < 4) return;
         const auto context = info.GetIsolate()->GetCurrentContext();
         const auto x = info[0]->NumberValue(context).FromMaybe(0);
@@ -5196,7 +11633,7 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::canvas_draw));
-        auto* state = canvas_path_state(info);
+        auto* state = canvas_path_state(info, "clearRect");
         if (state == nullptr || state->node == nullptr || info.Length() < 4) return;
         ++state->node->canvas_clear_rect_calls;
         auto* node = state->node;
@@ -5264,16 +11701,113 @@ struct v8_dom_runtime::implementation final {
 
     static void canvas_true(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        auto* self = current(info.GetIsolate());
+        const auto feature = info.Data().IsEmpty()
+            ? std::string("CanvasRenderingContext2D.hitTest")
+            : to_utf8(info.GetIsolate(), info.Data());
+        self->record_feature(
+            "canvas", feature, "unsupported", {}, "native-binding");
         info.GetReturnValue().Set(v8::False(info.GetIsolate()));
+    }
+
+    static void canvas_set_line_dash(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        binding_callback_timer binding_timer(self->profile(binding_category::canvas_state));
+        auto* state = canvas_path_state(info);
+        if (state == nullptr || state->node == nullptr || info.Length() == 0
+            || !info[0]->IsObject()) {
+            self->record_feature(
+                "canvas",
+                "CanvasRenderingContext2D.setLineDash",
+                "invalid-authoring",
+                "a sequence argument is required",
+                "native-binding");
+            return;
+        }
+        const auto context = info.GetIsolate()->GetCurrentContext();
+        const auto values = info[0].As<v8::Object>();
+        v8::Local<v8::Value> length_value;
+        if (!values->Get(context, js_string(info.GetIsolate(), "length")).ToLocal(&length_value)) {
+            self->record_feature(
+                "canvas",
+                "CanvasRenderingContext2D.setLineDash",
+                "invalid-authoring",
+                "the sequence length could not be read",
+                "native-binding");
+            return;
+        }
+        const auto length = length_value->Uint32Value(context).FromMaybe(0);
+        std::vector<double> segments;
+        segments.reserve(length * (length % 2U == 0U ? 1U : 2U));
+        for (uint32_t index = 0; index < length; ++index) {
+            v8::Local<v8::Value> value;
+            if (!values->Get(context, index).ToLocal(&value)) {
+                self->record_feature(
+                    "canvas",
+                    "CanvasRenderingContext2D.setLineDash",
+                    "invalid-authoring",
+                    "a sequence item could not be read",
+                    "native-binding");
+                return;
+            }
+            const auto segment = value->NumberValue(context).FromMaybe(-1);
+            if (!std::isfinite(segment) || segment < 0) {
+                self->record_feature(
+                    "canvas",
+                    "CanvasRenderingContext2D.setLineDash",
+                    "invalid-authoring",
+                    "segments must be finite and non-negative",
+                    "native-binding");
+                return;
+            }
+            segments.push_back(segment);
+        }
+        if (segments.size() % 2U != 0U) {
+            const auto original = segments;
+            segments.insert(segments.end(), original.begin(), original.end());
+        }
+        if (segments.size() > 7U) {
+            self->record_feature(
+                "canvas",
+                "CanvasRenderingContext2D.setLineDash",
+                "partially-supported",
+                "normalized patterns containing at most seven segments",
+                "native-binding");
+            return;
+        }
+        state->line_dash = std::move(segments);
+        self->record_feature(
+            "canvas",
+            "CanvasRenderingContext2D.setLineDash",
+            "supported",
+            {},
+            "native-binding");
     }
 
     static void canvas_get_line_dash(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
-        info.GetReturnValue().Set(v8::Array::New(info.GetIsolate()));
+        auto* state = canvas_path_state(info, "getLineDash");
+        const auto length = state == nullptr ? 0U : static_cast<uint32_t>(state->line_dash.size());
+        auto result = v8::Array::New(info.GetIsolate(), static_cast<int>(length));
+        const auto context = info.GetIsolate()->GetCurrentContext();
+        for (uint32_t index = 0; index < length; ++index) {
+            result->Set(
+                context,
+                index,
+                v8::Number::New(info.GetIsolate(), state->line_dash[index])).Check();
+        }
+        info.GetReturnValue().Set(result);
     }
 
     static void canvas_measure_text(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        current(info.GetIsolate())->record_feature(
+            "canvas",
+            "CanvasRenderingContext2D.measureText",
+            "partially-supported",
+            "approximate width only",
+            "native-binding");
         const auto text = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
         auto result = v8::Object::New(info.GetIsolate());
         result->Set(
@@ -5285,17 +11819,40 @@ struct v8_dom_runtime::implementation final {
 
     static void canvas_gradient(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        auto* self = current(info.GetIsolate());
+        const auto feature = info.Data().IsEmpty()
+            ? std::string("CanvasRenderingContext2D.createGradient")
+            : to_utf8(info.GetIsolate(), info.Data());
+        self->record_feature(
+            "canvas",
+            feature,
+            "partially-supported",
+            "gradient object construction without paint replay",
+            "native-binding");
         auto local_context = info.GetIsolate()->GetCurrentContext();
         auto result = v8::Object::New(info.GetIsolate());
         result->Set(
             local_context,
             js_string(info.GetIsolate(), "addColorStop"),
-            v8::Function::New(local_context, canvas_no_op).ToLocalChecked()).Check();
+            v8::Function::New(
+                local_context,
+                canvas_no_op,
+                js_string(info.GetIsolate(), "CanvasGradient.addColorStop")).ToLocalChecked()).Check();
         info.GetReturnValue().Set(result);
     }
 
     static void canvas_image_data(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        auto* self = current(info.GetIsolate());
+        const auto feature = info.Data().IsEmpty()
+            ? std::string("CanvasRenderingContext2D.imageData")
+            : to_utf8(info.GetIsolate(), info.Data());
+        self->record_feature(
+            "canvas",
+            feature,
+            "partially-supported",
+            "shape and zero-initialized pixel storage",
+            "native-binding");
         const auto width = info.Length() > 0 ? info[0]->Int32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(1) : 1;
         const auto height = info.Length() > 1 ? info[1]->Int32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(1) : 1;
         const auto byte_count = static_cast<size_t>(std::max(1, width) * std::max(1, height) * 4);
@@ -5316,9 +11873,16 @@ struct v8_dom_runtime::implementation final {
     {
         const char* no_ops[] = {
             "roundRect", "ellipse",
-            "setLineDash", "putImageData"};
+            "putImageData"};
         for (const auto* name : no_ops) {
-            result->Set(local_context, js_string(isolate, name), v8::Function::New(local_context, canvas_no_op).ToLocalChecked()).Check();
+            const auto feature_name = std::string("CanvasRenderingContext2D.") + name;
+            result->Set(
+                local_context,
+                js_string(isolate, name),
+                v8::Function::New(
+                    local_context,
+                    canvas_no_op,
+                    js_string(isolate, feature_name.c_str())).ToLocalChecked()).Check();
         }
         auto path_data = v8::External::New(isolate, &state, v8::kExternalPointerTypeTagDefault);
         result->Set(local_context, js_string(isolate, "fillText"), v8::Function::New(local_context, canvas_text_no_op, path_data).ToLocalChecked()).Check();
@@ -5348,14 +11912,15 @@ struct v8_dom_runtime::implementation final {
         result->Set(local_context, js_string(isolate, "stroke"), v8::Function::New(local_context, canvas_stroke, path_data).ToLocalChecked()).Check();
         result->Set(local_context, js_string(isolate, "clip"), v8::Function::New(local_context, canvas_clip, path_data).ToLocalChecked()).Check();
         result->Set(local_context, js_string(isolate, "measureText"), v8::Function::New(local_context, canvas_measure_text).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "createLinearGradient"), v8::Function::New(local_context, canvas_gradient).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "createRadialGradient"), v8::Function::New(local_context, canvas_gradient).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "createConicGradient"), v8::Function::New(local_context, canvas_gradient).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "getLineDash"), v8::Function::New(local_context, canvas_get_line_dash).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "isPointInPath"), v8::Function::New(local_context, canvas_true).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "isPointInStroke"), v8::Function::New(local_context, canvas_true).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "createImageData"), v8::Function::New(local_context, canvas_image_data).ToLocalChecked()).Check();
-        result->Set(local_context, js_string(isolate, "getImageData"), v8::Function::New(local_context, canvas_image_data).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "createLinearGradient"), v8::Function::New(local_context, canvas_gradient, js_string(isolate, "CanvasRenderingContext2D.createLinearGradient")).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "createRadialGradient"), v8::Function::New(local_context, canvas_gradient, js_string(isolate, "CanvasRenderingContext2D.createRadialGradient")).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "createConicGradient"), v8::Function::New(local_context, canvas_gradient, js_string(isolate, "CanvasRenderingContext2D.createConicGradient")).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "setLineDash"), v8::Function::New(local_context, canvas_set_line_dash, path_data).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "getLineDash"), v8::Function::New(local_context, canvas_get_line_dash, path_data).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "isPointInPath"), v8::Function::New(local_context, canvas_true, js_string(isolate, "CanvasRenderingContext2D.isPointInPath")).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "isPointInStroke"), v8::Function::New(local_context, canvas_true, js_string(isolate, "CanvasRenderingContext2D.isPointInStroke")).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "createImageData"), v8::Function::New(local_context, canvas_image_data, js_string(isolate, "CanvasRenderingContext2D.createImageData")).ToLocalChecked()).Check();
+        result->Set(local_context, js_string(isolate, "getImageData"), v8::Function::New(local_context, canvas_image_data, js_string(isolate, "CanvasRenderingContext2D.getImageData")).ToLocalChecked()).Check();
         result->Set(local_context, js_string(isolate, "canvas"), v8::Null(isolate)).Check();
         result->Set(local_context, js_string(isolate, "font"), js_string(isolate, "10px sans-serif")).Check();
         result->Set(local_context, js_string(isolate, "fillStyle"), js_string(isolate, "#000000")).Check();
@@ -5377,11 +11942,37 @@ struct v8_dom_runtime::implementation final {
             info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
             return;
         }
+        const auto requested = info.Length() > 0
+            ? to_utf8(info.GetIsolate(), info[0])
+            : std::string{};
+        if (requested != "2d") {
+            self->record_feature(
+                "canvas",
+                "HTMLCanvasElement.getContext:" + (requested.empty() ? std::string("missing") : requested),
+                "unsupported",
+                {},
+                "native-binding");
+            info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
+            return;
+        }
+        self->record_feature(
+            "canvas",
+            "HTMLCanvasElement.getContext:2d",
+            "supported",
+            {},
+            "native-binding");
         const auto key = self->wrapper_key(*node);
         const auto known = self->canvas_contexts.find(key);
-        if (known != self->canvas_contexts.end()) {
+        if (known != self->canvas_contexts.end() && !known->second.IsEmpty()) {
+            if (self->is_connected(*node) && known->second.IsWeak()) {
+                known->second.ClearWeak();
+            }
             info.GetReturnValue().Set(known->second.Get(info.GetIsolate()));
             return;
+        }
+        if (known != self->canvas_contexts.end()) {
+            self->canvas_contexts.erase(known);
+            self->canvas_states.erase(key);
         }
         auto local_context = info.GetIsolate()->GetCurrentContext();
         auto result = v8::Object::New(info.GetIsolate());
@@ -5391,25 +11982,230 @@ struct v8_dom_runtime::implementation final {
         self->canvas_states[key] = std::move(state);
         install_canvas_methods(info.GetIsolate(), local_context, result, *state_pointer);
         result->Set(local_context, js_string(info.GetIsolate(), "canvas"), info.This()).Check();
-        self->canvas_contexts[key].Reset(info.GetIsolate(), result);
+        auto& wrapper = self->canvas_contexts[key];
+        wrapper.Reset(info.GetIsolate(), result);
+        if (!self->is_connected(*node)) wrapper.SetWeak();
         info.GetReturnValue().Set(result);
+    }
+
+    static double object_number(
+        v8::Isolate* isolate,
+        v8::Local<v8::Context> context,
+        v8::Local<v8::Object> object,
+        const char* name,
+        double fallback)
+    {
+        v8::Local<v8::Value> value;
+        if (!object->Get(context, js_string(isolate, name)).ToLocal(&value)
+            || !value->IsNumber()) return fallback;
+        const auto result = value->NumberValue(context).FromMaybe(fallback);
+        return std::isfinite(result) ? result : fallback;
+    }
+
+    static void set_object_number(
+        v8::Isolate* isolate,
+        v8::Local<v8::Context> context,
+        v8::Local<v8::Object> object,
+        const char* name,
+        double value)
+    {
+        object->Set(
+            context,
+            js_string(isolate, name),
+            v8::Number::New(isolate, value)).Check();
+    }
+
+    static void path_2d_add_path(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        if (info.Length() == 0 || !info[0]->IsObject()) return;
+        current(info.GetIsolate())->record_feature(
+            "canvas", "Path2D.addPath", "supported", {}, "native-binding");
+        const auto isolate = info.GetIsolate();
+        const auto context = isolate->GetCurrentContext();
+        v8::Local<v8::Value> destination_value;
+        v8::Local<v8::Value> source_value;
+        if (!info.This()->Get(
+                context,
+                js_string(isolate, "__htmlmlSvgPathEntries")).ToLocal(&destination_value)
+            || !destination_value->IsArray()
+            || !info[0].As<v8::Object>()->Get(
+                context,
+                js_string(isolate, "__htmlmlSvgPathEntries")).ToLocal(&source_value)
+            || !source_value->IsArray()) return;
+        const auto destination = destination_value.As<v8::Array>();
+        const auto source = source_value.As<v8::Array>();
+        auto matrix = v8::Object::New(isolate);
+        if (info.Length() > 1 && info[1]->IsObject()) matrix = info[1].As<v8::Object>();
+        const auto ma = object_number(isolate, context, matrix, "a", 1);
+        const auto mb = object_number(isolate, context, matrix, "b", 0);
+        const auto mc = object_number(isolate, context, matrix, "c", 0);
+        const auto md = object_number(isolate, context, matrix, "d", 1);
+        const auto me = object_number(isolate, context, matrix, "e", 0);
+        const auto mf = object_number(isolate, context, matrix, "f", 0);
+        auto destination_index = destination->Length();
+        const auto source_length = source->Length();
+        for (uint32_t index = 0; index < source_length; ++index) {
+            v8::Local<v8::Value> source_entry_value;
+            if (!source->Get(context, index).ToLocal(&source_entry_value)
+                || !source_entry_value->IsObject()) continue;
+            const auto source_entry = source_entry_value.As<v8::Object>();
+            v8::Local<v8::Value> data;
+            if (!source_entry->Get(context, js_string(isolate, "data")).ToLocal(&data)
+                || !data->IsString()) continue;
+            const auto sa = object_number(isolate, context, source_entry, "a", 1);
+            const auto sb = object_number(isolate, context, source_entry, "b", 0);
+            const auto sc = object_number(isolate, context, source_entry, "c", 0);
+            const auto sd = object_number(isolate, context, source_entry, "d", 1);
+            const auto se = object_number(isolate, context, source_entry, "e", 0);
+            const auto sf = object_number(isolate, context, source_entry, "f", 0);
+            const auto entry = v8::Object::New(isolate);
+            entry->Set(context, js_string(isolate, "data"), data).Check();
+            set_object_number(isolate, context, entry, "a", ma * sa + mc * sb);
+            set_object_number(isolate, context, entry, "b", mb * sa + md * sb);
+            set_object_number(isolate, context, entry, "c", ma * sc + mc * sd);
+            set_object_number(isolate, context, entry, "d", mb * sc + md * sd);
+            set_object_number(isolate, context, entry, "e", ma * se + mc * sf + me);
+            set_object_number(isolate, context, entry, "f", mb * se + md * sf + mf);
+            destination->Set(context, destination_index++, entry).Check();
+        }
+    }
+
+    static void path_2d_arc(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        if (info.Length() < 5) return;
+        const auto isolate = info.GetIsolate();
+        const auto context = isolate->GetCurrentContext();
+        const auto center_x = info[0]->NumberValue(context).FromMaybe(0);
+        const auto center_y = info[1]->NumberValue(context).FromMaybe(0);
+        const auto radius = info[2]->NumberValue(context).FromMaybe(-1);
+        const auto start = info[3]->NumberValue(context).FromMaybe(0);
+        const auto authored_end = info[4]->NumberValue(context).FromMaybe(0);
+        const auto anticlockwise = info.Length() > 5 && info[5]->BooleanValue(isolate);
+        if (!std::isfinite(center_x) || !std::isfinite(center_y)
+            || !std::isfinite(radius) || !std::isfinite(start)
+            || !std::isfinite(authored_end)) return;
+        if (radius < 0) {
+            isolate->ThrowException(v8::Exception::RangeError(
+                js_string(isolate, "Path2D.arc radius must be non-negative")));
+            return;
+        }
+        self->record_feature(
+            "canvas",
+            "Path2D.arc",
+            "supported",
+            {},
+            "native-binding");
+        if (radius == 0) return;
+
+        v8::Local<v8::Value> entries_value;
+        if (!info.This()->Get(
+                context,
+                js_string(isolate, "__htmlmlSvgPathEntries")).ToLocal(&entries_value)
+            || !entries_value->IsArray()) return;
+        constexpr double full_circle = 6.28318530717958647692;
+        constexpr double half_circle = full_circle * 0.5;
+        const auto authored_delta = authored_end - start;
+        const auto full = std::abs(authored_delta) >= full_circle;
+        auto end = authored_end;
+        if (full) {
+            end = start + (anticlockwise ? -full_circle : full_circle);
+        } else if (anticlockwise) {
+            while (end > start) end -= full_circle;
+            if (start - end > full_circle) end = start - full_circle;
+        } else {
+            while (end < start) end += full_circle;
+            if (end - start > full_circle) end = start + full_circle;
+        }
+        const auto start_x = center_x + std::cos(start) * radius;
+        const auto start_y = center_y + std::sin(start) * radius;
+        const auto sweep = anticlockwise ? 0 : 1;
+        std::ostringstream data;
+        data << std::setprecision(std::numeric_limits<double>::max_digits10)
+             << "M " << start_x << ' ' << start_y << ' ';
+        if (full) {
+            const auto middle_angle = start + (anticlockwise ? -half_circle : half_circle);
+            const auto middle_x = center_x + std::cos(middle_angle) * radius;
+            const auto middle_y = center_y + std::sin(middle_angle) * radius;
+            data << "A " << radius << ' ' << radius << " 0 1 " << sweep << ' '
+                 << middle_x << ' ' << middle_y << ' '
+                 << "A " << radius << ' ' << radius << " 0 1 " << sweep << ' '
+                 << start_x << ' ' << start_y;
+        } else if (end != start) {
+            const auto end_x = center_x + std::cos(end) * radius;
+            const auto end_y = center_y + std::sin(end) * radius;
+            const auto large_arc = std::abs(end - start) > half_circle ? 1 : 0;
+            data << "A " << radius << ' ' << radius << " 0 " << large_arc << ' '
+                 << sweep << ' ' << end_x << ' ' << end_y;
+        } else {
+            return;
+        }
+        auto entry = v8::Object::New(isolate);
+        entry->Set(
+            context,
+            js_string(isolate, "data"),
+            js_string(isolate, data.str().c_str())).Check();
+        const auto entries = entries_value.As<v8::Array>();
+        entries->Set(context, entries->Length(), entry).Check();
     }
 
     static void path_2d_constructor(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        current(info.GetIsolate())->record_feature(
+            "canvas", "Path2D.constructor", "supported", {}, "native-binding");
         auto result = info.IsConstructCall() ? info.This() : v8::Object::New(info.GetIsolate());
         auto local_context = info.GetIsolate()->GetCurrentContext();
+        auto entries = v8::Array::New(info.GetIsolate());
+        result->Set(
+            local_context,
+            js_string(info.GetIsolate(), "__htmlmlSvgPathEntries"),
+            entries).Check();
         const char* methods[] = {
-            "addPath", "closePath", "moveTo", "lineTo", "bezierCurveTo", "quadraticCurveTo",
-            "arc", "arcTo", "ellipse", "rect", "roundRect"};
+            "closePath", "moveTo", "lineTo", "bezierCurveTo", "quadraticCurveTo",
+            "arcTo", "ellipse", "rect", "roundRect"};
         for (const auto* name : methods) {
-            result->Set(local_context, js_string(info.GetIsolate(), name), v8::Function::New(local_context, canvas_no_op).ToLocalChecked()).Check();
+            const auto feature_name = std::string("Path2D.") + name;
+            result->Set(
+                local_context,
+                js_string(info.GetIsolate(), name),
+                v8::Function::New(
+                    local_context,
+                    canvas_no_op,
+                    js_string(info.GetIsolate(), feature_name.c_str())).ToLocalChecked()).Check();
         }
+        result->Set(
+            local_context,
+            js_string(info.GetIsolate(), "arc"),
+            v8::Function::New(local_context, path_2d_arc).ToLocalChecked()).Check();
+        result->Set(
+            local_context,
+            js_string(info.GetIsolate(), "addPath"),
+            v8::Function::New(local_context, path_2d_add_path).ToLocalChecked()).Check();
         if (info.Length() > 0 && info[0]->IsString()) {
+            auto entry = v8::Object::New(info.GetIsolate());
+            entry->Set(
+                local_context,
+                js_string(info.GetIsolate(), "data"),
+                info[0]).Check();
+            entries->Set(local_context, 0, entry).Check();
             result->Set(
                 local_context,
                 js_string(info.GetIsolate(), "__htmlmlSvgPathData"),
                 info[0]).Check();
+        } else if (info.Length() > 0 && info[0]->IsObject()) {
+            v8::Local<v8::Value> source_entries_value;
+            if (info[0].As<v8::Object>()->Get(
+                    local_context,
+                    js_string(info.GetIsolate(), "__htmlmlSvgPathEntries")).ToLocal(&source_entries_value)
+                && source_entries_value->IsArray()) {
+                const auto source_entries = source_entries_value.As<v8::Array>();
+                for (uint32_t index = 0; index < source_entries->Length(); ++index) {
+                    v8::Local<v8::Value> entry;
+                    if (source_entries->Get(local_context, index).ToLocal(&entry)) {
+                        entries->Set(local_context, index, entry).Check();
+                    }
+                }
+            }
         }
         info.GetReturnValue().Set(result);
     }
@@ -5418,62 +12214,116 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         const auto xml = info.Length() > 0 ? to_utf8(info.GetIsolate(), info[0]) : std::string{};
-        auto& root = self->document.create_element("svg");
-        const auto svg_open = xml.find("<svg");
-        const auto svg_end = svg_open == std::string::npos ? std::string::npos : xml.find('>', svg_open);
-        if (svg_end != std::string::npos) {
-            const auto opening = xml.substr(svg_open, svg_end - svg_open + 1U);
-            root.attributes["viewBox"] = extract_html_attribute(opening, "viewBox");
-            root.attributes["width"] = extract_html_attribute(opening, "width");
-            root.attributes["height"] = extract_html_attribute(opening, "height");
+        const auto mime_type = info.Length() > 1 ? to_utf8(info.GetIsolate(), info[1]) : std::string{};
+        if (mime_type == "text/html") {
+            auto& html = self->document.create_element("html");
+            auto& head = self->document.create_element("head");
+            auto& body = self->document.create_element("body");
+            self->document.append_child(html, head);
+            self->document.append_child(html, body);
+            self->parse_inner_html(body, xml);
+            auto local_context = info.GetIsolate()->GetCurrentContext();
+            self->detached_document_roots.insert(html.id);
+            info.GetReturnValue().Set(wrap_detached_document(
+                *self, html, local_context, "about:blank"));
+            return;
         }
-        size_t cursor = svg_end == std::string::npos ? 0 : svg_end + 1U;
+        auto& root = self->document.create_element("#document-root");
+        root.visible = false;
+        root.xml_mode = true;
+        std::vector<dom_node*> stack{&root};
+        size_t cursor = 0;
+        const auto skip_space = [&](size_t& position, size_t limit) {
+            while (position < limit
+                && std::isspace(static_cast<unsigned char>(xml[position]))) ++position;
+        };
         while (cursor < xml.size()) {
             const auto open = xml.find('<', cursor);
-            if (open == std::string::npos || open + 1U >= xml.size()) break;
-            if (xml[open + 1U] == '/' || xml[open + 1U] == '!' || xml[open + 1U] == '?') {
-                cursor = open + 2U;
+            if (open == std::string::npos) break;
+            if (open > cursor && !stack.empty()) {
+                const auto text = xml.substr(cursor, open - cursor);
+                if (!text.empty()) {
+                    auto& text_node = self->document.create_element("#text");
+                    text_node.xml_mode = true;
+                    text_node.text_content = text;
+                    self->document.append_child(*stack.back(), text_node);
+                }
+            }
+            if (xml.compare(open, 4, "<!--") == 0) {
+                const auto end = xml.find("-->", open + 4U);
+                cursor = end == std::string::npos ? xml.size() : end + 3U;
                 continue;
             }
             const auto end = xml.find('>', open + 1U);
             if (end == std::string::npos) break;
-            auto name_end = open + 1U;
-            while (name_end < end && !std::isspace(static_cast<unsigned char>(xml[name_end]))
-                && xml[name_end] != '/') ++name_end;
-            const auto tag = xml.substr(open + 1U, name_end - open - 1U);
-            if (!tag.empty() && tag != "svg") {
-                auto& child = self->document.create_element(tag);
-                const auto opening = xml.substr(open, end - open + 1U);
-                const char* attributes[] = {
-                    "id", "class", "d", "fill", "stroke", "stroke-width", "viewBox", "transform",
-                    "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "points", "style"};
-                for (const auto* attribute : attributes) {
-                    const auto value = extract_html_attribute(opening, attribute);
-                    if (!value.empty()) child.attributes[attribute] = value;
-                }
-                child.id_attribute = child.attributes["id"];
-                child.class_name = child.attributes["class"];
-                self->document.append_child(root, child);
+            if (open + 1U < xml.size() && xml[open + 1U] == '/') {
+                if (stack.size() > 1U) stack.pop_back();
+                cursor = end + 1U;
+                continue;
             }
+            if (open + 1U < xml.size()
+                && (xml[open + 1U] == '!' || xml[open + 1U] == '?')) {
+                cursor = end + 1U;
+                continue;
+            }
+            auto position = open + 1U;
+            skip_space(position, end);
+            const auto name_start = position;
+            while (position < end
+                && !std::isspace(static_cast<unsigned char>(xml[position]))
+                && xml[position] != '/') ++position;
+            const auto tag = xml.substr(name_start, position - name_start);
+            if (tag.empty()) {
+                cursor = end + 1U;
+                continue;
+            }
+            auto& child = self->document.create_element(tag);
+            child.xml_mode = true;
+            while (position < end) {
+                skip_space(position, end);
+                if (position >= end || xml[position] == '/') break;
+                const auto attribute_start = position;
+                while (position < end
+                    && !std::isspace(static_cast<unsigned char>(xml[position]))
+                    && xml[position] != '=' && xml[position] != '/') ++position;
+                const auto attribute_name = xml.substr(
+                    attribute_start, position - attribute_start);
+                skip_space(position, end);
+                std::string attribute_value;
+                if (position < end && xml[position] == '=') {
+                    ++position;
+                    skip_space(position, end);
+                    if (position < end && (xml[position] == '\'' || xml[position] == '"')) {
+                        const auto quote = xml[position++];
+                        const auto value_start = position;
+                        while (position < end && xml[position] != quote) ++position;
+                        attribute_value = xml.substr(value_start, position - value_start);
+                        if (position < end) ++position;
+                    } else {
+                        const auto value_start = position;
+                        while (position < end
+                            && !std::isspace(static_cast<unsigned char>(xml[position]))
+                            && xml[position] != '/') ++position;
+                        attribute_value = xml.substr(value_start, position - value_start);
+                    }
+                }
+                if (!attribute_name.empty()) child.attributes[attribute_name] = attribute_value;
+            }
+            if (const auto id = child.attributes.find("id"); id != child.attributes.end()) {
+                child.id_attribute = id->second;
+            }
+            if (const auto classes = child.attributes.find("class"); classes != child.attributes.end()) {
+                child.class_name = classes->second;
+            }
+            if (!stack.empty()) self->document.append_child(*stack.back(), child);
+            auto self_closing = end > open && xml[end - 1U] == '/';
+            if (!self_closing) stack.push_back(&child);
             cursor = end + 1U;
         }
         auto local_context = info.GetIsolate()->GetCurrentContext();
-        auto parsed = v8::Object::New(info.GetIsolate());
-        auto data = v8::External::New(info.GetIsolate(), &root, v8::kExternalPointerTypeTagDefault);
-        parsed->Set(local_context, js_string(info.GetIsolate(), "documentElement"), self->wrap_node(root)).Check();
-        parsed->Set(
-            local_context,
-            js_string(info.GetIsolate(), "getElementsByTagName"),
-            v8::Function::New(local_context, parsed_document_get_elements, data).ToLocalChecked()).Check();
-        parsed->Set(
-            local_context,
-            js_string(info.GetIsolate(), "querySelectorAll"),
-            v8::Function::New(local_context, parsed_document_query_selector_all, data).ToLocalChecked()).Check();
-        parsed->Set(
-            local_context,
-            js_string(info.GetIsolate(), "querySelector"),
-            v8::Function::New(local_context, parsed_document_query_selector, data).ToLocalChecked()).Check();
-        info.GetReturnValue().Set(parsed);
+        self->detached_document_roots.insert(root.id);
+        info.GetReturnValue().Set(wrap_detached_document(
+            *self, root, local_context, "about:blank"));
     }
 
     static void parsed_document_get_elements(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -5517,6 +12367,31 @@ struct v8_dom_runtime::implementation final {
         info.GetReturnValue().Set(info.This());
     }
 
+    static void dom_matrix_scale_self(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        const auto isolate = info.GetIsolate();
+        const auto context = isolate->GetCurrentContext();
+        const auto scale_x = info.Length() > 0
+            ? info[0]->NumberValue(context).FromMaybe(1)
+            : 1;
+        const auto scale_y = info.Length() > 1
+            ? info[1]->NumberValue(context).FromMaybe(scale_x)
+            : scale_x;
+        const auto a = object_number(isolate, context, info.This(), "a", 1) * scale_x;
+        const auto b = object_number(isolate, context, info.This(), "b", 0) * scale_x;
+        const auto c = object_number(isolate, context, info.This(), "c", 0) * scale_y;
+        const auto d = object_number(isolate, context, info.This(), "d", 1) * scale_y;
+        set_object_number(isolate, context, info.This(), "a", a);
+        set_object_number(isolate, context, info.This(), "b", b);
+        set_object_number(isolate, context, info.This(), "c", c);
+        set_object_number(isolate, context, info.This(), "d", d);
+        set_object_number(isolate, context, info.This(), "m11", a);
+        set_object_number(isolate, context, info.This(), "m12", b);
+        set_object_number(isolate, context, info.This(), "m21", c);
+        set_object_number(isolate, context, info.This(), "m22", d);
+        info.GetReturnValue().Set(info.This());
+    }
+
     static void dom_matrix_constructor(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto isolate = info.GetIsolate();
@@ -5534,11 +12409,66 @@ struct v8_dom_runtime::implementation final {
         result->Set(local_context, js_string(isolate, "isIdentity"), v8::True(isolate)).Check();
         const char* methods[] = {
             "multiply", "preMultiplySelf", "multiplySelf", "translate", "translateSelf", "scale", "scale3d",
-            "scaleSelf", "rotate", "rotateAxisAngle", "rotateSelf", "skewX", "skewY", "invertSelf", "inverse"};
+            "rotate", "rotateAxisAngle", "rotateSelf", "skewX", "skewY", "invertSelf", "inverse"};
         for (const auto* name : methods) {
             result->Set(local_context, js_string(isolate, name), v8::Function::New(local_context, return_this).ToLocalChecked()).Check();
         }
+        result->Set(
+            local_context,
+            js_string(isolate, "scaleSelf"),
+            v8::Function::New(local_context, dom_matrix_scale_self).ToLocalChecked()).Check();
         info.GetReturnValue().Set(result);
+    }
+
+    static layout_rect transformed_client_bounds(const dom_node& node)
+    {
+        struct point final { double x; double y; };
+        std::array<point, 4> corners{{
+            {node.layout.x, node.layout.y},
+            {node.layout.x + node.layout.width, node.layout.y},
+            {node.layout.x + node.layout.width, node.layout.y + node.layout.height},
+            {node.layout.x, node.layout.y + node.layout.height}}};
+        const auto resolve_origin = [](css_length value, float available) {
+            if (value.unit == length_unit::percent) {
+                return static_cast<double>(available) * value.value / 100.0
+                    + value.pixel_offset;
+            }
+            return static_cast<double>(value.value);
+        };
+        constexpr double degrees_to_radians = 0.017453292519943295;
+        for (auto* current = &node; current != nullptr; current = current->parent) {
+            const auto origin_x = static_cast<double>(current->layout.x)
+                + resolve_origin(current->style.transform_origin_x, current->layout.width);
+            const auto origin_y = static_cast<double>(current->layout.y)
+                + resolve_origin(current->style.transform_origin_y, current->layout.height);
+            const auto radians = static_cast<double>(
+                current->painted_transform_rotate_degrees) * degrees_to_radians;
+            const auto cosine = std::cos(radians);
+            const auto sine = std::sin(radians);
+            for (auto& corner : corners) {
+                const auto scaled_x = (corner.x - origin_x)
+                    * current->painted_transform_scale_x;
+                const auto scaled_y = (corner.y - origin_y)
+                    * current->painted_transform_scale_y;
+                corner.x = origin_x + scaled_x * cosine - scaled_y * sine;
+                corner.y = origin_y + scaled_x * sine + scaled_y * cosine;
+            }
+        }
+        auto left = corners[0].x;
+        auto right = corners[0].x;
+        auto top = corners[0].y;
+        auto bottom = corners[0].y;
+        for (const auto& corner : corners) {
+            left = std::min(left, corner.x);
+            right = std::max(right, corner.x);
+            top = std::min(top, corner.y);
+            bottom = std::max(bottom, corner.y);
+        }
+        return {
+            static_cast<float>(left),
+            static_cast<float>(top),
+            static_cast<float>(right - left),
+            static_cast<float>(bottom - top)};
     }
 
     static void get_bounding_client_rect(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -5548,19 +12478,33 @@ struct v8_dom_runtime::implementation final {
         self->ensure_layout();
         auto* node = unwrap_node(info.This());
         if (node == nullptr) return;
+        const auto has_no_box = [](const dom_node* candidate) {
+            for (auto* current = candidate; current != nullptr; current = current->parent) {
+                if (current->style.display == display_mode::none) return true;
+            }
+            return false;
+        }(node);
+        // The native tree keeps the live HTML document element beneath the
+        // viewport-bearing BODY root.  Geometry exposed to script must match
+        // the browser box for that live document element, not the internal
+        // zero-height wrapper used by the collapsed native document model.
+        if (node->tag == "html" && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
         auto local_context = info.GetIsolate()->GetCurrentContext();
         auto result = v8::Object::New(info.GetIsolate());
         const auto set = [&](const char* name, double value) {
             result->Set(local_context, js_string(info.GetIsolate(), name), v8::Number::New(info.GetIsolate(), value)).Check();
         };
-        set("x", node->layout.x);
-        set("y", node->layout.y);
-        set("left", node->layout.x);
-        set("top", node->layout.y);
-        set("width", node->layout.width);
-        set("height", node->layout.height);
-        set("right", node->layout.x + node->layout.width);
-        set("bottom", node->layout.y + node->layout.height);
+        const auto bounds = has_no_box ? layout_rect{} : transformed_client_bounds(*node);
+        set("x", bounds.x);
+        set("y", bounds.y);
+        set("left", bounds.x);
+        set("top", bounds.y);
+        set("width", bounds.width);
+        set("height", bounds.height);
+        set("right", bounds.x + bounds.width);
+        set("bottom", bounds.y + bounds.height);
         info.GetReturnValue().Set(result);
     }
 
@@ -5571,19 +12515,28 @@ struct v8_dom_runtime::implementation final {
         self->ensure_layout();
         auto* node = unwrap_node(info.This());
         if (node == nullptr) return;
+        for (auto* current = node; current != nullptr; current = current->parent) {
+            if (current->style.display != display_mode::none) continue;
+            info.GetReturnValue().Set(v8::Array::New(info.GetIsolate()));
+            return;
+        }
+        if (node->tag == "html" && node->parent == &self->document.body()) {
+            node = &self->document.body();
+        }
         auto local_context = info.GetIsolate()->GetCurrentContext();
         auto rect = v8::Object::New(info.GetIsolate());
         const auto set = [&](const char* name, double value) {
             rect->Set(local_context, js_string(info.GetIsolate(), name), v8::Number::New(info.GetIsolate(), value)).Check();
         };
-        set("x", node->layout.x);
-        set("y", node->layout.y);
-        set("left", node->layout.x);
-        set("top", node->layout.y);
-        set("width", node->layout.width);
-        set("height", node->layout.height);
-        set("right", node->layout.x + node->layout.width);
-        set("bottom", node->layout.y + node->layout.height);
+        const auto bounds = transformed_client_bounds(*node);
+        set("x", bounds.x);
+        set("y", bounds.y);
+        set("left", bounds.x);
+        set("top", bounds.y);
+        set("width", bounds.width);
+        set("height", bounds.height);
+        set("right", bounds.x + bounds.width);
+        set("bottom", bounds.y + bounds.height);
         auto result = v8::Array::New(info.GetIsolate(), 1);
         result->Set(local_context, 0, rect).Check();
         info.GetReturnValue().Set(result);
@@ -5595,12 +12548,37 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_mutation));
         auto* node = unwrap_node(info.This());
         if (node == nullptr || info.Length() < 2) return;
-        const auto name = to_utf8(info.GetIsolate(), info[0]);
-        const auto value = to_utf8(info.GetIsolate(), info[1]);
+        const auto raw_name = to_utf8(info.GetIsolate(), info[0]);
+        const auto name = node->xml_mode ? raw_name : lower_html_name(raw_name);
+        const auto value = to_wtf8(info.GetIsolate(), info[1]);
+        self->record_html_attribute_feature(name, "setAttribute");
+        if (name == "class"
+            && node->class_name == value
+            && node->attributes.contains("class")) {
+            return;
+        }
         node->attributes[name] = value;
         if (name == "id") node->id_attribute = value;
         else if (name == "class") node->class_name = value;
-        self->recascade_connected_subtree(*node);
+        else if (name == "style") {
+            node->inline_style_declarations.clear();
+            node->inline_important_declarations.clear();
+            node->style.inline_property_mask = 0U;
+            node->style.important_property_mask = 0U;
+            for (const auto& declaration : parse_css_declarations(value, true)) {
+                if (!store_inline_declaration(*node, declaration)) continue;
+                self->apply_css_declaration(*node, declaration);
+                node->style.inline_property_mask |= inline_style_mask(declaration.name);
+            }
+        }
+        else if (name == "src" && node->tag == "iframe") {
+            self->enqueue_iframe_hydration_if_needed(*node);
+        }
+        if (self->attribute_requires_recascade(name)) {
+            self->recascade_connected_subtree(*node, "style.setProperty-clear");
+        } else {
+            self->document.mark_dirty();
+        }
     }
 
     static void set_attribute_ns(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -5609,12 +12587,18 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.This());
         if (node == nullptr) return;
-        const auto name = to_utf8(info.GetIsolate(), info[1]);
-        const auto value = to_utf8(info.GetIsolate(), info[2]);
+        const auto raw_name = to_utf8(info.GetIsolate(), info[1]);
+        const auto name = node->xml_mode ? raw_name : lower_html_name(raw_name);
+        const auto value = to_wtf8(info.GetIsolate(), info[2]);
+        self->record_html_attribute_feature(name, "setAttributeNS");
         node->attributes[name] = value;
         if (name == "id") node->id_attribute = value;
         else if (name == "class") node->class_name = value;
-        self->recascade_connected_subtree(*node);
+        if (self->attribute_requires_recascade(name)) {
+            self->recascade_connected_subtree(*node, "style.removeProperty-custom");
+        } else {
+            self->document.mark_dirty();
+        }
     }
 
     static void remove_attribute(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -5622,11 +12606,26 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         auto* node = unwrap_node(info.This());
         if (node == nullptr || info.Length() < 1) return;
-        const auto name = to_utf8(info.GetIsolate(), info[0]);
+        const auto raw_name = to_utf8(info.GetIsolate(), info[0]);
+        const auto name = node->xml_mode ? raw_name : lower_html_name(raw_name);
+        self->record_html_attribute_feature(name, "removeAttribute");
+        if (!node->attributes.contains(name)) {
+            return;
+        }
         node->attributes.erase(name);
         if (name == "id") node->id_attribute.clear();
         else if (name == "class") node->class_name.clear();
-        self->recascade_connected_subtree(*node);
+        else if (name == "style") {
+            node->inline_style_declarations.clear();
+            node->inline_important_declarations.clear();
+            node->style.inline_property_mask = 0U;
+            node->style.important_property_mask = 0U;
+        }
+        if (self->attribute_requires_recascade(name)) {
+            self->recascade_connected_subtree(*node);
+        } else {
+            self->document.mark_dirty();
+        }
     }
 
     static void get_attribute(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -5635,12 +12634,13 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
         auto* node = unwrap_node(info.This());
         if (node == nullptr || info.Length() < 1) return;
-        const auto name = to_utf8(info.GetIsolate(), info[0]);
+        const auto raw_name = to_utf8(info.GetIsolate(), info[0]);
+        const auto name = node->xml_mode ? raw_name : lower_html_name(raw_name);
         const auto match = node->attributes.find(name);
         if (match == node->attributes.end()) {
             info.GetReturnValue().Set(v8::Null(info.GetIsolate()));
         } else {
-            info.GetReturnValue().Set(js_string(info.GetIsolate(), match->second.c_str()));
+            info.GetReturnValue().Set(js_dom_string(info.GetIsolate(), match->second));
         }
     }
 
@@ -5649,9 +12649,12 @@ struct v8_dom_runtime::implementation final {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
         auto* node = unwrap_node(info.This());
-        const auto name = node != nullptr && info.Length() > 0
+        const auto raw_name = node != nullptr && info.Length() > 0
             ? to_utf8(info.GetIsolate(), info[0])
             : std::string{};
+        const auto name = node != nullptr && !node->xml_mode
+            ? lower_html_name(raw_name)
+            : raw_name;
         info.GetReturnValue().Set(v8::Boolean::New(
             info.GetIsolate(),
             node != nullptr && node->attributes.contains(name)));
@@ -5696,6 +12699,195 @@ struct v8_dom_runtime::implementation final {
         return result;
     }
 
+    void append_script_elements(dom_node& parent, const std::vector<frame_script>& scripts)
+    {
+        for (const auto& script : scripts) {
+            record_feature(
+                "html",
+                "element:script",
+                "supported",
+                {},
+                "html-element");
+            auto& element = document.create_element("script");
+            if (!script.source.empty()) {
+                record_html_attribute_feature("src", "html-parser");
+                element.attributes["src"] = script.source;
+            }
+            if (script.defer) {
+                record_html_attribute_feature("defer", "html-parser");
+                element.attributes["defer"] = std::string{};
+            }
+            element.text_content = script.code;
+            apply_css_rules(element);
+            document.append_child(parent, element);
+        }
+    }
+
+    static std::vector<std::string> parse_inline_stylesheets(const std::string& html)
+    {
+        std::vector<std::string> result;
+        size_t cursor = 0U;
+        while (true) {
+            const auto open = html.find("<style", cursor);
+            if (open == std::string::npos) break;
+            const auto open_end = html.find('>', open);
+            if (open_end == std::string::npos) break;
+            const auto close = html.find("</style>", open_end + 1U);
+            if (close == std::string::npos) break;
+            result.push_back(html.substr(open_end + 1U, close - open_end - 1U));
+            cursor = close + 8U;
+        }
+        return result;
+    }
+
+    static std::string extract_element_contents(const std::string& html, const std::string& tag)
+    {
+        const auto open = html.find("<" + tag);
+        if (open == std::string::npos) return {};
+        const auto open_end = html.find('>', open);
+        if (open_end == std::string::npos) return {};
+        const auto close = html.find("</" + tag + ">", open_end + 1U);
+        return close == std::string::npos
+            ? std::string{}
+            : html.substr(open_end + 1U, close - open_end - 1U);
+    }
+
+    static std::string strip_html_elements(std::string html, const std::string& tag)
+    {
+        size_t cursor = 0U;
+        const auto opening = "<" + tag;
+        const auto closing = "</" + tag + ">";
+        while (true) {
+            const auto open = html.find(opening, cursor);
+            if (open == std::string::npos) break;
+            const auto close = html.find(closing, open + opening.size());
+            if (close == std::string::npos) {
+                html.erase(open);
+                break;
+            }
+            html.erase(open, close + closing.size() - open);
+            cursor = open;
+        }
+        return html;
+    }
+
+    void install_screen(
+        v8::Local<v8::Context> local_context,
+        v8::Local<v8::Object> global)
+    {
+        auto screen_template = v8::FunctionTemplate::New(isolate);
+        screen_template->SetClassName(js_string(isolate, "Screen"));
+        screen_template->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "width"),
+            get_screen_width);
+        screen_template->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "height"),
+            get_screen_height);
+        screen_template->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "availWidth"),
+            get_screen_width);
+        screen_template->InstanceTemplate()->SetNativeDataProperty(
+            js_string(isolate, "availHeight"),
+            get_screen_height);
+        screen_template->InstanceTemplate()->Set(
+            js_string(isolate, "colorDepth"),
+            v8::Integer::New(isolate, 24),
+            v8::PropertyAttribute::ReadOnly);
+        screen_template->InstanceTemplate()->Set(
+            js_string(isolate, "pixelDepth"),
+            v8::Integer::New(isolate, 24),
+            v8::PropertyAttribute::ReadOnly);
+        auto screen_constructor =
+            screen_template->GetFunction(local_context).ToLocalChecked();
+        auto screen = screen_constructor->NewInstance(local_context).ToLocalChecked();
+        global->Set(
+            local_context,
+            js_string(isolate, "Screen"),
+            screen_constructor).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "screen"),
+            screen).Check();
+    }
+
+    void set_context_location(
+        v8::Local<v8::Context> local_context,
+        v8::Local<v8::Object> global,
+        const std::string& href)
+    {
+        auto location = v8::Object::New(isolate);
+        const auto scheme_end = href.find(':');
+        const auto authority_start = href.find("://");
+        const auto path_start = authority_start == std::string::npos
+            ? std::string::npos
+            : href.find('/', authority_start + 3U);
+        const auto host = authority_start == std::string::npos
+            ? std::string{}
+            : href.substr(
+                authority_start + 3U,
+                (path_start == std::string::npos ? href.size() : path_start) - authority_start - 3U);
+        const auto path = path_start == std::string::npos ? "/" : href.substr(path_start);
+        location->Set(local_context, js_string(isolate, "href"), js_string(isolate, href.c_str())).Check();
+        location->Set(
+            local_context,
+            js_string(isolate, "protocol"),
+            js_string(isolate, scheme_end == std::string::npos ? "" : href.substr(0U, scheme_end + 1U).c_str())).Check();
+        location->Set(local_context, js_string(isolate, "host"), js_string(isolate, host.c_str())).Check();
+        location->Set(local_context, js_string(isolate, "pathname"), js_string(isolate, path.c_str())).Check();
+        location->Set(local_context, js_string(isolate, "search"), js_string(isolate, "")).Check();
+        location->Set(local_context, js_string(isolate, "hash"), js_string(isolate, "")).Check();
+        global->Set(local_context, js_string(isolate, "location"), location).Check();
+        v8::Local<v8::Value> document_value;
+        if (global->Get(
+                local_context,
+                js_string(isolate, "document")).ToLocal(&document_value)
+            && document_value->IsObject()) {
+            set_document_address(local_context, document_value.As<v8::Object>(), href);
+        }
+    }
+
+    void set_document_address(
+        v8::Local<v8::Context> local_context,
+        v8::Local<v8::Object> document_value,
+        const std::string& href)
+    {
+        // Document.URL is the browser-facing serialization used by the hosted
+        // hosted analytics branch. documentURI and baseURI share the
+        // fetched document address in this profile because HtmlML does not
+        // currently implement authored <base> mutation.
+        for (const auto* property : {"URL", "documentURI", "baseURI"}) {
+            document_value->Set(
+                local_context,
+                js_string(isolate, property),
+                js_string(isolate, href.c_str())).Check();
+        }
+    }
+
+    void set_current_script(
+        v8::Local<v8::Context> local_context,
+        v8::Local<v8::Object> document_value,
+        const std::string& script_url)
+    {
+        auto current_script = v8::Object::New(isolate);
+        current_script->Set(
+            local_context,
+            js_string(isolate, "src"),
+            js_string(isolate, script_url.c_str())).Check();
+        current_script->Set(
+            local_context,
+            js_string(isolate, "tagName"),
+            js_string(isolate, "SCRIPT")).Check();
+        current_script->Set(
+            local_context,
+            js_string(isolate, "nonce"),
+            js_string(isolate, "")).Check();
+        current_script->Set(
+            local_context,
+            js_string(isolate, "getAttribute"),
+            v8::Function::New(local_context, current_script_get_attribute).ToLocalChecked()).Check();
+        document_value->Set(local_context, js_string(isolate, "currentScript"), current_script).Check();
+    }
+
     static bool read_text_file(const std::filesystem::path& path, std::string& result)
     {
         std::ifstream stream(path, std::ios::binary | std::ios::ate);
@@ -5718,8 +12910,12 @@ struct v8_dom_runtime::implementation final {
 
     static std::string_view trim_css_view(std::string_view value)
     {
-        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) value.remove_prefix(1U);
-        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.remove_suffix(1U);
+        while (!value.empty() && is_css_whitespace(static_cast<unsigned char>(value.front()))) {
+            value.remove_prefix(1U);
+        }
+        while (!value.empty() && is_css_whitespace(static_cast<unsigned char>(value.back()))) {
+            value.remove_suffix(1U);
+        }
         return value;
     }
 
@@ -5745,7 +12941,9 @@ struct v8_dom_runtime::implementation final {
         return std::string::npos;
     }
 
-    static std::vector<css_declaration> parse_css_declarations(std::string_view body)
+    static std::vector<css_declaration> parse_css_declarations(
+        std::string_view body,
+        bool preserve_empty_custom_properties = false)
     {
         std::vector<css_declaration> result;
         size_t cursor = 0;
@@ -5756,9 +12954,27 @@ struct v8_dom_runtime::implementation final {
             if (end == std::string_view::npos) end = body.size();
             auto name = trim_css(body.substr(cursor, separator - cursor));
             auto value = trim_css(body.substr(separator + 1U, end - separator - 1U));
-            const auto important_marker = value.find("!important");
+            auto lower_value = lower_html_name(value);
+            const auto important_marker = lower_value.ends_with("!important")
+                ? value.size() - std::string_view("!important").size()
+                : std::string::npos;
             const auto important = important_marker != std::string::npos;
-            if (important) value = trim_css(std::string_view(value).substr(0, important_marker));
+            if (important) {
+                value = trim_css(std::string_view(value).substr(0, important_marker));
+            }
+            const auto custom = name.starts_with("--");
+            if (custom && !valid_custom_property_name(name)) {
+                cursor = end + 1U;
+                continue;
+            }
+            if (!custom && name.starts_with("-")
+                && name != "-moz-transform" && name != "-webkit-transform") {
+                cursor = end + 1U;
+                continue;
+            }
+            if (custom && value.empty() && preserve_empty_custom_properties) {
+                value = " ";
+            }
             if (!name.empty() && !value.empty()) {
                 result.push_back({std::move(name), std::move(value), important});
             }
@@ -5767,9 +12983,248 @@ struct v8_dom_runtime::implementation final {
         return result;
     }
 
+    static bool store_inline_declaration(
+        dom_node& node,
+        const css_declaration& declaration)
+    {
+        const auto existing_important =
+            node.inline_important_declarations.contains(declaration.name);
+        if (existing_important && !declaration.important) {
+            return false;
+        }
+
+        node.inline_style_declarations[declaration.name] = declaration.value;
+        if (declaration.important) {
+            node.inline_important_declarations.insert(declaration.name);
+        } else {
+            node.inline_important_declarations.erase(declaration.name);
+        }
+        return true;
+    }
+
+    enum class hover_invalidation_scope : uint8_t
+    {
+        subject,
+        subtree,
+        siblings
+    };
+
+    struct hover_selector_dependency final
+    {
+        std::string trigger_compound;
+        hover_invalidation_scope scope{hover_invalidation_scope::subject};
+    };
+
+    static void strip_hover_state_from_trigger(std::string& trigger)
+    {
+        // A functional pseudo containing :hover changes truth when hover does,
+        // but its other arguments are not prerequisites for invalidation.
+        // Removing the complete function deliberately broadens the structural
+        // trigger while retaining class/id/tag/attribute filtering.
+        for (;;) {
+            auto removed_function = false;
+            for (size_t colon = 0; colon < trigger.size(); ++colon) {
+                if (trigger[colon] != ':' || colon + 1U >= trigger.size()
+                    || trigger[colon + 1U] == ':') {
+                    continue;
+                }
+                auto open = colon + 1U;
+                while (open < trigger.size()
+                    && (std::isalnum(static_cast<unsigned char>(trigger[open]))
+                        || trigger[open] == '-' || trigger[open] == '_')) {
+                    ++open;
+                }
+                if (open >= trigger.size() || trigger[open] != '(') continue;
+                auto depth = 1;
+                char quote = 0;
+                auto close = open + 1U;
+                for (; close < trigger.size() && depth > 0; ++close) {
+                    const auto character = trigger[close];
+                    if (quote != 0) {
+                        if (character == quote
+                            && trigger[close - 1U] != '\\') {
+                            quote = 0;
+                        }
+                        continue;
+                    }
+                    if (character == '\'' || character == '"') quote = character;
+                    else if (character == '(') ++depth;
+                    else if (character == ')') --depth;
+                }
+                if (depth != 0) break;
+                if (trigger.find(":hover", open + 1U) < close - 1U) {
+                    trigger.erase(colon, close - colon);
+                    removed_function = true;
+                    break;
+                }
+                colon = close - 1U;
+            }
+            if (!removed_function) break;
+        }
+        for (size_t position = 0;
+            (position = trigger.find(":hover", position)) != std::string::npos;) {
+            trigger.erase(position, 6U);
+        }
+    }
+
+    void index_hover_selector_dependencies(const css_rule& rule)
+    {
+        const auto& selector = rule.selector;
+        size_t search = 0U;
+        while ((search = selector.find(":hover", search)) != std::string::npos) {
+            const auto token_end = search + 6U;
+            if (token_end < selector.size()) {
+                const auto next = selector[token_end];
+                if (std::isalnum(static_cast<unsigned char>(next))
+                    || next == '-' || next == '_') {
+                    search = token_end;
+                    continue;
+                }
+            }
+
+            auto compound_begin = size_t{0};
+            auto bracket_depth = 0;
+            auto parenthesis_depth = 0;
+            char quote = 0;
+            for (size_t index = 0; index < search; ++index) {
+                const auto character = selector[index];
+                if (quote != 0) {
+                    if (character == quote
+                        && (index == 0U || selector[index - 1U] != '\\')) {
+                        quote = 0;
+                    }
+                    continue;
+                }
+                if (character == '\\') {
+                    index = skip_css_escape_sequence(selector, index) - 1U;
+                    continue;
+                }
+                if (character == '\'' || character == '"') {
+                    quote = character;
+                    continue;
+                }
+                if (character == '[') ++bracket_depth;
+                else if (character == ']') --bracket_depth;
+                else if (character == '(') ++parenthesis_depth;
+                else if (character == ')') --parenthesis_depth;
+                else if (bracket_depth == 0 && parenthesis_depth == 0
+                    && (std::isspace(static_cast<unsigned char>(character))
+                        || character == '>' || character == '+'
+                        || character == '~' || character == ',')) {
+                    compound_begin = index + 1U;
+                }
+            }
+            while (compound_begin < search
+                && std::isspace(
+                    static_cast<unsigned char>(selector[compound_begin]))) {
+                ++compound_begin;
+            }
+            auto compound_end = compound_begin;
+            bracket_depth = 0;
+            parenthesis_depth = 0;
+            quote = 0;
+            for (; compound_end < selector.size(); ++compound_end) {
+                const auto character = selector[compound_end];
+                if (quote != 0) {
+                    if (character == quote
+                        && (compound_end == 0U
+                            || selector[compound_end - 1U] != '\\')) {
+                        quote = 0;
+                    }
+                    continue;
+                }
+                if (character == '\\') {
+                    compound_end =
+                        skip_css_escape_sequence(selector, compound_end) - 1U;
+                    continue;
+                }
+                if (character == '\'' || character == '"') {
+                    quote = character;
+                    continue;
+                }
+                if (character == '[') ++bracket_depth;
+                else if (character == ']') --bracket_depth;
+                else if (character == '(') ++parenthesis_depth;
+                else if (character == ')') --parenthesis_depth;
+                else if (bracket_depth == 0 && parenthesis_depth == 0
+                    && (std::isspace(static_cast<unsigned char>(character))
+                        || character == '>' || character == '+'
+                        || character == '~' || character == ',')) {
+                    break;
+                }
+            }
+
+            auto trigger = selector.substr(
+                compound_begin,
+                compound_end - compound_begin);
+            strip_hover_state_from_trigger(trigger);
+            if (const auto pseudo_element = trigger.find("::");
+                pseudo_element != std::string::npos) {
+                trigger.resize(pseudo_element);
+            }
+            if (trigger.ends_with(":before")) trigger.resize(trigger.size() - 7U);
+            else if (trigger.ends_with(":after")) trigger.resize(trigger.size() - 6U);
+            if (trigger.empty()) trigger = "*";
+
+            auto scope = hover_invalidation_scope::subject;
+            for (auto position = compound_end; position < selector.size(); ++position) {
+                const auto character = selector[position];
+                if (character == '+' || character == '~') {
+                    scope = hover_invalidation_scope::siblings;
+                    break;
+                }
+                if (character == '>'
+                    || std::isspace(static_cast<unsigned char>(character))) {
+                    scope = hover_invalidation_scope::subtree;
+                }
+            }
+            if (scope == hover_invalidation_scope::subject
+                && std::any_of(
+                    rule.declarations.begin(),
+                    rule.declarations.end(),
+                    [](const css_declaration& declaration) {
+                        return declaration.name.starts_with("--");
+                    })) {
+                scope = hover_invalidation_scope::subtree;
+            }
+            hover_selector_dependencies.push_back({
+                std::move(trigger),
+                scope});
+            search = token_end;
+        }
+    }
+
     void index_css_rule(size_t index)
     {
-        const auto& selector = css_rules[index].selector;
+        const auto& rule = css_rules[index];
+        const auto& selector = rule.selector;
+        if (selector.find("::-webkit-scrollbar") != std::string::npos
+            || selector.find("::selection") != std::string::npos) {
+            return;
+        }
+        index_hover_selector_dependencies(rule);
+        if (selector.find(":disabled") != std::string::npos
+            || selector.find(":enabled") != std::string::npos) {
+            css_attribute_dependencies.emplace("disabled");
+        }
+        if (selector.find(":checked") != std::string::npos) {
+            css_attribute_dependencies.emplace("checked");
+            css_attribute_dependencies.emplace("selected");
+            css_attribute_dependencies.emplace("type");
+        }
+        for (size_t open = 0; (open = selector.find('[', open)) != std::string::npos;) {
+            auto cursor = open + 1U;
+            while (cursor < selector.size()
+                && std::isspace(static_cast<unsigned char>(selector[cursor]))) ++cursor;
+            const auto start = cursor;
+            while (cursor < selector.size()
+                && (std::isalnum(static_cast<unsigned char>(selector[cursor]))
+                    || selector[cursor] == '-' || selector[cursor] == '_')) ++cursor;
+            if (cursor > start) {
+                css_attribute_dependencies.emplace(selector.substr(start, cursor - start));
+            }
+            open = cursor;
+        }
         size_t compound_begin = 0;
         int bracket_depth = 0;
         int parenthesis_depth = 0;
@@ -5837,17 +13292,782 @@ struct v8_dom_runtime::implementation final {
             css_rules_by_tag[std::string(compound.substr(0, end))].push_back(index);
             return;
         }
+        if (const auto open = compound.find('['); open != std::string_view::npos) {
+            auto cursor = open + 1U;
+            while (cursor < compound.size()
+                && std::isspace(static_cast<unsigned char>(compound[cursor]))) {
+                ++cursor;
+            }
+            const auto start = cursor;
+            while (cursor < compound.size()
+                && (std::isalnum(static_cast<unsigned char>(compound[cursor]))
+                    || compound[cursor] == '-' || compound[cursor] == '_')) {
+                ++cursor;
+            }
+            if (cursor > start) {
+                css_rules_by_attribute[
+                    std::string(compound.substr(start, cursor - start))].push_back(index);
+                return;
+            }
+        }
+        if (trim_css_view(selector) == ":root") {
+            css_rules_by_tag["html"].push_back(index);
+            return;
+        }
+        if (trim_css_view(selector) == ":focus") {
+            css_focus_rules.push_back(index);
+            return;
+        }
         unindexed_css_rules.push_back(index);
     }
 
-    void append_css_rule(std::string selector, const std::vector<css_declaration>& declarations)
+    bool attribute_requires_recascade(std::string_view name) const
+    {
+        if (name == "id" || name == "class" || name == "style" || name == "type") return true;
+        return css_attribute_dependencies.contains(std::string(name));
+    }
+
+    bool media_query_matches(std::string query) const
+    {
+        std::transform(query.begin(), query.end(), query.begin(), [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        const auto [viewport_width, viewport_height, device_scale_factor] = viewport_provider();
+        static_cast<void>(device_scale_factor);
+        size_t alternative_start = 0;
+        while (alternative_start <= query.size()) {
+            auto alternative_end = query.find(',', alternative_start);
+            if (alternative_end == std::string::npos) alternative_end = query.size();
+            auto alternative = trim_css(std::string_view(query).substr(
+                alternative_start,
+                alternative_end - alternative_start));
+            const auto negated = alternative.starts_with("not ");
+            if (negated) alternative = trim_css(std::string_view(alternative).substr(4U));
+            auto matches = true;
+            if (alternative.starts_with("all and")) {
+                alternative = trim_css(std::string_view(alternative).substr(7U));
+            } else if (alternative.starts_with("screen and")) {
+                alternative = trim_css(std::string_view(alternative).substr(10U));
+            } else if (alternative == "all" || alternative == "screen"
+                || alternative.starts_with("(")) {
+            } else if (alternative == "print" || alternative.starts_with("print and")) {
+                matches = false;
+            } else {
+                matches = false;
+            }
+
+            size_t condition_start = 0;
+            while (matches && (condition_start = alternative.find('(', condition_start))
+                != std::string::npos) {
+                const auto condition_end = alternative.find(')', condition_start + 1U);
+                if (condition_end == std::string::npos) break;
+                const auto condition = trim_css(std::string_view(alternative).substr(
+                    condition_start + 1U,
+                    condition_end - condition_start - 1U));
+                const auto separator = condition.find(':');
+                const auto feature = trim_css(std::string_view(condition).substr(0, separator));
+                const auto value = separator == std::string::npos
+                    ? std::string{} : trim_css(std::string_view(condition).substr(separator + 1U));
+                const auto number = std::strtof(value.c_str(), nullptr);
+                if (feature == "max-width") matches = viewport_width <= number;
+                else if (feature == "min-width") matches = viewport_width >= number;
+                else if (feature == "max-height") matches = viewport_height <= number;
+                else if (feature == "min-height") matches = viewport_height >= number;
+                else if (feature == "orientation") {
+                    matches = value == "landscape"
+                        ? viewport_width >= viewport_height
+                        : value == "portrait" && viewport_height > viewport_width;
+                } else if (feature == "hover" || feature == "any-hover") {
+                    matches = value == "hover";
+                } else if (feature == "pointer" || feature == "any-pointer") {
+                    matches = value == "fine";
+                } else if (feature == "prefers-reduced-motion") {
+                    matches = value == "no-preference";
+                } else {
+                    matches = false;
+                }
+                condition_start = condition_end + 1U;
+            }
+            if (negated) matches = !matches;
+            if (matches) return true;
+            if (alternative_end == query.size()) break;
+            alternative_start = alternative_end + 1U;
+        }
+        return false;
+    }
+
+    bool css_rule_media_matches(const css_rule& rule) const
+    {
+        return std::all_of(
+            rule.media_queries.begin(),
+            rule.media_queries.end(),
+            [this](const std::string& query) { return media_query_matches(query); });
+    }
+
+    void append_css_rule(
+        std::string selector,
+        const std::vector<css_declaration>& declarations,
+        const std::vector<std::string>& media_queries)
     {
         const auto index = css_rules.size();
-        css_rules.push_back({std::move(selector), declarations});
+        css_rule rule;
+        rule.stylesheet_owner_id = active_stylesheet_owner_id;
+        rule.specificity = css_selector_specificity(selector);
+        rule.selector = std::move(selector);
+        rule.compiled_selector = compile_css_selector(rule.selector);
+        rule.declarations = declarations;
+        rule.media_queries = media_queries;
+        rule.media_matches = css_rule_media_matches(rule);
+        css_rules.push_back(std::move(rule));
         index_css_rule(index);
     }
 
-    void parse_css_rules(const std::string& css, size_t begin, size_t end)
+    void inventory_css_length_units(
+        std::string_view value,
+        std::string_view source)
+    {
+        char quote = 0;
+        for (size_t index = 0; index < value.size();) {
+            if (quote != 0) {
+                if (value[index] == quote
+                    && (index == 0U || value[index - 1U] != '\\')) quote = 0;
+                ++index;
+                continue;
+            }
+            if (value[index] == '\'' || value[index] == '"') {
+                quote = value[index++];
+                continue;
+            }
+            if (!std::isdigit(static_cast<unsigned char>(value[index]))
+                && !(value[index] == '.' && index + 1U < value.size()
+                    && std::isdigit(static_cast<unsigned char>(value[index + 1U])))) {
+                ++index;
+                continue;
+            }
+            if (index > 0U) {
+                const auto previous = value[index - 1U];
+                if (std::isalnum(static_cast<unsigned char>(previous))
+                    || previous == '_' || previous == '#') {
+                    ++index;
+                    continue;
+                }
+            }
+            while (index < value.size()
+                && (std::isdigit(static_cast<unsigned char>(value[index]))
+                    || value[index] == '.')) ++index;
+            const auto unit_start = index;
+            while (index < value.size()
+                && std::isalpha(static_cast<unsigned char>(value[index]))) ++index;
+            if (unit_start == index) continue;
+            const auto unit = lower_html_name(
+                std::string(value.substr(unit_start, index - unit_start)));
+            if (unit != "em" && unit != "rem"
+                && unit != "vw" && unit != "vh"
+                && unit != "vmin" && unit != "vmax"
+                && unit != "ch" && unit != "ex"
+                && unit != "cm" && unit != "mm"
+                && unit != "in" && unit != "pt"
+                && unit != "pc" && unit != "q") {
+                continue;
+            }
+            record_feature(
+                "css",
+                "length-unit:" + unit,
+                unit == "em" || unit == "rem" || unit == "vw" || unit == "vh"
+                    ? "partially-supported" : "unsupported",
+                unit == "em" || unit == "rem"
+                    ? "default 16px root metric"
+                    : unit == "vw" || unit == "vh"
+                        ? "top-level logical viewport dimensions"
+                        : "the native length parser treats this numeric dimension as px",
+                std::string(source));
+        }
+    }
+
+    void inventory_css_value_functions(
+        std::string_view value,
+        std::string_view source = "stylesheet-parser")
+    {
+        inventory_css_length_units(value, source);
+        char quote = 0;
+        for (size_t index = 0; index < value.size();) {
+            const auto character = value[index];
+            if (quote != 0) {
+                if (character == quote && (index == 0U || value[index - 1U] != '\\')) {
+                    quote = 0;
+                }
+                ++index;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+                ++index;
+                continue;
+            }
+            if (!std::isalpha(static_cast<unsigned char>(character))
+                && character != '-') {
+                ++index;
+                continue;
+            }
+            const auto name_start = index++;
+            while (index < value.size()
+                && (std::isalnum(static_cast<unsigned char>(value[index]))
+                    || value[index] == '-')) ++index;
+            auto after_name = index;
+            while (after_name < value.size()
+                && std::isspace(static_cast<unsigned char>(value[after_name]))) ++after_name;
+            if (after_name >= value.size() || value[after_name] != '(') continue;
+
+            auto name = lower_html_name(std::string(value.substr(name_start, index - name_start)));
+            if (std::none_of(name.begin(), name.end(), [](unsigned char character) {
+                    return std::isalpha(character);
+                })) {
+                continue;
+            }
+            auto classification = std::string("unsupported");
+            auto semantic_slice = std::string{};
+            if (name == "var") {
+                classification = "partially-supported";
+                semantic_slice = "inherited custom-property substitution with fallback; no registered typed properties";
+            } else if (name == "calc" || name == "min" || name == "max") {
+                classification = "partially-supported";
+                semantic_slice = "length arithmetic over px, percent, and unitless zero";
+            } else if (name == "rgb" || name == "rgba") {
+                classification = "partially-supported";
+                semantic_slice = "legacy comma-separated integer RGB channels and numeric alpha";
+            } else if (name == "translate" || name == "translatex" || name == "translatey"
+                || name == "scale" || name == "scalex" || name == "scaley"
+                || name == "rotate") {
+                classification = "partially-supported";
+                semantic_slice = "one occurrence per 2D transform function in the native fixed transform projection";
+            } else if (name == "cubic-bezier") {
+                classification = "partially-supported";
+                semantic_slice = "transition timing functions with four numeric arguments";
+            } else if (name == "url") {
+                classification = "partially-supported";
+                semantic_slice = "first URL-backed SVG CSS background layer";
+            }
+            record_feature(
+                "css",
+                "function:" + name,
+                std::move(classification),
+                std::move(semantic_slice),
+                std::string(source));
+        }
+    }
+
+    void inventory_css_selector(std::string_view selector)
+    {
+        auto record_selector_feature = [this](
+                                           std::string feature,
+                                           std::string classification = "supported",
+                                           std::string semantic_slice = {}) {
+            record_feature(
+                "css",
+                std::move(feature),
+                std::move(classification),
+                std::move(semantic_slice),
+                "selector-parser");
+        };
+
+        bool saw_type = false;
+        bool saw_class = false;
+        bool saw_id = false;
+        bool saw_universal = false;
+        int bracket_depth = 0;
+        int parenthesis_depth = 0;
+        char quote = 0;
+        for (size_t index = 0; index < selector.size(); ++index) {
+            const auto character = selector[index];
+            if (quote != 0) {
+                if (character == quote && (index == 0U || selector[index - 1U] != '\\')) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+                continue;
+            }
+            if (character == '[') {
+                ++bracket_depth;
+                const auto close = selector.find(']', index + 1U);
+                if (close == std::string_view::npos) {
+                    record_selector_feature(
+                        "selector:attribute",
+                        "invalid-authoring",
+                        "unterminated attribute selector");
+                    break;
+                }
+                const auto condition = selector.substr(index + 1U, close - index - 1U);
+                const auto operator_index = condition.find_first_of("~|^$*=");
+                if (operator_index == std::string_view::npos) {
+                    record_selector_feature("selector:attribute-presence");
+                } else {
+                    auto operator_name = std::string(1U, condition[operator_index]);
+                    if (condition[operator_index] != '='
+                        && operator_index + 1U < condition.size()
+                        && condition[operator_index + 1U] == '=') {
+                        operator_name.push_back('=');
+                    }
+                    if (operator_name == "=") {
+                        record_selector_feature("selector:attribute-equals");
+                    } else if (operator_name == "~=" || operator_name == "|="
+                        || operator_name == "^=" || operator_name == "$="
+                        || operator_name == "*=") {
+                        record_selector_feature(
+                            "selector:attribute-operator:" + operator_name,
+                            "partially-supported",
+                            "case-sensitive matching without selector flags");
+                    } else {
+                        record_selector_feature(
+                            "selector:attribute-operator:" + operator_name,
+                            "unsupported");
+                    }
+                }
+                index = close;
+                --bracket_depth;
+                continue;
+            }
+            if (character == '(') {
+                ++parenthesis_depth;
+                continue;
+            }
+            if (character == ')') {
+                if (parenthesis_depth > 0) --parenthesis_depth;
+                continue;
+            }
+            if (bracket_depth != 0) continue;
+            if (character == ':') {
+                const auto pseudo_element_marker = index + 1U < selector.size()
+                    && selector[index + 1U] == ':';
+                if (pseudo_element_marker) ++index;
+                const auto name_start = index + 1U;
+                auto name_end = name_start;
+                while (name_end < selector.size()
+                    && (std::isalnum(static_cast<unsigned char>(selector[name_end]))
+                        || selector[name_end] == '-')) ++name_end;
+                auto name = lower_html_name(std::string(
+                    selector.substr(name_start, name_end - name_start)));
+                const auto pseudo_element = pseudo_element_marker
+                    || name == "before" || name == "after"
+                    || name == "first-letter" || name == "first-line";
+                if (pseudo_element) {
+                    record_selector_feature(
+                        "selector:pseudo-element:" + name,
+                        name == "before" || name == "after" ? "supported" : "unsupported");
+                } else {
+                    static const std::unordered_set<std::string> supported_pseudo_classes{
+                        "root", "first-child", "last-child", "only-child",
+                        "first-of-type", "last-of-type", "only-of-type", "empty",
+                        "enabled", "disabled", "checked", "hover", "focus", "focus-visible"};
+                    if (name == "not" || name == "is" || name == "where") {
+                        record_selector_feature(
+                            "selector:pseudo-class:" + name,
+                            "partially-supported",
+                            "comma-separated compound-selector arguments");
+                    } else if (name == "nth-child") {
+                        record_selector_feature(
+                            "selector:pseudo-class:nth-child",
+                            "partially-supported",
+                            "integer, odd, even, and An+B forms without an of-selector");
+                    } else {
+                        record_selector_feature(
+                            "selector:pseudo-class:" + name,
+                            supported_pseudo_classes.contains(name) ? "supported" : "unsupported");
+                    }
+                }
+                index = name_end == 0U ? index : name_end - 1U;
+                continue;
+            }
+            if (parenthesis_depth != 0) continue;
+            if (character == '>') {
+                record_selector_feature("selector:combinator:child");
+            } else if (character == '+') {
+                record_selector_feature("selector:combinator:adjacent-sibling");
+            } else if (character == '~') {
+                record_selector_feature("selector:combinator:general-sibling");
+            } else if (character == '#') {
+                saw_id = true;
+            } else if (character == '.') {
+                saw_class = true;
+            } else if (character == '*') {
+                saw_universal = true;
+            } else if (character == '|' || character == '\\') {
+                record_selector_feature(
+                    character == '|' ? "selector:namespace" : "selector:escaped-identifier",
+                    "unsupported");
+            } else if (std::isalpha(static_cast<unsigned char>(character))) {
+                const auto previous = index == 0U ? ' ' : selector[index - 1U];
+                if (index == 0U || std::isspace(static_cast<unsigned char>(previous))
+                    || previous == '>' || previous == '+' || previous == '~' || previous == ',') {
+                    saw_type = true;
+                }
+            } else if (std::isspace(static_cast<unsigned char>(character))) {
+                auto next = index + 1U;
+                while (next < selector.size()
+                    && std::isspace(static_cast<unsigned char>(selector[next]))) ++next;
+                auto previous = index;
+                while (previous > 0U
+                    && std::isspace(static_cast<unsigned char>(selector[previous - 1U]))) --previous;
+                if (previous > 0U && next < selector.size()
+                    && selector[previous - 1U] != '>' && selector[previous - 1U] != '+'
+                    && selector[previous - 1U] != '~' && selector[next] != '>'
+                    && selector[next] != '+' && selector[next] != '~') {
+                    record_selector_feature("selector:combinator:descendant");
+                }
+            }
+        }
+        if (saw_type) record_selector_feature("selector:type");
+        if (saw_class) record_selector_feature("selector:class");
+        if (saw_id) record_selector_feature("selector:id");
+        if (saw_universal) record_selector_feature("selector:universal");
+    }
+
+    bool inventory_media_query(std::string query)
+    {
+        std::transform(query.begin(), query.end(), query.begin(), [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        auto supported = true;
+        size_t alternative_start = 0U;
+        while (alternative_start <= query.size()) {
+            auto alternative_end = query.find(',', alternative_start);
+            if (alternative_end == std::string::npos) alternative_end = query.size();
+            auto alternative = trim_css(std::string_view(query).substr(
+                alternative_start, alternative_end - alternative_start));
+            if (alternative.starts_with("not ")) {
+                alternative = trim_css(std::string_view(alternative).substr(4U));
+            }
+            const auto first_condition = alternative.find('(');
+            auto media_type = trim_css(std::string_view(alternative).substr(0U, first_condition));
+            if (media_type.ends_with(" and")) media_type.resize(media_type.size() - 4U);
+            media_type = trim_css(media_type);
+            if (!media_type.empty()) {
+                const auto known = media_type == "all" || media_type == "screen" || media_type == "print";
+                record_feature(
+                    "css",
+                    "media-type:" + media_type,
+                    known ? "supported" : "unsupported",
+                    {},
+                    "media-query-parser");
+                supported = supported && known;
+            }
+            size_t condition_start = 0U;
+            while ((condition_start = alternative.find('(', condition_start))
+                != std::string::npos) {
+                const auto condition_end = alternative.find(')', condition_start + 1U);
+                if (condition_end == std::string::npos) {
+                    supported = false;
+                    break;
+                }
+                const auto condition = trim_css(std::string_view(alternative).substr(
+                    condition_start + 1U, condition_end - condition_start - 1U));
+                const auto separator = condition.find(':');
+                const auto feature = trim_css(std::string_view(condition).substr(0U, separator));
+                static const std::unordered_set<std::string> supported_features{
+                    "max-width", "min-width", "max-height", "min-height", "orientation",
+                    "hover", "any-hover", "pointer", "any-pointer", "prefers-reduced-motion"};
+                const auto known = separator != std::string::npos
+                    && supported_features.contains(feature);
+                record_feature(
+                    "css",
+                    "media-feature:" + (feature.empty() ? std::string("<missing>") : feature),
+                    known ? "supported" : "unsupported",
+                    {},
+                    "media-query-parser");
+                supported = supported && known;
+                condition_start = condition_end + 1U;
+            }
+            if (alternative_end == query.size()) break;
+            alternative_start = alternative_end + 1U;
+        }
+        return supported;
+    }
+
+    static uint32_t css_selector_specificity(std::string_view selector)
+    {
+        // Pack the CSS (ID, class/attribute/pseudo-class, type/pseudo-element)
+        // tuple so ordinary integer ordering retains the cascade's lexicographic order.
+        uint32_t ids = 0;
+        uint32_t classes = 0;
+        uint32_t elements = 0;
+        bool compound_start = true;
+        for (size_t index = 0; index < selector.size();) {
+            const auto character = selector[index];
+            if (std::isspace(static_cast<unsigned char>(character))
+                || character == '>' || character == '+' || character == '~') {
+                compound_start = true;
+                ++index;
+                continue;
+            }
+            if (character == '#') {
+                ++ids;
+                ++index;
+                while (index < selector.size()
+                    && (std::isalnum(static_cast<unsigned char>(selector[index]))
+                        || selector[index] == '-' || selector[index] == '_')) ++index;
+                compound_start = false;
+                continue;
+            }
+            if (character == '.') {
+                ++classes;
+                ++index;
+                while (index < selector.size()
+                    && (std::isalnum(static_cast<unsigned char>(selector[index]))
+                        || selector[index] == '-' || selector[index] == '_')) ++index;
+                compound_start = false;
+                continue;
+            }
+            if (character == '[') {
+                ++classes;
+                char quote = 0;
+                for (++index; index < selector.size(); ++index) {
+                    if (quote != 0) {
+                        if (selector[index] == quote) quote = 0;
+                    } else if (selector[index] == '\'' || selector[index] == '"') {
+                        quote = selector[index];
+                    } else if (selector[index] == ']') {
+                        ++index;
+                        break;
+                    }
+                }
+                compound_start = false;
+                continue;
+            }
+            if (character == ':') {
+                auto pseudo_element = index + 1U < selector.size()
+                    && selector[index + 1U] == ':';
+                if (pseudo_element) {
+                    index += 2U;
+                } else {
+                    ++index;
+                }
+                const auto name_start = index;
+                while (index < selector.size()
+                    && (std::isalnum(static_cast<unsigned char>(selector[index]))
+                        || selector[index] == '-')) ++index;
+                std::string name(selector.substr(name_start, index - name_start));
+                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char value) {
+                    return static_cast<char>(std::tolower(value));
+                });
+                pseudo_element = pseudo_element || name == "before" || name == "after";
+                if (pseudo_element) ++elements;
+                else if (name != "where") ++classes;
+                if (index < selector.size() && selector[index] == '(') {
+                    int depth = 1;
+                    for (++index; index < selector.size() && depth > 0; ++index) {
+                        if (selector[index] == '(') ++depth;
+                        else if (selector[index] == ')') --depth;
+                    }
+                }
+                compound_start = false;
+                continue;
+            }
+            if (compound_start
+                && std::isalpha(static_cast<unsigned char>(character))) {
+                ++elements;
+                while (index < selector.size()
+                    && (std::isalnum(static_cast<unsigned char>(selector[index]))
+                        || selector[index] == '-')) ++index;
+                compound_start = false;
+                continue;
+            }
+            compound_start = false;
+            ++index;
+        }
+        return std::min(ids, 0xffU) << 16U
+            | std::min(classes, 0xffU) << 8U
+            | std::min(elements, 0xffU);
+    }
+
+    void sort_css_candidates(std::vector<size_t>& candidates) const
+    {
+        // Declarations are applied in ascending precedence; later declarations
+        // therefore replace earlier ones while equal specificity retains source order.
+        std::sort(
+            candidates.begin(),
+            candidates.end(),
+            [this](size_t left, size_t right) {
+                const auto left_specificity = css_rules[left].specificity;
+                const auto right_specificity = css_rules[right].specificity;
+                return left_specificity != right_specificity
+                    ? left_specificity < right_specificity
+                    : left < right;
+            });
+    }
+
+    bool refresh_css_media_matches()
+    {
+        auto changed = false;
+        for (auto& rule : css_rules) {
+            const auto matches = css_rule_media_matches(rule);
+            changed = changed || matches != rule.media_matches;
+            rule.media_matches = matches;
+        }
+        return changed;
+    }
+
+    static std::string resolve_css_resource_urls(
+        std::string value,
+        const std::string& stylesheet_address)
+    {
+        if (value.empty() || stylesheet_address.empty()) return value;
+
+        auto lowercase = lower_html_name(value);
+        size_t search = 0U;
+        while ((search = lowercase.find("url(", search)) != std::string::npos) {
+            const auto argument_begin = search + 4U;
+            auto argument_end = argument_begin;
+            char quote = 0;
+            for (; argument_end < value.size(); ++argument_end) {
+                const auto character = value[argument_end];
+                if (quote != 0) {
+                    if (character == quote
+                        && (argument_end == argument_begin
+                            || value[argument_end - 1U] != '\\')) {
+                        quote = 0;
+                    }
+                    continue;
+                }
+                if (character == '\'' || character == '"') {
+                    quote = character;
+                } else if (character == ')') {
+                    break;
+                }
+            }
+            if (argument_end >= value.size()) break;
+
+            auto address = trim_css(std::string_view(value).substr(
+                argument_begin,
+                argument_end - argument_begin));
+            if (address.size() >= 2U
+                && ((address.front() == '\'' && address.back() == '\'')
+                    || (address.front() == '"' && address.back() == '"'))) {
+                address = address.substr(1U, address.size() - 2U);
+            }
+            if (address.empty() || address.starts_with('#')) {
+                search = argument_end + 1U;
+                continue;
+            }
+
+            auto resolved = resolve_resource_url(address, stylesheet_address);
+            std::string escaped;
+            escaped.reserve(resolved.size());
+            for (const auto character : resolved) {
+                if (character == '\\' || character == '"') escaped.push_back('\\');
+                escaped.push_back(character);
+            }
+            const auto replacement = "url(\"" + escaped + "\")";
+            value.replace(search, argument_end - search + 1U, replacement);
+            lowercase = lower_html_name(value);
+            search += replacement.size();
+        }
+        return value;
+    }
+
+    void parse_opacity_keyframes(
+        const std::string& css,
+        std::string name,
+        size_t begin,
+        size_t end)
+    {
+        css_opacity_keyframes definition;
+        size_t cursor = begin;
+        while (cursor < end) {
+            const auto open = css.find('{', cursor);
+            if (open == std::string::npos || open >= end) break;
+            const auto close = matching_css_brace(css, open, end);
+            if (close == std::string::npos) break;
+            const auto selector = trim_css(
+                std::string_view(css).substr(cursor, open - cursor));
+            const auto declarations = parse_css_declarations(
+                std::string_view(css).substr(open + 1U, close - open - 1U));
+            const auto opacity = std::find_if(
+                declarations.begin(), declarations.end(), [](const auto& declaration) {
+                    return declaration.name == "opacity";
+                });
+            const auto transform = std::find_if(
+                declarations.begin(), declarations.end(), [](const auto& declaration) {
+                    return declaration.name == "transform";
+                });
+            const auto rotation_degrees = [&]() -> std::optional<float> {
+                if (transform == declarations.end()) return std::nullopt;
+                auto value = lower_html_name(trim_css(transform->value));
+                const auto rotate = value.find("rotate(");
+                if (rotate == std::string::npos) return std::nullopt;
+                const auto close = value.find(')', rotate + 7U);
+                if (close == std::string::npos) return std::nullopt;
+                auto angle = trim_css(value.substr(rotate + 7U, close - rotate - 7U));
+                auto multiplier = 1.0F;
+                if (angle.ends_with("turn")) {
+                    angle.resize(angle.size() - 4U);
+                    multiplier = 360.0F;
+                } else if (angle.ends_with("deg")) {
+                    angle.resize(angle.size() - 3U);
+                } else if (angle.ends_with("rad")) {
+                    angle.resize(angle.size() - 3U);
+                    multiplier = 57.29577951308232F;
+                } else return std::nullopt;
+                return std::strtof(angle.c_str(), nullptr) * multiplier;
+            }();
+            for (auto component : split_css_component_list(selector, ',')) {
+                component = lower_html_name(trim_css(std::move(component)));
+                float offset = -1;
+                if (component == "from") offset = 0;
+                else if (component == "to") offset = 1;
+                else if (component.ends_with('%')) {
+                    component.pop_back();
+                    offset = std::strtof(component.c_str(), nullptr) / 100.0F;
+                }
+                if (offset < 0 || offset > 1) continue;
+                if (opacity != declarations.end()) {
+                    definition.opacity_stops.push_back({
+                        offset,
+                        std::clamp(std::strtof(opacity->value.c_str(), nullptr), 0.0F, 1.0F)});
+                }
+                if (rotation_degrees.has_value()) {
+                    definition.rotation_stops.push_back({offset, *rotation_degrees});
+                }
+            }
+            cursor = close + 1U;
+        }
+        const auto normalize = [](auto& stops) {
+            std::stable_sort(
+                stops.begin(), stops.end(),
+                [](const auto& left, const auto& right) { return left.offset < right.offset; });
+            using stop_type = typename std::decay_t<decltype(stops)>::value_type;
+            std::vector<stop_type> unique;
+            for (const auto& stop : stops) {
+                if (!unique.empty()
+                    && std::abs(unique.back().offset - stop.offset) < 0.0001F) {
+                    unique.back() = stop;
+                } else {
+                    unique.push_back(stop);
+                }
+            }
+            stops = std::move(unique);
+        };
+        normalize(definition.opacity_stops);
+        normalize(definition.rotation_stops);
+        if (definition.rotation_stops.size() == 1U
+            && definition.rotation_stops.front().offset > 0) {
+            definition.rotation_stops.insert(
+                definition.rotation_stops.begin(), {0, 0});
+        }
+        if (definition.opacity_stops.size() >= 2U
+            || definition.rotation_stops.size() >= 2U) {
+            opacity_keyframes[lower_html_name(trim_css(std::move(name)))] =
+                std::move(definition);
+        }
+    }
+
+    void parse_css_rules(
+        const std::string& css,
+        size_t begin,
+        size_t end,
+        const std::vector<std::string>& inherited_media = {},
+        const std::string& stylesheet_address = {})
     {
         size_t cursor = begin;
         while (cursor < end) {
@@ -5856,28 +14076,140 @@ struct v8_dom_runtime::implementation final {
             const auto close = matching_css_brace(css, open, end);
             if (close == std::string::npos) break;
             const auto prelude = trim_css(std::string_view(css).substr(cursor, open - cursor));
-            if (prelude.starts_with("@media") || prelude.starts_with("@supports")
-                || prelude.starts_with("@layer") || prelude.starts_with("@container")) {
-                parse_css_rules(css, open + 1U, close);
+            if (prelude.starts_with("@keyframes")
+                || prelude.starts_with("@-webkit-keyframes")) {
+                const auto prefix = prelude.starts_with("@keyframes")
+                    ? std::string_view("@keyframes")
+                    : std::string_view("@-webkit-keyframes");
+                auto name = trim_css(std::string_view(prelude).substr(prefix.size()));
+                parse_opacity_keyframes(css, name, open + 1U, close);
+                record_feature(
+                    "css",
+                    "at-rule:@keyframes",
+                    "partially-supported",
+                    "opacity and rotate() keyframes with host-clock timing",
+                    "stylesheet-parser");
+            } else if (prelude.starts_with("@media")) {
+                auto nested_media = inherited_media;
+                auto query = trim_css(std::string_view(prelude).substr(6U));
+                const auto supported = inventory_media_query(query);
+                record_feature(
+                    "css",
+                    "at-rule:@media",
+                    supported ? "supported" : "unsupported",
+                    supported ? std::string{} : "unsupported media type or condition",
+                    "stylesheet-parser");
+                nested_media.push_back(std::move(query));
+                parse_css_rules(css, open + 1U, close, nested_media, stylesheet_address);
+            } else if (prelude.starts_with("@supports")) {
+                auto condition = trim_css(std::string_view(prelude).substr(9U));
+                auto negated = false;
+                if (condition.starts_with("not ")) {
+                    negated = true;
+                    condition = trim_css(std::string_view(condition).substr(4U));
+                }
+                // This bounded runtime only advertises selector() forms whose
+                // state is implemented by its selector engine. Unknown support
+                // conditions remain false instead of accidentally enabling a
+                // fallback block.
+                const auto supported = condition == "selector(:focus-visible)";
+                record_feature(
+                    "css",
+                    "at-rule:@supports",
+                    supported ? "supported" : "unsupported",
+                    supported ? "selector(:focus-visible)" : "condition is not evaluated",
+                    "stylesheet-parser");
+                if (supported != negated) {
+                    parse_css_rules(css, open + 1U, close, inherited_media, stylesheet_address);
+                }
+            } else if (prelude.starts_with("@layer")) {
+                record_feature(
+                    "css",
+                    "at-rule:@layer",
+                    "partially-supported",
+                    "nested rules are parsed without cascade-layer ordering",
+                    "stylesheet-parser");
+                parse_css_rules(css, open + 1U, close, inherited_media, stylesheet_address);
+            } else if (prelude.starts_with("@container")) {
+                record_feature(
+                    "css",
+                    "at-rule:@container",
+                    "unsupported",
+                    "container conditions are not evaluated",
+                    "stylesheet-parser");
+                parse_css_rules(css, open + 1U, close, inherited_media, stylesheet_address);
             } else if (!prelude.empty() && prelude.front() != '@') {
                 auto declarations = parse_css_declarations(
                     std::string_view(css).substr(open + 1U, close - open - 1U));
-                size_t selector_cursor = 0;
-                while (selector_cursor < prelude.size()) {
-                    auto separator = prelude.find(',', selector_cursor);
-                    if (separator == std::string::npos) separator = prelude.size();
-                    auto selector = trim_css(std::string_view(prelude).substr(
-                        selector_cursor,
-                        separator - selector_cursor));
-                    if (!selector.empty()) append_css_rule(std::move(selector), declarations);
-                    selector_cursor = separator + 1U;
+                for (auto& declaration : declarations) {
+                    declaration.value = resolve_css_resource_urls(
+                        std::move(declaration.value),
+                        stylesheet_address);
+                    inventory_css_value_functions(declaration.value);
+                    if (declaration.name == "background-image") {
+                        if (const auto url = first_css_url(declaration.value);
+                            url.has_value()) {
+                            // CSS image fetches are independent of style
+                            // calculation in browsers. Start them while parsing
+                            // the stylesheet so inserting a dialog subtree does
+                            // not serialize network/cache reads inside every
+                            // background-image declaration.
+                            start_resource_prefetch(
+                                *url,
+                                {},
+                                HTMLML_RESOURCE_IMAGE);
+                        }
+                    }
                 }
+                size_t selector_cursor = 0U;
+                int bracket_depth = 0;
+                int parenthesis_depth = 0;
+                char quote = 0;
+                for (size_t index = 0U; index <= prelude.size(); ++index) {
+                    const auto at_end = index == prelude.size();
+                    const auto character = at_end ? ',' : prelude[index];
+                    if (!at_end && quote != 0) {
+                        if (character == quote
+                            && (index == 0U || prelude[index - 1U] != '\\')) quote = 0;
+                        continue;
+                    }
+                    if (!at_end && (character == '\'' || character == '"')) {
+                        quote = character;
+                        continue;
+                    }
+                    if (!at_end && character == '[') ++bracket_depth;
+                    else if (!at_end && character == ']') --bracket_depth;
+                    else if (!at_end && character == '(') ++parenthesis_depth;
+                    else if (!at_end && character == ')') --parenthesis_depth;
+                    else if (character == ',' && bracket_depth == 0
+                        && parenthesis_depth == 0) {
+                        auto selector = trim_css(std::string_view(prelude).substr(
+                            selector_cursor, index - selector_cursor));
+                        if (!selector.empty()) {
+                            inventory_css_selector(selector);
+                            append_css_rule(std::move(selector), declarations, inherited_media);
+                        }
+                        selector_cursor = index + 1U;
+                    }
+                }
+            } else if (!prelude.empty() && prelude.front() == '@') {
+                auto name_end = prelude.find_first_of(" (\t\r\n");
+                if (name_end == std::string::npos) name_end = prelude.size();
+                record_feature(
+                    "css",
+                    "at-rule:" + lower_html_name(prelude.substr(0U, name_end)),
+                    "unsupported",
+                    {},
+                    "stylesheet-parser");
             }
             cursor = close + 1U;
         }
     }
 
-    size_t add_stylesheet(std::string css)
+    size_t add_stylesheet(
+        std::string css,
+        const std::string& stylesheet_address = {},
+        uint32_t stylesheet_owner_id = 0)
     {
         binding_callback_timer timer(profile_startup ? &startup_css_parse : nullptr);
         const auto first_new_rule = css_rules.size();
@@ -5890,12 +14222,21 @@ struct v8_dom_runtime::implementation final {
             }
             css.erase(comment, end - comment + 2U);
         }
-        parse_css_rules(css, 0, css.size());
+        const auto previous_owner_id = active_stylesheet_owner_id;
+        active_stylesheet_owner_id = stylesheet_owner_id;
+        parse_css_rules(css, 0, css.size(), {}, stylesheet_address);
+        active_stylesheet_owner_id = previous_owner_id;
         for (auto index = first_new_rule; index < css_rules.size(); ++index) {
             const auto& rule = css_rules[index];
+            if (!rule.media_matches) continue;
             if (rule.selector != ":root" && rule.selector != "html") continue;
             for (const auto& declaration : rule.declarations) {
-                if (declaration.name.starts_with("--")) css_variables[declaration.name] = declaration.value;
+                if (!declaration.name.starts_with("--")) continue;
+                if (!declaration.important
+                    && important_css_variables.contains(declaration.name)) continue;
+                css_variables[declaration.name] = declaration.value;
+                if (declaration.important) important_css_variables.insert(declaration.name);
+                else important_css_variables.erase(declaration.name);
             }
         }
         return first_new_rule;
@@ -5952,7 +14293,149 @@ struct v8_dom_runtime::implementation final {
         return trim_css(value);
     }
 
-    bool css_compound_selector_matches(const dom_node& node, std::string_view selector) const
+    static bool is_css_hex_digit(unsigned char character)
+    {
+        return (character >= '0' && character <= '9')
+            || (character >= 'a' && character <= 'f')
+            || (character >= 'A' && character <= 'F');
+    }
+
+    static size_t skip_css_escape_sequence(std::string_view text, size_t slash)
+    {
+        auto cursor = slash + 1U;
+        if (cursor >= text.size()) return cursor;
+        if (text[cursor] == '\r') {
+            ++cursor;
+            if (cursor < text.size() && text[cursor] == '\n') ++cursor;
+            return cursor;
+        }
+        if (text[cursor] == '\n' || text[cursor] == '\f') return cursor + 1U;
+        const auto hex_start = cursor;
+        while (cursor < text.size()
+            && cursor - hex_start < 6U
+            && is_css_hex_digit(static_cast<unsigned char>(text[cursor]))) ++cursor;
+        if (cursor > hex_start) {
+            if (cursor < text.size() && text[cursor] == '\r') {
+                ++cursor;
+                if (cursor < text.size() && text[cursor] == '\n') ++cursor;
+            } else if (cursor < text.size()
+                && std::isspace(static_cast<unsigned char>(text[cursor]))) ++cursor;
+        } else {
+            ++cursor;
+        }
+        return cursor;
+    }
+
+    static std::string read_css_identifier(std::string_view text, size_t& cursor)
+    {
+        std::string result;
+        while (cursor < text.size()) {
+            const auto character = static_cast<unsigned char>(text[cursor]);
+            if (character == '\\') {
+                ++cursor;
+                if (cursor >= text.size()) {
+                    append_utf8_codepoint(result, 0xfffdU);
+                    break;
+                }
+                if (text[cursor] == '\r') {
+                    ++cursor;
+                    if (cursor < text.size() && text[cursor] == '\n') ++cursor;
+                    continue;
+                }
+                if (text[cursor] == '\n' || text[cursor] == '\f') {
+                    ++cursor;
+                    continue;
+                }
+                const auto hex_start = cursor;
+                uint32_t codepoint = 0U;
+                while (cursor < text.size()
+                    && cursor - hex_start < 6U
+                    && is_css_hex_digit(static_cast<unsigned char>(text[cursor]))) {
+                    const auto digit = static_cast<unsigned char>(text[cursor++]);
+                    codepoint = codepoint * 16U
+                        + (digit >= '0' && digit <= '9'
+                            ? digit - '0'
+                            : static_cast<unsigned char>(std::tolower(digit)) - 'a' + 10U);
+                }
+                if (cursor > hex_start) {
+                    if (cursor < text.size() && text[cursor] == '\r') {
+                        ++cursor;
+                        if (cursor < text.size() && text[cursor] == '\n') ++cursor;
+                    } else if (cursor < text.size()
+                        && std::isspace(static_cast<unsigned char>(text[cursor]))) ++cursor;
+                    append_utf8_codepoint(
+                        result,
+                        codepoint == 0U || codepoint > 0x10ffffU
+                            || (codepoint >= 0xd800U && codepoint <= 0xdfffU)
+                            ? 0xfffdU
+                            : codepoint);
+                } else {
+                    result.push_back(text[cursor++]);
+                }
+                continue;
+            }
+            if (character == 0U) {
+                append_utf8_codepoint(result, 0xfffdU);
+                ++cursor;
+                continue;
+            }
+            if (!std::isalnum(character) && character != '-' && character != '_'
+                && character < 0x80U) break;
+            result.push_back(text[cursor++]);
+        }
+        return result;
+    }
+
+    static bool css_attribute_selector_matches(
+        const dom_node& node,
+        std::string_view condition)
+    {
+        const auto equal = condition.find('=');
+        auto name_end = equal;
+        auto attribute_operator = std::string_view{};
+        if (equal != std::string::npos) {
+            if (equal > 0U && (condition[equal - 1U] == '~'
+                || condition[equal - 1U] == '|'
+                || condition[equal - 1U] == '^'
+                || condition[equal - 1U] == '$'
+                || condition[equal - 1U] == '*')) {
+                name_end = equal - 1U;
+                attribute_operator = condition.substr(equal - 1U, 2U);
+            } else {
+                attribute_operator = condition.substr(equal, 1U);
+            }
+        }
+        const auto name = trim_css(std::string_view(condition).substr(0, name_end));
+        const auto attribute = node.attributes.find(name);
+        if (attribute == node.attributes.end()) return false;
+        if (equal == std::string::npos) return true;
+
+        auto wanted = trim_css(std::string_view(condition).substr(equal + 1U));
+        if (wanted.size() >= 2U && (wanted.front() == '\'' || wanted.front() == '"')) {
+            wanted = wanted.substr(1U, wanted.size() - 2U);
+        }
+        const auto& actual = attribute->second;
+        if (attribute_operator == "=") return actual == wanted;
+        if (attribute_operator == "^=") return actual.starts_with(wanted);
+        if (attribute_operator == "$=") return actual.ends_with(wanted);
+        if (attribute_operator == "*=") return actual.find(wanted) != std::string::npos;
+        if (attribute_operator == "|=") {
+            return actual == wanted || actual.starts_with(wanted + "-");
+        }
+        if (attribute_operator == "~=") {
+            std::istringstream words(actual);
+            for (std::string word; words >> word;) {
+                if (word == wanted) return true;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool css_compound_selector_matches(
+        const dom_node& node,
+        std::string_view selector,
+        const dom_node* scope_root = nullptr) const
     {
         selector = trim_css_view(selector);
         if (selector.empty()) return false;
@@ -5961,8 +14444,16 @@ struct v8_dom_runtime::implementation final {
         // that box with selectors such as `html.theme-dark`, so let the virtual
         // root participate as both tags.  A frame document is parented beneath
         // its owning iframe in the unified native tree.
-        const auto is_document_root = node.tag == "body"
-            && (node.parent == nullptr || node.parent->tag == "iframe");
+        const auto explicit_document_element = node.tag == "html"
+            && node.parent == &document.body();
+        const auto has_explicit_document_element = node.tag == "body"
+            && std::any_of(node.children.begin(), node.children.end(), [](const auto* child) {
+                return child != nullptr && child->tag == "html";
+            });
+        const auto is_document_root = explicit_document_element
+            || (node.tag == "body"
+                && (node.parent == nullptr || node.parent->tag == "iframe")
+                && !has_explicit_document_element);
         if (selector == ":root") return is_document_root;
         // A pseudo-element is a different CSS box, not the originating DOM
         // element.  Treating it as the element makes rules such as
@@ -5979,7 +14470,9 @@ struct v8_dom_runtime::implementation final {
         size_t pseudo = std::string::npos;
         int bracket_depth = 0;
         for (size_t index = 0; index < selector.size(); ++index) {
-            if (selector[index] == '[') ++bracket_depth;
+            if (selector[index] == '\\') {
+                index = skip_css_escape_sequence(selector, index) - 1U;
+            } else if (selector[index] == '[') ++bracket_depth;
             else if (selector[index] == ']') --bracket_depth;
             else if (selector[index] == ':' && bracket_depth == 0) {
                 pseudo = index;
@@ -5997,20 +14490,16 @@ struct v8_dom_runtime::implementation final {
             // selector.
         } else if (selector[cursor] == '*') {
             ++cursor;
-        } else if (std::isalpha(static_cast<unsigned char>(selector[cursor]))) {
-            const auto start = cursor;
-            while (cursor < selector.size()
-                && (std::isalnum(static_cast<unsigned char>(selector[cursor])) || selector[cursor] == '-')) ++cursor;
-            const auto wanted_tag = selector.substr(start, cursor - start);
-            if (wanted_tag != node.tag && !(wanted_tag == "html" && is_document_root)) return false;
+        } else if (std::isalpha(static_cast<unsigned char>(selector[cursor]))
+            || selector[cursor] == '\\') {
+            const auto wanted_tag = read_css_identifier(selector, cursor);
+            if (wanted_tag != node.tag
+                && !(wanted_tag == "html" && is_document_root && node.tag == "body")) return false;
         }
         while (cursor < selector.size()) {
             const auto marker = selector[cursor++];
             if (marker == '.' || marker == '#') {
-                const auto start = cursor;
-                while (cursor < selector.size() && selector[cursor] != '.' && selector[cursor] != '#'
-                    && selector[cursor] != '[' && selector[cursor] != ':') ++cursor;
-                const auto wanted = selector.substr(start, cursor - start);
+                const auto wanted = read_css_identifier(selector, cursor);
                 if (marker == '#') {
                     if (node.id_attribute != wanted) return false;
                 } else if (!has_class(node, wanted)) {
@@ -6021,7 +14510,21 @@ struct v8_dom_runtime::implementation final {
                 if (close == std::string::npos) return false;
                 const auto condition = selector.substr(cursor, close - cursor);
                 const auto equal = condition.find('=');
-                const auto name = trim_css(std::string_view(condition).substr(0, equal));
+                auto name_end = equal;
+                auto attribute_operator = std::string_view{};
+                if (equal != std::string::npos) {
+                    if (equal > 0U && (condition[equal - 1U] == '~'
+                        || condition[equal - 1U] == '|'
+                        || condition[equal - 1U] == '^'
+                        || condition[equal - 1U] == '$'
+                        || condition[equal - 1U] == '*')) {
+                        name_end = equal - 1U;
+                        attribute_operator = condition.substr(equal - 1U, 2U);
+                    } else {
+                        attribute_operator = condition.substr(equal, 1U);
+                    }
+                }
+                const auto name = trim_css(std::string_view(condition).substr(0, name_end));
                 const auto attribute = node.attributes.find(name);
                 if (attribute == node.attributes.end()) return false;
                 if (equal != std::string::npos) {
@@ -6029,7 +14532,24 @@ struct v8_dom_runtime::implementation final {
                     if (wanted.size() >= 2U && (wanted.front() == '\'' || wanted.front() == '"')) {
                         wanted = wanted.substr(1U, wanted.size() - 2U);
                     }
-                    if (attribute->second != wanted) return false;
+                    const auto& actual = attribute->second;
+                    if (attribute_operator == "=" && actual != wanted) return false;
+                    if (attribute_operator == "^=" && !actual.starts_with(wanted)) return false;
+                    if (attribute_operator == "$=" && !actual.ends_with(wanted)) return false;
+                    if (attribute_operator == "*=" && actual.find(wanted) == std::string::npos) return false;
+                    if (attribute_operator == "|="
+                        && actual != wanted && !actual.starts_with(wanted + "-")) return false;
+                    if (attribute_operator == "~=") {
+                        std::istringstream words(actual);
+                        auto found = false;
+                        for (std::string word; words >> word;) {
+                            if (word == wanted) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) return false;
+                    }
                 }
                 cursor = close + 1U;
             } else {
@@ -6037,8 +14557,46 @@ struct v8_dom_runtime::implementation final {
             }
         }
 
+        const auto is_element = [](const dom_node* candidate) {
+            return candidate != nullptr && !candidate->tag.starts_with('#');
+        };
+        std::vector<const dom_node*> element_siblings;
+        auto element_siblings_ready = false;
+        const auto siblings = [&]() -> const std::vector<const dom_node*>& {
+            if (element_siblings_ready) return element_siblings;
+            element_siblings_ready = true;
+            if (node.parent != nullptr) {
+                element_siblings.reserve(node.parent->children.size());
+                for (const auto* child : node.parent->children) {
+                    if (is_element(child)) element_siblings.push_back(child);
+                }
+            }
+            return element_siblings;
+        };
+
         cursor = 0;
         while (cursor < pseudo_suffix.size()) {
+            if (pseudo_suffix[cursor] == '.' || pseudo_suffix[cursor] == '#') {
+                const auto marker = pseudo_suffix[cursor++];
+                const auto wanted = read_css_identifier(pseudo_suffix, cursor);
+                if (marker == '#') {
+                    if (node.id_attribute != wanted) return false;
+                } else if (!has_class(node, wanted)) {
+                    return false;
+                }
+                continue;
+            }
+            if (pseudo_suffix[cursor] == '[') {
+                const auto close = pseudo_suffix.find(']', cursor + 1U);
+                if (close == std::string::npos
+                    || !css_attribute_selector_matches(
+                        node,
+                        pseudo_suffix.substr(cursor + 1U, close - cursor - 1U))) {
+                    return false;
+                }
+                cursor = close + 1U;
+                continue;
+            }
             if (pseudo_suffix[cursor] != ':') return false;
             const auto name_start = ++cursor;
             while (cursor < pseudo_suffix.size()
@@ -6059,33 +14617,75 @@ struct v8_dom_runtime::implementation final {
                 ++cursor;
             }
 
-            const auto is_element = [](const dom_node* candidate) {
-                return candidate != nullptr && !candidate->tag.starts_with('#');
-            };
             const auto form_control = node.tag == "button" || node.tag == "input"
                 || node.tag == "select" || node.tag == "textarea"
                 || node.tag == "option" || node.tag == "optgroup" || node.tag == "fieldset";
-            const auto element_siblings = [&] {
-                std::vector<const dom_node*> result;
-                if (node.parent == nullptr) return result;
-                for (const auto* child : node.parent->children) {
-                    if (is_element(child)) result.push_back(child);
-                }
-                return result;
-            }();
-            const auto position = std::find(element_siblings.begin(), element_siblings.end(), &node);
-            if (name == "first-child") {
-                if (node.parent == nullptr || position != element_siblings.begin()) return false;
+            if (name == "root") {
+                if (!is_document_root) return false;
+            } else if (name == "scope") {
+                if (scope_root == nullptr ? !is_document_root : scope_root != &node) return false;
+            } else if (name == "first-child") {
+                const auto& values = siblings();
+                const auto position = std::find(values.begin(), values.end(), &node);
+                if (node.parent == nullptr || position != values.begin()) return false;
             } else if (name == "last-child") {
-                if (node.parent == nullptr || position == element_siblings.end()
-                    || position + 1 != element_siblings.end()) return false;
+                const auto& values = siblings();
+                const auto position = std::find(values.begin(), values.end(), &node);
+                if (node.parent == nullptr || position == values.end()
+                    || position + 1 != values.end()) return false;
             } else if (name == "only-child") {
-                if (node.parent == nullptr || element_siblings.size() != 1U) return false;
+                if (node.parent == nullptr || siblings().size() != 1U) return false;
+            } else if (name == "nth-child") {
+                const auto& values = siblings();
+                const auto position = std::find(values.begin(), values.end(), &node);
+                if (node.parent == nullptr || position == values.end()) return false;
+                auto expression = lower_html_name(trim_css(argument));
+                std::erase_if(expression, [](unsigned char character) {
+                    return std::isspace(character);
+                });
+                auto coefficient = 0;
+                auto offset = 0;
+                const auto parse_integer = [](std::string_view value, int& result) {
+                    if (value.empty()) return false;
+                    const auto parsed = std::from_chars(
+                        value.data(), value.data() + value.size(), result);
+                    return parsed.ec == std::errc{}
+                        && parsed.ptr == value.data() + value.size();
+                };
+                if (expression == "odd") {
+                    coefficient = 2;
+                    offset = 1;
+                } else if (expression == "even") {
+                    coefficient = 2;
+                } else if (const auto n = expression.find('n'); n != std::string::npos) {
+                    const auto coefficient_text = std::string_view(expression).substr(0, n);
+                    if (coefficient_text.empty() || coefficient_text == "+") {
+                        coefficient = 1;
+                    } else if (coefficient_text == "-") {
+                        coefficient = -1;
+                    } else if (!parse_integer(coefficient_text, coefficient)) {
+                        return false;
+                    }
+                    const auto offset_text = std::string_view(expression).substr(n + 1U);
+                    if (!offset_text.empty() && !parse_integer(offset_text, offset)) return false;
+                } else if (!parse_integer(expression, offset)) {
+                    return false;
+                }
+                const auto one_based_position = static_cast<int>(
+                    std::distance(values.begin(), position) + 1);
+                if (coefficient == 0) {
+                    if (one_based_position != offset) return false;
+                } else {
+                    const auto difference = one_based_position - offset;
+                    if ((coefficient > 0 && difference < 0)
+                        || (coefficient < 0 && difference > 0)
+                        || difference % coefficient != 0) return false;
+                }
             } else if (name == "first-of-type" || name == "last-of-type"
                 || name == "only-of-type") {
                 if (node.parent == nullptr) return false;
                 std::vector<const dom_node*> same_type;
-                for (const auto* sibling : element_siblings) {
+                for (const auto* sibling : siblings()) {
                     if (sibling->tag == node.tag) same_type.push_back(sibling);
                 }
                 const auto same_position = std::find(same_type.begin(), same_type.end(), &node);
@@ -6108,9 +14708,15 @@ struct v8_dom_runtime::implementation final {
                 const auto checkable_input = node.tag == "input"
                     && input_type != node.attributes.end()
                     && (input_type->second == "checkbox" || input_type->second == "radio");
+                const auto checked_input = checkable_input
+                    && (node.checkedness_initialized
+                        ? node.checkedness
+                        : node.attributes.contains("checked"));
                 const auto selected_option = node.tag == "option"
-                    && node.attributes.contains("selected");
-                if ((!checkable_input || !node.attributes.contains("checked"))
+                    && (node.selectedness_initialized
+                        ? node.selectedness
+                        : node.attributes.contains("selected"));
+                if (!checked_input
                     && !selected_option) return false;
             } else if (name == "hover") {
                 auto* hovered = hover_target;
@@ -6124,6 +14730,10 @@ struct v8_dom_runtime::implementation final {
                 if (!matches_hover) return false;
             } else if (name == "focus") {
                 if (active_element != &node) return false;
+            } else if (name == "focus-visible") {
+                if (active_element != &node || (!focus_visible && !is_text_control(&node))) {
+                    return false;
+                }
             } else if (name == "not") {
                 size_t start = 0;
                 while (start <= argument.size()) {
@@ -6131,7 +14741,8 @@ struct v8_dom_runtime::implementation final {
                     if (end == std::string::npos) end = argument.size();
                     if (css_compound_selector_matches(
                             node,
-                            trim_css_view(argument.substr(start, end - start)))) {
+                            trim_css_view(argument.substr(start, end - start)),
+                            scope_root)) {
                         return false;
                     }
                     if (end == argument.size()) break;
@@ -6145,7 +14756,8 @@ struct v8_dom_runtime::implementation final {
                     if (end == std::string::npos) end = argument.size();
                     any = any || css_compound_selector_matches(
                         node,
-                        trim_css_view(argument.substr(start, end - start)));
+                        trim_css_view(argument.substr(start, end - start)),
+                        scope_root);
                     if (end == argument.size()) break;
                     start = end + 1U;
                 }
@@ -6172,57 +14784,78 @@ struct v8_dom_runtime::implementation final {
         selector = trim_css_view(selector);
         int bracket_depth = 0;
         int parenthesis_depth = 0;
-        for (size_t offset = selector.size(); offset > 0; --offset) {
-            const auto index = offset - 1U;
+        char quote = 0;
+        css_selector_split last{{}, selector, ' ', false};
+        for (size_t index = 0; index < selector.size(); ++index) {
             const auto value = selector[index];
-            if (value == ']') {
-                ++bracket_depth;
+            if (quote != 0) {
+                if (value == quote && (index == 0U || selector[index - 1U] != '\\')) quote = 0;
                 continue;
             }
-            if (value == '[') {
-                --bracket_depth;
+            if (value == '\\') {
+                index = skip_css_escape_sequence(selector, index) - 1U;
                 continue;
             }
-            if (value == ')') {
-                ++parenthesis_depth;
+            if (value == '\'' || value == '"') {
+                quote = value;
                 continue;
             }
-            if (value == '(') {
-                --parenthesis_depth;
-                continue;
-            }
+            if (value == '[') ++bracket_depth;
+            else if (value == ']') --bracket_depth;
+            else if (value == '(') ++parenthesis_depth;
+            else if (value == ')') --parenthesis_depth;
             if (bracket_depth != 0 || parenthesis_depth != 0) continue;
             if (value == '>' || value == '+' || value == '~') {
-                return {
+                auto right = index + 1U;
+                while (right < selector.size()
+                    && std::isspace(static_cast<unsigned char>(selector[right]))) ++right;
+                last = {
                     trim_css_view(selector.substr(0, index)),
-                    trim_css_view(selector.substr(index + 1U)),
+                    trim_css_view(selector.substr(right)),
                     value,
                     true};
+                continue;
             }
             if (!std::isspace(static_cast<unsigned char>(value))) continue;
-            auto before = index;
-            while (before > 0
-                && std::isspace(static_cast<unsigned char>(selector[before - 1U]))) {
-                --before;
-            }
-            if (before > 0) {
-                const auto explicit_combinator = selector[before - 1U];
-                if (explicit_combinator == '>' || explicit_combinator == '+'
-                    || explicit_combinator == '~') {
-                    return {
-                        trim_css_view(selector.substr(0, before - 1U)),
-                        trim_css_view(selector.substr(before)),
-                        explicit_combinator,
-                        true};
-                }
-            }
-            return {
-                trim_css_view(selector.substr(0, before)),
-                trim_css_view(selector.substr(index + 1U)),
+            const auto whitespace_start = index;
+            while (index + 1U < selector.size()
+                && std::isspace(static_cast<unsigned char>(selector[index + 1U]))) ++index;
+            const auto right = index + 1U;
+            if (right >= selector.size()) continue;
+            const auto previous = whitespace_start == 0U ? 0 : selector[whitespace_start - 1U];
+            const auto next = selector[right];
+            if (previous == '>' || previous == '+' || previous == '~'
+                || next == '>' || next == '+' || next == '~') continue;
+            last = {
+                trim_css_view(selector.substr(0, whitespace_start)),
+                trim_css_view(selector.substr(right)),
                 ' ',
                 true};
         }
-        return {{}, selector, ' ', false};
+        return last;
+    }
+
+    static compiled_css_selector compile_css_selector(std::string_view selector)
+    {
+        std::vector<std::string> reversed_compounds;
+        std::vector<char> reversed_combinators;
+        auto remaining = trim_css_view(selector);
+        while (!remaining.empty()) {
+            const auto split = split_css_selector(remaining);
+            reversed_compounds.emplace_back(trim_css_view(split.right));
+            if (!split.found || split.left.empty()) break;
+            reversed_combinators.push_back(split.combinator);
+            remaining = split.left;
+        }
+
+        compiled_css_selector result;
+        result.compounds.assign(
+            reversed_compounds.rbegin(),
+            reversed_compounds.rend());
+        result.combinators.assign(
+            reversed_combinators.rbegin(),
+            reversed_combinators.rend());
+        return result;
     }
 
     static const dom_node* previous_sibling(const dom_node& node)
@@ -6238,34 +14871,114 @@ struct v8_dom_runtime::implementation final {
             : *(position - 1);
     }
 
-    bool css_selector_matches(const dom_node& node, std::string_view selector) const
+    bool css_selector_matches(
+        const dom_node& node,
+        std::string_view selector,
+        const dom_node* scope_root = nullptr) const
     {
         const auto split = split_css_selector(selector);
-        if (!css_compound_selector_matches(node, split.right)) return false;
+        if (!css_compound_selector_matches(node, split.right, scope_root)) return false;
         if (!split.found || split.left.empty()) return !split.found;
 
         if (split.combinator == '>') {
             return node.parent != nullptr
-                && css_selector_matches(*node.parent, split.left);
+                && css_selector_matches(*node.parent, split.left, scope_root);
         }
         if (split.combinator == '+') {
             const auto* sibling = previous_sibling(node);
-            return sibling != nullptr && css_selector_matches(*sibling, split.left);
+            return sibling != nullptr && css_selector_matches(*sibling, split.left, scope_root);
         }
         if (split.combinator == '~') {
             for (auto* sibling = previous_sibling(node); sibling != nullptr;
                 sibling = previous_sibling(*sibling)) {
-                if (css_selector_matches(*sibling, split.left)) return true;
+                if (css_selector_matches(*sibling, split.left, scope_root)) return true;
             }
             return false;
         }
         for (auto* ancestor = node.parent; ancestor != nullptr; ancestor = ancestor->parent) {
-            if (css_selector_matches(*ancestor, split.left)) return true;
+            if (css_selector_matches(*ancestor, split.left, scope_root)) return true;
         }
         return false;
     }
 
-    bool css_selector_list_matches(const dom_node& node, std::string_view selector) const
+    bool compiled_css_selector_matches(
+        const dom_node& node,
+        const compiled_css_selector& selector,
+        size_t component,
+        const dom_node* scope_root = nullptr) const
+    {
+        if (selector.compounds.empty()
+            || component >= selector.compounds.size()
+            || !css_compound_selector_matches(
+                node,
+                selector.compounds[component],
+                scope_root)) {
+            return false;
+        }
+        if (component == 0U) return true;
+        if (selector.combinators.size() < component) return false;
+
+        const auto combinator = selector.combinators[component - 1U];
+        if (combinator == '>') {
+            return node.parent != nullptr
+                && compiled_css_selector_matches(
+                    *node.parent,
+                    selector,
+                    component - 1U,
+                    scope_root);
+        }
+        if (combinator == '+') {
+            const auto* sibling = previous_sibling(node);
+            return sibling != nullptr
+                && compiled_css_selector_matches(
+                    *sibling,
+                    selector,
+                    component - 1U,
+                    scope_root);
+        }
+        if (combinator == '~') {
+            for (auto* sibling = previous_sibling(node); sibling != nullptr;
+                sibling = previous_sibling(*sibling)) {
+                if (compiled_css_selector_matches(
+                        *sibling,
+                        selector,
+                        component - 1U,
+                        scope_root)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        for (auto* ancestor = node.parent; ancestor != nullptr;
+            ancestor = ancestor->parent) {
+            if (compiled_css_selector_matches(
+                    *ancestor,
+                    selector,
+                    component - 1U,
+                    scope_root)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool css_rule_matches(
+        const dom_node& node,
+        const css_rule& rule,
+        const dom_node* scope_root = nullptr) const
+    {
+        return !rule.compiled_selector.compounds.empty()
+            && compiled_css_selector_matches(
+                node,
+                rule.compiled_selector,
+                rule.compiled_selector.compounds.size() - 1U,
+                scope_root);
+    }
+
+    bool css_selector_list_matches(
+        const dom_node& node,
+        std::string_view selector,
+        const dom_node* scope_root = nullptr) const
     {
         size_t start = 0;
         int bracket_depth = 0;
@@ -6278,6 +14991,10 @@ struct v8_dom_runtime::implementation final {
                 if (character == quote && (index == 0 || selector[index - 1U] != '\\')) quote = 0;
                 continue;
             }
+            if (!at_end && character == '\\') {
+                index = skip_css_escape_sequence(selector, index) - 1U;
+                continue;
+            }
             if (!at_end && (character == '\'' || character == '"')) {
                 quote = character;
                 continue;
@@ -6287,7 +15004,10 @@ struct v8_dom_runtime::implementation final {
             else if (!at_end && character == '(') ++parenthesis_depth;
             else if (!at_end && character == ')') --parenthesis_depth;
             else if (character == ',' && bracket_depth == 0 && parenthesis_depth == 0) {
-                if (css_selector_matches(node, selector.substr(start, index - start))) return true;
+                if (css_selector_matches(
+                        node,
+                        selector.substr(start, index - start),
+                        scope_root)) return true;
                 start = index + 1U;
             }
         }
@@ -6416,19 +15136,132 @@ struct v8_dom_runtime::implementation final {
         return true;
     }
 
+    static bool apply_box_shadow_value(
+        node_style& style,
+        const std::string& authored_value,
+        bool& complete)
+    {
+        style.box_shadow_present = false;
+        style.box_shadow_offset_x = 0;
+        style.box_shadow_offset_y = 0;
+        style.box_shadow_blur_radius = 0;
+        style.box_shadow_spread_radius = 0;
+        style.box_shadow_rgba = 0;
+        complete = true;
+
+        const auto value = trim_css(authored_value);
+        if (value.empty() || value == "none") return true;
+
+        auto first_shadow_end = value.size();
+        auto parenthesis_depth = 0;
+        for (size_t index = 0; index < value.size(); ++index) {
+            if (value[index] == '(') ++parenthesis_depth;
+            else if (value[index] == ')' && parenthesis_depth > 0) --parenthesis_depth;
+            else if (value[index] == ',' && parenthesis_depth == 0) {
+                first_shadow_end = index;
+                complete = false;
+                break;
+            }
+        }
+        const auto shadow = trim_css(std::string_view(value).substr(0, first_shadow_end));
+        if (shadow.find("inset") != std::string::npos) {
+            complete = false;
+            return false;
+        }
+
+        std::vector<std::string> tokens;
+        size_t token_start = std::string::npos;
+        parenthesis_depth = 0;
+        for (size_t index = 0; index <= shadow.size(); ++index) {
+            const auto at_end = index == shadow.size();
+            const auto character = at_end ? ' ' : shadow[index];
+            if (!at_end && character == '(') ++parenthesis_depth;
+            else if (!at_end && character == ')' && parenthesis_depth > 0) --parenthesis_depth;
+            const auto separator = parenthesis_depth == 0
+                && std::isspace(static_cast<unsigned char>(character));
+            if (!separator && token_start == std::string::npos) token_start = index;
+            if (separator && token_start != std::string::npos) {
+                tokens.emplace_back(shadow.substr(token_start, index - token_start));
+                token_start = std::string::npos;
+            }
+        }
+
+        std::vector<float> lengths;
+        auto color = 0x000000FFU;
+        auto color_seen = false;
+        for (const auto& token : tokens) {
+            const auto lower = lower_html_name(token);
+            const auto starts_numeric = !token.empty()
+                && (std::isdigit(static_cast<unsigned char>(token.front()))
+                    || token.front() == '.' || token.front() == '-' || token.front() == '+');
+            const auto color_token = token.starts_with('#')
+                || lower.starts_with("rgb(") || lower.starts_with("rgba(")
+                || lower == "transparent" || (!starts_numeric && lower != "inset");
+            if (color_token) {
+                color = native_document::parse_color(token);
+                color_seen = true;
+            } else {
+                const auto length = native_document::parse_length(token);
+                if (length.unit != length_unit::pixels) complete = false;
+                lengths.push_back(length.value);
+            }
+        }
+        if (lengths.size() < 2U || lengths.size() > 4U) return false;
+
+        style.box_shadow_offset_x = lengths[0];
+        style.box_shadow_offset_y = lengths[1];
+        style.box_shadow_blur_radius = lengths.size() > 2U
+            ? std::max(0.0F, lengths[2]) : 0.0F;
+        style.box_shadow_spread_radius = lengths.size() > 3U ? lengths[3] : 0.0F;
+        style.box_shadow_rgba = color_seen ? color : 0x000000FFU;
+        style.box_shadow_present = (style.box_shadow_rgba & 0xFFU) != 0U;
+        return true;
+    }
+
     void apply_pseudo_css_declaration(
         dom_node& node,
         node_style::pseudo_element& pseudo,
         const css_declaration& declaration)
     {
-        const auto value = resolve_css_value(node, declaration.value);
-        if (value.empty() && declaration.value.find("var(") != std::string::npos) return;
+        feature_decision decision(
+            *this,
+            "css",
+            "pseudo-property:" + declaration.name,
+            "pseudo-style-application");
+        const auto contains_variable = declaration.value.find("var(") != std::string::npos;
+        auto resolved_value = std::string{};
+        const auto& value = contains_variable
+            ? (resolved_value = resolve_css_value(node, declaration.value))
+            : declaration.value;
+        if (value.empty() && contains_variable) {
+            decision.classification = "invalid-authoring";
+            decision.semantic_slice = "unresolved custom property at computed-value time";
+            return;
+        }
         const auto& name = declaration.name;
+        if (contains_variable && is_paint_property(name)) {
+            record_composition("css-custom-property-to-paint", node.id);
+        }
         if (name == "content") {
             pseudo.generated = value != "none" && value != "normal";
             pseudo.content = decode_css_content(value);
         } else if (name == "display") {
             pseudo.display_none = value == "none";
+            pseudo.display = value == "block" ? display_mode::block
+                : value == "flex" ? display_mode::flex
+                : value == "inline-flex" ? display_mode::inline_flex
+                : value == "grid" ? display_mode::grid
+                : value == "inline-grid" ? display_mode::inline_grid
+                : value == "table" ? display_mode::table
+                : value == "inline-table" ? display_mode::inline_table
+                : value == "inline-block" ? display_mode::inline_block
+                : display_mode::inline_flow;
+        } else if (name == "align-self") {
+            pseudo.align_self_specified = value != "auto";
+            pseudo.align_self = value == "center" ? align_mode::center
+                : value == "flex-start" || value == "start" ? align_mode::start
+                : value == "flex-end" || value == "end" ? align_mode::end
+                : align_mode::stretch;
         } else if (name == "visibility") {
             pseudo.visibility_hidden = value == "hidden" || value == "collapse";
         } else if (name == "position") {
@@ -6436,12 +15269,21 @@ struct v8_dom_runtime::implementation final {
                 : value == "fixed" ? position_mode::fixed
                 : value == "relative" ? position_mode::relative
                 : position_mode::normal;
+        } else if (name == "z-index") {
+            pseudo.z_index = value == "auto" ? 0 : std::atoi(value.c_str());
         } else if (name == "inset") {
-            const auto length = native_document::parse_length(value);
-            pseudo.left = length;
-            pseudo.top = length;
-            pseudo.right = length;
-            pseudo.bottom = length;
+            std::vector<css_length> values;
+            std::istringstream stream(value);
+            for (std::string token; stream >> token;) {
+                values.push_back(native_document::parse_length(token));
+            }
+            if (!values.empty()) {
+                pseudo.top = values[0];
+                pseudo.right = values.size() > 1 ? values[1] : values[0];
+                pseudo.bottom = values.size() > 2 ? values[2] : values[0];
+                pseudo.left = values.size() > 3 ? values[3]
+                    : values.size() > 1 ? values[1] : values[0];
+            }
         } else if (name == "width") pseudo.width = native_document::parse_length(value);
         else if (name == "height") pseudo.height = native_document::parse_length(value);
         else if (name == "left" || name == "inset-inline-start") {
@@ -6481,27 +15323,850 @@ struct v8_dom_runtime::implementation final {
             pseudo.border_bottom_right_radius,
             pseudo.border_bottom_left_radius)) {
         } else if (name == "background" || name == "background-color") {
-            pseudo.background_rgba = native_document::parse_color(value);
+            pseudo.background_current_color = value == "currentcolor" || value == "currentColor";
+            pseudo.background_rgba = pseudo.background_current_color
+                ? 0U
+                : native_document::parse_color(value);
+        } else if (name == "opacity") {
+            pseudo.opacity = std::clamp(std::strtof(value.c_str(), nullptr), 0.0F, 1.0F);
         } else if (name == "color") {
             pseudo.foreground_rgba = native_document::parse_color(value);
         } else if (name == "font-size") {
             pseudo.font_size = std::max(0.0F, native_document::parse_length(value).value);
-        } else if (name == "line-height" && value != "inherit" && value != "normal") {
-            pseudo.line_height = std::max(0.0F, native_document::parse_length(value).value);
+        } else if (name == "line-height") {
+            if (value != "inherit" && value != "normal") {
+                pseudo.line_height = std::max(0.0F, native_document::parse_length(value).value);
+            } else {
+                decision.classification = "partially-supported";
+                decision.semantic_slice = "explicit numeric lengths";
+            }
+        } else {
+            decision.classification = "unsupported";
+        }
+    }
+
+    static std::optional<std::string> first_css_url(const std::string& value)
+    {
+        const auto lower = lower_html_name(value);
+        const auto start = lower.find("url(");
+        if (start == std::string::npos) return std::nullopt;
+        const auto end = value.find(')', start + 4U);
+        if (end == std::string::npos) return std::nullopt;
+        auto url = trim_css(value.substr(start + 4U, end - start - 4U));
+        if (url.size() >= 2U
+            && ((url.front() == '\'' && url.back() == '\'')
+                || (url.front() == '"' && url.back() == '"'))) {
+            url = url.substr(1U, url.size() - 2U);
+        }
+        return url.empty() ? std::nullopt : std::optional<std::string>{std::move(url)};
+    }
+
+    static std::string svg_view_box(const std::string& markup)
+    {
+        const auto lower = lower_html_name(markup);
+        const auto svg = lower.find("<svg");
+        if (svg == std::string::npos) return {};
+        const auto tag_end = lower.find('>', svg + 4U);
+        if (tag_end == std::string::npos) return {};
+        const auto view_box = lower.find("viewbox", svg + 4U);
+        if (view_box != std::string::npos && view_box < tag_end) {
+            const auto equals = markup.find('=', view_box + 7U);
+            if (equals != std::string::npos && equals < tag_end) {
+                auto value_start = equals + 1U;
+                while (value_start < tag_end
+                    && std::isspace(static_cast<unsigned char>(markup[value_start]))) {
+                    ++value_start;
+                }
+                if (value_start < tag_end) {
+                    const auto quote = markup[value_start];
+                    if (quote == '\'' || quote == '"') {
+                        const auto value_end = markup.find(quote, value_start + 1U);
+                        if (value_end != std::string::npos && value_end <= tag_end) {
+                            return markup.substr(
+                                value_start + 1U,
+                                value_end - value_start - 1U);
+                        }
+                    }
+                }
+            }
+        }
+
+        // SVG 2 permits an intrinsic viewport to be supplied by numeric width
+        // and height attributes without a viewBox. Convert that bounded form
+        // to the scene's canonical viewBox representation so ordinary bundled
+        // CSS artwork (checker patterns, badges, and icons) retains its aspect
+        // ratio instead of being discarded.
+        const auto opening = markup.substr(svg, tag_end - svg + 1U);
+        const auto parse_dimension = [](std::string value) -> std::optional<float> {
+            value = trim_css(value);
+            if (value.ends_with("px")) value.resize(value.size() - 2U);
+            if (value.empty()) return std::nullopt;
+            char* end = nullptr;
+            const auto parsed = std::strtof(value.c_str(), &end);
+            if (end == value.c_str() || *end != '\0' || !std::isfinite(parsed)
+                || parsed <= 0.0F) {
+                return std::nullopt;
+            }
+            return parsed;
+        };
+        const auto width = parse_dimension(extract_html_attribute(opening, "width"));
+        const auto height = parse_dimension(extract_html_attribute(opening, "height"));
+        if (!width.has_value() || !height.has_value()) return {};
+        std::ostringstream synthesized;
+        synthesized << "0 0 " << *width << ' ' << *height;
+        return std::move(synthesized).str();
+    }
+
+    static void apply_background_position(node_style& style, const std::string& value)
+    {
+        std::istringstream stream(value);
+        std::string first;
+        std::string second;
+        stream >> first >> second;
+        if (first.empty()) return;
+        const auto vertical = [](const std::string& token) {
+            return token == "top" || token == "bottom";
+        };
+        const auto horizontal = [](const std::string& token) {
+            return token == "left" || token == "right";
+        };
+        if (vertical(first)) {
+            style.background_position_y = first;
+            style.background_position_x = second.empty() ? "center" : second;
+        } else {
+            style.background_position_x = first;
+            style.background_position_y = second.empty()
+                ? (horizontal(first) ? "center" : "0%")
+                : second;
+        }
+    }
+
+    static std::vector<std::string> split_css_component_list(
+        std::string_view value,
+        char separator)
+    {
+        std::vector<std::string> result;
+        size_t start = 0;
+        int depth = 0;
+        char quote = 0;
+        for (size_t index = 0; index <= value.size(); ++index) {
+            const auto character = index < value.size() ? value[index] : separator;
+            if (quote != 0) {
+                if (character == quote && (index == 0 || value[index - 1] != '\\')) quote = 0;
+                continue;
+            }
+            if (character == '\'' || character == '"') {
+                quote = character;
+                continue;
+            }
+            if (character == '(') ++depth;
+            else if (character == ')' && depth > 0) --depth;
+            if (character == separator && depth == 0) {
+                auto component = trim_css(std::string(value.substr(start, index - start)));
+                if (!component.empty()) result.push_back(std::move(component));
+                start = index + 1U;
+            }
+        }
+        return result;
+    }
+
+    static std::vector<std::string> split_transition_tokens(std::string_view value)
+    {
+        std::vector<std::string> result;
+        size_t start = std::string_view::npos;
+        int depth = 0;
+        for (size_t index = 0; index <= value.size(); ++index) {
+            const auto character = index < value.size() ? value[index] : ' ';
+            if (character == '(') ++depth;
+            else if (character == ')' && depth > 0) --depth;
+            if (std::isspace(static_cast<unsigned char>(character)) && depth == 0) {
+                if (start != std::string_view::npos) {
+                    result.emplace_back(value.substr(start, index - start));
+                    start = std::string_view::npos;
+                }
+            } else if (start == std::string_view::npos) {
+                start = index;
+            }
+        }
+        return result;
+    }
+
+    static bool apply_margin_declaration(
+        node_style& style,
+        std::string_view raw_name,
+        const std::string& value)
+    {
+        const auto name = canonical_css_property_name(raw_name);
+        const auto assign = [&](css_length& length, bool& automatic, const std::string& token) {
+            length = native_document::parse_length(token);
+            automatic = lower_html_name(trim_css(token)) == "auto";
+        };
+        if (name == "margin") {
+            const auto tokens = split_transition_tokens(value);
+            if (tokens.empty() || tokens.size() > 4U) return true;
+            const auto& top = tokens[0];
+            const auto& right = tokens.size() > 1U ? tokens[1] : tokens[0];
+            const auto& bottom = tokens.size() > 2U ? tokens[2] : tokens[0];
+            const auto& left = tokens.size() > 3U ? tokens[3]
+                : tokens.size() > 1U ? tokens[1] : tokens[0];
+            assign(style.margin_top, style.margin_top_auto, top);
+            assign(style.margin_right, style.margin_right_auto, right);
+            assign(style.margin_bottom, style.margin_bottom_auto, bottom);
+            assign(style.margin_left, style.margin_left_auto, left);
+            return true;
+        }
+        if (name == "margin-block" || name == "margin-inline") {
+            const auto tokens = split_transition_tokens(value);
+            if (tokens.empty() || tokens.size() > 2U) return true;
+            const auto& start = tokens[0];
+            const auto& end = tokens.size() > 1U ? tokens[1] : tokens[0];
+            if (name == "margin-block") {
+                assign(style.margin_top, style.margin_top_auto, start);
+                assign(style.margin_bottom, style.margin_bottom_auto, end);
+            } else {
+                assign(style.margin_left, style.margin_left_auto, start);
+                assign(style.margin_right, style.margin_right_auto, end);
+            }
+            return true;
+        }
+        if (name == "margin-left" || name == "margin-inline-start") {
+            assign(style.margin_left, style.margin_left_auto, value);
+            return true;
+        }
+        if (name == "margin-right" || name == "margin-inline-end") {
+            assign(style.margin_right, style.margin_right_auto, value);
+            return true;
+        }
+        if (name == "margin-top" || name == "margin-block-start") {
+            assign(style.margin_top, style.margin_top_auto, value);
+            return true;
+        }
+        if (name == "margin-bottom" || name == "margin-block-end") {
+            assign(style.margin_bottom, style.margin_bottom_auto, value);
+            return true;
+        }
+        return false;
+    }
+
+    static bool apply_padding_declaration(
+        node_style& style,
+        std::string_view raw_name,
+        const std::string& value)
+    {
+        const auto name = canonical_css_property_name(raw_name);
+        const auto assign = [](css_length& length, const std::string& token) {
+            length = native_document::parse_length(token);
+        };
+        if (name == "padding") {
+            const auto tokens = split_transition_tokens(value);
+            if (tokens.empty() || tokens.size() > 4U) return true;
+            const auto& top = tokens[0];
+            const auto& right = tokens.size() > 1U ? tokens[1] : tokens[0];
+            const auto& bottom = tokens.size() > 2U ? tokens[2] : tokens[0];
+            const auto& left = tokens.size() > 3U ? tokens[3]
+                : tokens.size() > 1U ? tokens[1] : tokens[0];
+            assign(style.padding_top, top);
+            assign(style.padding_right, right);
+            assign(style.padding_bottom, bottom);
+            assign(style.padding_left, left);
+            return true;
+        }
+        if (name == "padding-block" || name == "padding-inline") {
+            const auto tokens = split_transition_tokens(value);
+            if (tokens.empty() || tokens.size() > 2U) return true;
+            const auto& start = tokens[0];
+            const auto& end = tokens.size() > 1U ? tokens[1] : tokens[0];
+            if (name == "padding-block") {
+                assign(style.padding_top, start);
+                assign(style.padding_bottom, end);
+            } else {
+                assign(style.padding_left, start);
+                assign(style.padding_right, end);
+            }
+            return true;
+        }
+        if (name == "padding-left" || name == "padding-inline-start") {
+            assign(style.padding_left, value);
+            return true;
+        }
+        if (name == "padding-right" || name == "padding-inline-end") {
+            assign(style.padding_right, value);
+            return true;
+        }
+        if (name == "padding-top" || name == "padding-block-start") {
+            assign(style.padding_top, value);
+            return true;
+        }
+        if (name == "padding-bottom" || name == "padding-block-end") {
+            assign(style.padding_bottom, value);
+            return true;
+        }
+        return false;
+    }
+
+    static bool apply_inset_declaration(
+        node_style& style,
+        std::string_view raw_name,
+        const std::string& value)
+    {
+        if (canonical_css_property_name(raw_name) != "inset") return false;
+        const auto tokens = split_transition_tokens(value);
+        if (tokens.empty() || tokens.size() > 4U) return true;
+        const auto& top = tokens[0];
+        const auto& right = tokens.size() > 1U ? tokens[1] : tokens[0];
+        const auto& bottom = tokens.size() > 2U ? tokens[2] : tokens[0];
+        const auto& left = tokens.size() > 3U ? tokens[3]
+            : tokens.size() > 1U ? tokens[1] : tokens[0];
+        style.top = native_document::parse_length(top);
+        style.right = native_document::parse_length(right);
+        style.bottom = native_document::parse_length(bottom);
+        style.left = native_document::parse_length(left);
+        return true;
+    }
+
+    static bool apply_border_declaration(
+        node_style& style,
+        std::string_view raw_name,
+        const std::string& value)
+    {
+        const auto name = canonical_css_property_name(raw_name);
+        const auto parse_color = [&](const std::string& token) {
+            return lower_html_name(token) == "currentcolor"
+                ? style.foreground_rgba
+                : native_document::parse_color(token);
+        };
+        const auto parse_width = [](const std::string& token, css_length& width) {
+            if (token == "thin") {
+                width = {1, length_unit::pixels};
+                return true;
+            }
+            if (token == "medium") {
+                width = {3, length_unit::pixels};
+                return true;
+            }
+            if (token == "thick") {
+                width = {5, length_unit::pixels};
+                return true;
+            }
+            if (!token.empty()
+                && (std::isdigit(static_cast<unsigned char>(token.front()))
+                    || token.front() == '.' || token.front() == '-')) {
+                width = native_document::parse_length(token);
+                return true;
+            }
+            return false;
+        };
+        const auto parse_side = [&](css_length& width, uint32_t& color) {
+            if (value.empty() || value == "none") {
+                width = {};
+                color = 0;
+                return;
+            }
+            auto remaining = value;
+            auto color_start = remaining.find("rgba(");
+            if (color_start == std::string::npos) color_start = remaining.find("rgb(");
+            if (color_start != std::string::npos) {
+                const auto color_end = remaining.find(')', color_start);
+                if (color_end != std::string::npos) {
+                    color = native_document::parse_color(
+                        remaining.substr(color_start, color_end - color_start + 1U));
+                    remaining.erase(color_start, color_end - color_start + 1U);
+                }
+            }
+            std::istringstream stream(remaining);
+            for (std::string token; stream >> token;) {
+                if (token == "none") {
+                    width = {};
+                    color = 0;
+                } else if (!parse_width(token, width)
+                    && token != "solid" && token != "dashed" && token != "dotted"
+                    && token != "double" && token != "hidden") {
+                    const auto parsed = parse_color(token);
+                    if (parsed != 0U || token == "transparent"
+                        || lower_html_name(token) == "currentcolor") {
+                        color = parsed;
+                    }
+                }
+            }
+        };
+        const auto assign_widths = [&](const std::vector<std::string>& tokens) {
+            if (tokens.empty() || tokens.size() > 4U) return;
+            const auto& top = tokens[0];
+            const auto& right = tokens.size() > 1U ? tokens[1] : tokens[0];
+            const auto& bottom = tokens.size() > 2U ? tokens[2] : tokens[0];
+            const auto& left = tokens.size() > 3U ? tokens[3]
+                : tokens.size() > 1U ? tokens[1] : tokens[0];
+            parse_width(top, style.border_top_width);
+            parse_width(right, style.border_right_width);
+            parse_width(bottom, style.border_bottom_width);
+            parse_width(left, style.border_left_width);
+        };
+        const auto assign_colors = [&](const std::vector<std::string>& tokens) {
+            if (tokens.empty() || tokens.size() > 4U) return;
+            const auto& top = tokens[0];
+            const auto& right = tokens.size() > 1U ? tokens[1] : tokens[0];
+            const auto& bottom = tokens.size() > 2U ? tokens[2] : tokens[0];
+            const auto& left = tokens.size() > 3U ? tokens[3]
+                : tokens.size() > 1U ? tokens[1] : tokens[0];
+            style.border_top_rgba = parse_color(top);
+            style.border_right_rgba = parse_color(right);
+            style.border_bottom_rgba = parse_color(bottom);
+            style.border_left_rgba = parse_color(left);
+        };
+        if (name == "border") {
+            parse_side(style.border_top_width, style.border_top_rgba);
+            parse_side(style.border_right_width, style.border_right_rgba);
+            parse_side(style.border_bottom_width, style.border_bottom_rgba);
+            parse_side(style.border_left_width, style.border_left_rgba);
+            return true;
+        }
+        if (name == "border-top") {
+            parse_side(style.border_top_width, style.border_top_rgba);
+            return true;
+        }
+        if (name == "border-right") {
+            parse_side(style.border_right_width, style.border_right_rgba);
+            return true;
+        }
+        if (name == "border-bottom") {
+            parse_side(style.border_bottom_width, style.border_bottom_rgba);
+            return true;
+        }
+        if (name == "border-left") {
+            parse_side(style.border_left_width, style.border_left_rgba);
+            return true;
+        }
+        if (name == "border-width") {
+            if (value.empty()) {
+                style.border_top_width = {};
+                style.border_right_width = {};
+                style.border_bottom_width = {};
+                style.border_left_width = {};
+            } else {
+                assign_widths(split_transition_tokens(value));
+            }
+            return true;
+        }
+        if (name == "border-color") {
+            if (value.empty()) {
+                style.border_top_rgba = 0;
+                style.border_right_rgba = 0;
+                style.border_bottom_rgba = 0;
+                style.border_left_rgba = 0;
+            } else if (value.find("rgb(") != std::string::npos
+                || value.find("rgba(") != std::string::npos) {
+                const auto color = native_document::parse_color(value);
+                style.border_top_rgba = color;
+                style.border_right_rgba = color;
+                style.border_bottom_rgba = color;
+                style.border_left_rgba = color;
+            } else {
+                assign_colors(split_transition_tokens(value));
+            }
+            return true;
+        }
+        if (name == "border-style") {
+            if (value.empty() || value == "none") {
+                style.border_top_width = {};
+                style.border_right_width = {};
+                style.border_bottom_width = {};
+                style.border_left_width = {};
+            }
+            return true;
+        }
+        const auto set_width = [&](std::string_view candidate, css_length& width) {
+            if (name != candidate) return false;
+            if (value.empty()) width = {};
+            else parse_width(value, width);
+            return true;
+        };
+        if (set_width("border-top-width", style.border_top_width)
+            || set_width("border-right-width", style.border_right_width)
+            || set_width("border-bottom-width", style.border_bottom_width)
+            || set_width("border-left-width", style.border_left_width)) {
+            return true;
+        }
+        const auto set_color = [&](std::string_view candidate, uint32_t& color) {
+            if (name != candidate) return false;
+            color = value.empty() ? 0 : parse_color(value);
+            return true;
+        };
+        return set_color("border-top-color", style.border_top_rgba)
+            || set_color("border-right-color", style.border_right_rgba)
+            || set_color("border-bottom-color", style.border_bottom_rgba)
+            || set_color("border-left-color", style.border_left_rgba);
+    }
+
+    static bool is_css_time(std::string_view value)
+    {
+        return value.ends_with("ms") || value.ends_with('s');
+    }
+
+    static float parse_css_time_ms(std::string value)
+    {
+        value = trim_css(std::move(value));
+        auto multiplier = 1.0F;
+        if (value.ends_with("ms")) value.resize(value.size() - 2U);
+        else if (value.ends_with('s')) {
+            value.pop_back();
+            multiplier = 1000.0F;
+        } else return 0;
+        return std::strtof(value.c_str(), nullptr) * multiplier;
+    }
+
+    static void parse_transition_timing(
+        const std::string& value,
+        node_style::transition_timing& timing)
+    {
+        const auto lower = lower_html_name(value);
+        if (lower == "linear") {
+            timing.x1 = 0; timing.y1 = 0; timing.x2 = 1; timing.y2 = 1;
+        } else if (lower == "ease-in") {
+            timing.x1 = 0.42F; timing.y1 = 0; timing.x2 = 1; timing.y2 = 1;
+        } else if (lower == "ease-out") {
+            timing.x1 = 0; timing.y1 = 0; timing.x2 = 0.58F; timing.y2 = 1;
+        } else if (lower == "ease-in-out") {
+            timing.x1 = 0.42F; timing.y1 = 0; timing.x2 = 0.58F; timing.y2 = 1;
+        } else if (lower.starts_with("cubic-bezier(") && lower.ends_with(')')) {
+            auto points = lower.substr(13U, lower.size() - 14U);
+            std::replace(points.begin(), points.end(), ',', ' ');
+            std::istringstream stream(points);
+            float x1 = 0.25F, y1 = 0.1F, x2 = 0.25F, y2 = 1;
+            if (stream >> x1 >> y1 >> x2 >> y2) {
+                timing.x1 = std::clamp(x1, 0.0F, 1.0F);
+                timing.y1 = y1;
+                timing.x2 = std::clamp(x2, 0.0F, 1.0F);
+                timing.y2 = y2;
+            }
+        }
+    }
+
+    static void configure_style_transitions(node_style& style)
+    {
+        const auto properties = split_css_component_list(style.transition_property_value, ',');
+        const auto durations = split_css_component_list(style.transition_duration_value, ',');
+        const auto delays = split_css_component_list(style.transition_delay_value, ',');
+        const auto timings = split_css_component_list(
+            style.transition_timing_function_value, ',');
+        const auto resolve = [&](std::string_view property) {
+            node_style::transition_timing result;
+            for (size_t index = 0; index < properties.size(); ++index) {
+                const auto candidate = lower_html_name(trim_css(properties[index]));
+                if (candidate != property && candidate != "all") continue;
+                if (!durations.empty()) {
+                    result.duration_ms = std::max(
+                        0.0F, parse_css_time_ms(durations[index % durations.size()]));
+                }
+                if (!delays.empty()) {
+                    result.delay_ms = parse_css_time_ms(delays[index % delays.size()]);
+                }
+                if (!timings.empty()) {
+                    parse_transition_timing(timings[index % timings.size()], result);
+                }
+                return result;
+            }
+            return result;
+        };
+        style.transform_transition = resolve("transform");
+        style.opacity_transition = resolve("opacity");
+        style.color_transition = resolve("color");
+    }
+
+    static void apply_transition_shorthand(node_style& style, const std::string& value)
+    {
+        std::vector<std::string> properties;
+        std::vector<std::string> durations;
+        std::vector<std::string> delays;
+        std::vector<std::string> timings;
+        for (const auto& item : split_css_component_list(value, ',')) {
+            auto property = std::string("all");
+            auto duration = std::string("0s");
+            auto delay = std::string("0s");
+            auto timing = std::string("ease");
+            auto saw_time = false;
+            for (const auto& token : split_transition_tokens(item)) {
+                const auto lower = lower_html_name(token);
+                if (is_css_time(lower)) {
+                    if (!saw_time) duration = lower;
+                    else delay = lower;
+                    saw_time = true;
+                } else if (lower == "linear" || lower == "ease" || lower == "ease-in"
+                    || lower == "ease-out" || lower == "ease-in-out"
+                    || lower.starts_with("cubic-bezier(")) {
+                    timing = lower;
+                } else if (lower != "normal") {
+                    property = lower;
+                }
+            }
+            properties.push_back(std::move(property));
+            durations.push_back(std::move(duration));
+            delays.push_back(std::move(delay));
+            timings.push_back(std::move(timing));
+        }
+        const auto join = [](const std::vector<std::string>& values) {
+            std::string result;
+            for (const auto& value : values) {
+                if (!result.empty()) result += ", ";
+                result += value;
+            }
+            return result;
+        };
+        style.transition_property_value = join(properties);
+        style.transition_duration_value = join(durations);
+        style.transition_delay_value = join(delays);
+        style.transition_timing_function_value = join(timings);
+        configure_style_transitions(style);
+    }
+
+    static bool apply_grid_placement_declaration(
+        node_style& style,
+        std::string_view raw_name,
+        const std::string& value)
+    {
+        const auto name = canonical_css_property_name(raw_name);
+        const auto update_column_layout = [&] {
+            style.grid_column_value = style.grid_column_start_value == "auto"
+                && style.grid_column_end_value == "auto"
+                ? "auto"
+                : style.grid_column_start_value + " / " + style.grid_column_end_value;
+            style.grid_span_all = style.grid_column_end_value != "auto";
+            const auto& start = style.grid_column_start_value;
+            style.grid_column_start = !start.empty()
+                && std::all_of(start.begin(), start.end(), [](unsigned char character) {
+                    return std::isdigit(character) != 0;
+                }) ? std::atoi(start.c_str()) : 0;
+        };
+        if (name == "grid-row-start") {
+            style.grid_row_start_value = value;
+            return true;
+        }
+        if (name == "grid-row-end") {
+            style.grid_row_end_value = value;
+            return true;
+        }
+        if (name == "grid-column-start") {
+            style.grid_column_start_value = value;
+            update_column_layout();
+            return true;
+        }
+        if (name == "grid-column-end") {
+            style.grid_column_end_value = value;
+            update_column_layout();
+            return true;
+        }
+        if (name != "grid-area" && name != "grid-row" && name != "grid-column") {
+            return false;
+        }
+
+        const auto components = split_css_component_list(value, '/');
+        const auto maximum = name == "grid-area" ? 4U : 2U;
+        if (components.empty() || components.size() > maximum) return true;
+        const auto component = [&](size_t index) {
+            return index < components.size() ? components[index] : std::string{"auto"};
+        };
+        if (name == "grid-area") {
+            style.grid_area_value = value;
+            style.grid_row_start_value = component(0);
+            style.grid_column_start_value = component(1);
+            style.grid_row_end_value = component(2);
+            style.grid_column_end_value = component(3);
+            style.grid_row_value =
+                style.grid_row_start_value + " / " + style.grid_row_end_value;
+            update_column_layout();
+            return true;
+        }
+        if (name == "grid-row") {
+            style.grid_row_value = value;
+            style.grid_row_start_value = component(0);
+            style.grid_row_end_value = component(1);
+            return true;
+        }
+
+        style.grid_column_start_value = component(0);
+        style.grid_column_end_value = component(1);
+        update_column_layout();
+        // Preserve the authored one-component shorthand serialization rather
+        // than inflating `2` to `2 / auto`.
+        style.grid_column_value = value;
+        return true;
+    }
+
+    static void apply_animation_shorthand(node_style& style, const std::string& value)
+    {
+        auto name = std::string("none");
+        auto duration = std::string("0s");
+        auto delay = std::string("0s");
+        auto timing = std::string("ease");
+        auto iterations = std::string("1");
+        auto saw_time = false;
+        const auto first = split_css_component_list(value, ',');
+        for (const auto& token : split_transition_tokens(
+                 first.empty() ? std::string_view{} : std::string_view(first.front()))) {
+            const auto lower = lower_html_name(token);
+            if (is_css_time(lower)) {
+                if (!saw_time) duration = lower;
+                else delay = lower;
+                saw_time = true;
+            } else if (lower == "linear" || lower == "ease" || lower == "ease-in"
+                || lower == "ease-out" || lower == "ease-in-out"
+                || lower.starts_with("cubic-bezier(")) {
+                timing = lower;
+            } else if (lower == "infinite"
+                || std::all_of(lower.begin(), lower.end(), [](unsigned char character) {
+                    return std::isdigit(character) || character == '.';
+                })) {
+                iterations = lower;
+            } else if (lower != "normal" && lower != "none"
+                && lower != "forwards" && lower != "backwards" && lower != "both"
+                && lower != "running" && lower != "paused"
+                && lower != "alternate" && lower != "alternate-reverse"
+                && lower != "reverse") {
+                name = token;
+            }
+        }
+        style.animation_name_value = name;
+        style.animation_duration_value = duration;
+        style.animation_delay_value = delay;
+        style.animation_timing_function_value = timing;
+        style.animation_iteration_count_value = iterations;
+    }
+
+    void configure_style_keyframe_animation(dom_node& node)
+    {
+        auto& style = node.style;
+        style.opacity_keyframes.clear();
+        style.opacity_keyframe_animation_signature.clear();
+        style.rotation_keyframes.clear();
+        style.rotation_keyframe_animation_signature.clear();
+        if (style.animation_name_value == "none") return;
+        const auto names = split_css_component_list(style.animation_name_value, ',');
+        if (names.empty()) return;
+        const auto name = lower_html_name(trim_css(names.front()));
+        const auto definition = opacity_keyframes.find(name);
+        if (name == "none" || definition == opacity_keyframes.end()) return;
+        const auto durations = split_css_component_list(style.animation_duration_value, ',');
+        const auto delays = split_css_component_list(style.animation_delay_value, ',');
+        const auto timings = split_css_component_list(
+            style.animation_timing_function_value, ',');
+        const auto iteration_counts = split_css_component_list(
+            style.animation_iteration_count_value, ',');
+        style.opacity_keyframe_duration_ms = durations.empty()
+            ? 0 : std::max(0.0F, parse_css_time_ms(durations.front()));
+        style.opacity_keyframe_delay_ms = delays.empty()
+            ? 0 : parse_css_time_ms(delays.front());
+        const auto iteration = iteration_counts.empty()
+            ? std::string("1") : lower_html_name(trim_css(iteration_counts.front()));
+        style.opacity_keyframe_iterations = iteration == "infinite"
+            ? std::numeric_limits<float>::infinity()
+            : std::max(0.0F, std::strtof(iteration.c_str(), nullptr));
+        node_style::transition_timing animation_timing;
+        if (!timings.empty()) parse_transition_timing(timings.front(), animation_timing);
+        style.opacity_keyframe_x1 = animation_timing.x1;
+        style.opacity_keyframe_y1 = animation_timing.y1;
+        style.opacity_keyframe_x2 = animation_timing.x2;
+        style.opacity_keyframe_y2 = animation_timing.y2;
+        style.opacity_keyframes = definition->second.opacity_stops;
+        style.rotation_keyframes = definition->second.rotation_stops;
+        if (style.opacity_keyframe_duration_ms <= 0
+            || style.opacity_keyframe_iterations == 0
+            || (style.opacity_keyframes.size() < 2U
+                && style.rotation_keyframes.size() < 2U)) return;
+        std::ostringstream signature;
+        signature << name << '|' << style.opacity_keyframe_duration_ms << '|'
+            << style.opacity_keyframe_delay_ms << '|'
+            << style.opacity_keyframe_iterations << '|'
+            << style.opacity_keyframe_x1 << ',' << style.opacity_keyframe_y1 << ','
+            << style.opacity_keyframe_x2 << ',' << style.opacity_keyframe_y2;
+        const auto base_signature = signature.str();
+        if (style.opacity_keyframes.size() >= 2U) {
+            signature.str(base_signature);
+            signature.clear();
+            for (const auto& stop : style.opacity_keyframes) {
+                signature << '|' << stop.offset << ':' << stop.opacity;
+            }
+            style.opacity_keyframe_animation_signature = signature.str();
+            record_composition("css-opacity-keyframe-animation", node.id);
+        }
+        if (style.rotation_keyframes.size() >= 2U) {
+            signature.str(base_signature);
+            signature.clear();
+            for (const auto& stop : style.rotation_keyframes) {
+                signature << '|' << stop.offset << ':' << stop.degrees;
+            }
+            style.rotation_keyframe_animation_signature = signature.str();
+            record_composition("css-rotation-keyframe-animation", node.id);
         }
     }
 
     void apply_css_declaration(dom_node& node, const css_declaration& declaration)
     {
+        if (profile_css) {
+            ++css_profile_declaration_applications;
+        }
         const auto& name = declaration.name;
-        if (name.starts_with("--")) {
-            node.style.custom_properties[name] = declaration.value;
+        if (name == "-moz-transform" || name == "-webkit-transform"
+            || name == "grid-gap") {
+            feature_decision alias_decision(
+                *this,
+                "css",
+                "property:" + name,
+                "style-application");
+            auto normalized = declaration;
+            normalized.name = name == "grid-gap" ? "gap" : "transform";
+            apply_css_declaration(node, normalized);
             return;
         }
-        const auto value = resolve_css_value(node, declaration.value);
+        if (name.starts_with("--")) {
+            const auto existing_is_important =
+                node.style.important_custom_properties.contains(name);
+            const auto existing_is_inline =
+                node.inline_style_declarations.contains(name)
+                && node.style.custom_properties.contains(name);
+            const auto inline_is_important =
+                existing_is_inline
+                && node.inline_important_declarations.contains(name);
+            if (inline_is_important
+                || (!declaration.important && existing_is_important)
+                || (!declaration.important && existing_is_inline)) {
+                record_feature(
+                    "css",
+                    "custom-property",
+                    "supported",
+                    {},
+                    "style-application");
+                return;
+            }
+            node.style.custom_properties[name] = declaration.value;
+            if (declaration.important) node.style.important_custom_properties.insert(name);
+            else node.style.important_custom_properties.erase(name);
+            record_feature(
+                "css",
+                "custom-property",
+                "supported",
+                {},
+                "style-application");
+            return;
+        }
+        feature_decision decision(
+            *this,
+            "css",
+            "property:" + name,
+            "style-application");
+        const auto contains_variable = declaration.value.find("var(") != std::string::npos;
+        auto resolved_value = std::string{};
+        const auto& value = contains_variable
+            ? (resolved_value = resolve_css_value(node, declaration.value))
+            : declaration.value;
         // An unresolved var() without a fallback invalidates the declaration;
         // it does not become numeric zero or an empty keyword.
-        if (value.empty() && declaration.value.find("var(") != std::string::npos) return;
+        if (value.empty() && contains_variable) {
+            decision.classification = "invalid-authoring";
+            decision.semantic_slice = "unresolved custom property at computed-value time";
+            return;
+        }
+        if (contains_variable && is_paint_property(name)) {
+            record_composition("css-custom-property-to-paint", node.id);
+        }
         const auto property_mask = inline_style_mask(name);
         if (declaration.important && property_mask != 0U) {
             node.style.important_property_mask |= property_mask;
@@ -6511,8 +16176,255 @@ struct v8_dom_runtime::implementation final {
                 && ((node.style.inline_property_mask | node.style.important_property_mask)
                     & property) != 0U;
         };
+        if (name == "all") {
+            if (value != "unset" || declaration.important) {
+                decision.classification = "unsupported";
+                decision.semantic_slice =
+                    "non-important unset across modeled properties, excluding custom properties";
+                return;
+            }
+
+            // `all: unset` is a common component-control reset. Start from the
+            // modeled initial/inherited sentinels, then restore declarations
+            // from the higher-priority inline origin. Custom properties are
+            // deliberately excluded from `all` by CSS Cascade and therefore
+            // survive the reset. Generated pseudo-element state belongs to its
+            // own selector subject and must not be cleared with the principal
+            // element's declarations.
+            auto previous = node.style;
+            auto reset = node_style{};
+            reset.display = default_display_for_node(node);
+            reset.inline_property_mask = previous.inline_property_mask;
+            reset.important_property_mask = previous.important_property_mask;
+            reset.custom_properties = std::move(previous.custom_properties);
+            reset.important_custom_properties = std::move(previous.important_custom_properties);
+            reset.before = std::move(previous.before);
+            reset.after = std::move(previous.after);
+
+            const auto has_inline = [&](std::initializer_list<std::string_view> names) {
+                return std::any_of(names.begin(), names.end(), [&](std::string_view candidate) {
+                    return node.inline_style_declarations.contains(std::string(candidate));
+                });
+            };
+            if (is_inline(inline_width)) reset.width = previous.width;
+            if (is_inline(inline_height)) reset.height = previous.height;
+            if (is_inline(inline_min_width)) reset.min_width = previous.min_width;
+            if (is_inline(inline_min_height)) reset.min_height = previous.min_height;
+            if (is_inline(inline_max_width)) reset.max_width = previous.max_width;
+            if (is_inline(inline_max_height)) reset.max_height = previous.max_height;
+            if (is_inline(inline_left)) reset.left = previous.left;
+            if (is_inline(inline_top)) reset.top = previous.top;
+            if (is_inline(inline_right)) reset.right = previous.right;
+            if (is_inline(inline_bottom)) reset.bottom = previous.bottom;
+            if (is_inline(inline_display)) reset.display = previous.display;
+            if (is_inline(inline_position)) reset.position = previous.position;
+            if (is_inline(inline_padding)) {
+                reset.padding_left = previous.padding_left;
+                reset.padding_top = previous.padding_top;
+                reset.padding_right = previous.padding_right;
+                reset.padding_bottom = previous.padding_bottom;
+            }
+            if (is_inline(inline_margin)) {
+                reset.margin_left = previous.margin_left;
+                reset.margin_top = previous.margin_top;
+                reset.margin_right = previous.margin_right;
+                reset.margin_bottom = previous.margin_bottom;
+                reset.margin_left_auto = previous.margin_left_auto;
+                reset.margin_top_auto = previous.margin_top_auto;
+                reset.margin_right_auto = previous.margin_right_auto;
+                reset.margin_bottom_auto = previous.margin_bottom_auto;
+            }
+            if (is_inline(inline_gap)) {
+                reset.row_gap = previous.row_gap;
+                reset.column_gap = previous.column_gap;
+            }
+            if (is_inline(inline_flex_direction)) {
+                reset.direction = previous.direction;
+                reset.flex_reverse = previous.flex_reverse;
+            }
+            if (is_inline(inline_flex_grow)) reset.flex_grow = previous.flex_grow;
+            if (is_inline(inline_flex_shrink)) reset.flex_shrink = previous.flex_shrink;
+            if (is_inline(inline_flex_basis)) reset.flex_basis = previous.flex_basis;
+            if (is_inline(inline_flex_wrap)) reset.flex_wrap = previous.flex_wrap;
+            if (is_inline(inline_align_items)) reset.align_items = previous.align_items;
+            if (is_inline(inline_align_self)) {
+                reset.align_self = previous.align_self;
+                reset.align_self_specified = previous.align_self_specified;
+            }
+            if (is_inline(inline_justify_content)) {
+                reset.justify_content = previous.justify_content;
+            }
+            if (is_inline(inline_box_sizing)) reset.border_box = previous.border_box;
+            if (is_inline(inline_border_radius)) {
+                reset.border_top_left_radius = previous.border_top_left_radius;
+                reset.border_top_right_radius = previous.border_top_right_radius;
+                reset.border_bottom_right_radius = previous.border_bottom_right_radius;
+                reset.border_bottom_left_radius = previous.border_bottom_left_radius;
+            }
+            if (is_inline(inline_box_shadow)) {
+                reset.box_shadow_offset_x = previous.box_shadow_offset_x;
+                reset.box_shadow_offset_y = previous.box_shadow_offset_y;
+                reset.box_shadow_blur_radius = previous.box_shadow_blur_radius;
+                reset.box_shadow_spread_radius = previous.box_shadow_spread_radius;
+                reset.box_shadow_rgba = previous.box_shadow_rgba;
+                reset.box_shadow_present = previous.box_shadow_present;
+            }
+            if (is_inline(inline_transform)) {
+                reset.transform_translate_x = previous.transform_translate_x;
+                reset.transform_translate_y = previous.transform_translate_y;
+                reset.transform_scale_x = previous.transform_scale_x;
+                reset.transform_scale_y = previous.transform_scale_y;
+                reset.transform_rotate_degrees = previous.transform_rotate_degrees;
+                reset.transform_specified = previous.transform_specified;
+            }
+            if (is_inline(inline_transform_origin)) {
+                reset.transform_origin_x = previous.transform_origin_x;
+                reset.transform_origin_y = previous.transform_origin_y;
+                reset.transform_origin_specified = previous.transform_origin_specified;
+            }
+            if (is_inline(inline_background)) reset.background_rgba = previous.background_rgba;
+            if (is_inline(inline_overflow)) {
+                reset.overflow_x = previous.overflow_x;
+                reset.overflow_y = previous.overflow_y;
+                reset.clip = previous.clip;
+                reset.scroll_x_enabled = previous.scroll_x_enabled;
+                reset.scroll_y_enabled = previous.scroll_y_enabled;
+            }
+            if (is_inline(inline_visibility)) {
+                reset.visibility_hidden = previous.visibility_hidden;
+                reset.visibility_specified = previous.visibility_specified;
+            }
+            if (is_inline(inline_pointer_events)) {
+                reset.pointer_events_none = previous.pointer_events_none;
+                reset.pointer_events_specified = previous.pointer_events_specified;
+            }
+            if (is_inline(inline_opacity)) reset.opacity = previous.opacity;
+            if (is_inline(inline_color)) reset.foreground_rgba = previous.foreground_rgba;
+            if (is_inline(inline_font_size)) reset.font_size = previous.font_size;
+            if (is_inline(inline_font_family)) reset.font_family = previous.font_family;
+            if (is_inline(inline_font_weight)) reset.font_weight = previous.font_weight;
+            if (is_inline(inline_line_height)) reset.line_height = previous.line_height;
+            if (is_inline(inline_letter_spacing)) {
+                reset.letter_spacing = previous.letter_spacing;
+                reset.letter_spacing_specified = previous.letter_spacing_specified;
+            }
+            if (is_inline(inline_word_spacing)) {
+                reset.word_spacing = previous.word_spacing;
+                reset.word_spacing_specified = previous.word_spacing_specified;
+            }
+            if (is_inline(inline_text_align)) reset.text_align = previous.text_align;
+            if (is_inline(inline_white_space)) reset.white_space = previous.white_space;
+
+            // These modeled properties do not yet have dedicated inline-mask
+            // bits, so preserve their applied values by authored declaration.
+            if (has_inline({"background-image", "background-repeat",
+                    "background-position", "background-size"})) {
+                reset.background_image_value = previous.background_image_value;
+                reset.background_image_markup = std::move(previous.background_image_markup);
+                reset.background_image_view_box = std::move(previous.background_image_view_box);
+                reset.background_repeat = previous.background_repeat;
+                reset.background_position_x = previous.background_position_x;
+                reset.background_position_y = previous.background_position_y;
+                reset.background_size_x = previous.background_size_x;
+                reset.background_size_y = previous.background_size_y;
+            }
+            if (has_inline({"border", "border-top", "border-right", "border-bottom",
+                    "border-left", "border-width", "border-color",
+                    "border-top-width", "border-right-width", "border-bottom-width",
+                    "border-left-width", "border-top-color", "border-right-color",
+                    "border-bottom-color", "border-left-color"})) {
+                reset.border_left_width = previous.border_left_width;
+                reset.border_top_width = previous.border_top_width;
+                reset.border_right_width = previous.border_right_width;
+                reset.border_bottom_width = previous.border_bottom_width;
+                reset.border_left_rgba = previous.border_left_rgba;
+                reset.border_top_rgba = previous.border_top_rgba;
+                reset.border_right_rgba = previous.border_right_rgba;
+                reset.border_bottom_rgba = previous.border_bottom_rgba;
+            }
+            if (has_inline({"outline", "outline-width", "outline-color"})) {
+                reset.outline_width = previous.outline_width;
+                reset.outline_rgba = previous.outline_rgba;
+            }
+            if (has_inline({"transition", "transition-property", "transition-duration",
+                    "transition-delay", "transition-timing-function"})) {
+                reset.transition_property_value = previous.transition_property_value;
+                reset.transition_duration_value = previous.transition_duration_value;
+                reset.transition_delay_value = previous.transition_delay_value;
+                reset.transition_timing_function_value =
+                    previous.transition_timing_function_value;
+                configure_style_transitions(reset);
+            }
+            if (has_inline({"z-index"})) {
+                reset.z_index = previous.z_index;
+                reset.z_index_auto = previous.z_index_auto;
+            }
+            if (has_inline({"flex-basis", "flex"})) reset.flex_basis = previous.flex_basis;
+            if (has_inline({"grid-template-columns", "grid-template-rows",
+                    "grid-area", "grid-row", "grid-row-start", "grid-row-end",
+                    "grid-column", "grid-column-start", "grid-column-end"})) {
+                reset.grid_template_columns = std::move(previous.grid_template_columns);
+                reset.grid_template_rows = std::move(previous.grid_template_rows);
+                reset.grid_two_columns = previous.grid_two_columns;
+                reset.grid_fractional_rows = previous.grid_fractional_rows;
+                reset.grid_span_all = previous.grid_span_all;
+                reset.grid_area_value = std::move(previous.grid_area_value);
+                reset.grid_row_value = std::move(previous.grid_row_value);
+                reset.grid_row_start_value = std::move(previous.grid_row_start_value);
+                reset.grid_row_end_value = std::move(previous.grid_row_end_value);
+                reset.grid_column_value = std::move(previous.grid_column_value);
+                reset.grid_column_start_value = std::move(previous.grid_column_start_value);
+                reset.grid_column_end_value = std::move(previous.grid_column_end_value);
+                reset.grid_column_start = previous.grid_column_start;
+            }
+            if (has_inline({"table-layout"})) reset.table_layout_fixed = previous.table_layout_fixed;
+            if (has_inline({"text-transform"})) reset.text_transform = previous.text_transform;
+            if (has_inline({"cursor"})) reset.cursor = previous.cursor;
+            if (has_inline({"list-style", "list-style-position", "list-style-type"})) {
+                reset.list_style_position = previous.list_style_position;
+                reset.list_style_type = previous.list_style_type;
+            }
+
+            node.style = std::move(reset);
+            decision.classification = "partially-supported";
+            decision.semantic_slice =
+                "non-important unset across modeled properties, excluding custom properties";
+            return;
+        }
+        if (name == "color" && !is_inline(inline_color)
+            && (value == "inherit" || value == "unset" || value == "initial")) {
+            node.style.foreground_rgba = value == "initial" ? 0x000000FFU : 0U;
+            return;
+        }
+        if ((name == "background" || name == "background-color")
+            && !is_inline(inline_background)
+            && (value == "unset" || value == "initial" || value == "inherit")) {
+            const auto explicit_document_element = node.tag == "html"
+                && node.parent == &document.body();
+            node.style.background_rgba = value == "inherit" && node.parent != nullptr
+                && !explicit_document_element
+                ? node.parent->style.background_rgba
+                : 0U;
+            return;
+        }
+        const auto parse_declared_color = [&](const std::string& color_value) {
+            return lower_html_name(color_value) == "currentcolor"
+                ? node.style.foreground_rgba
+                : native_document::parse_color(color_value);
+        };
         const auto parse_border = [&](css_length& width, uint32_t& color) {
-            std::istringstream stream(value);
+            auto remaining = value;
+            auto color_start = remaining.find("rgba(");
+            if (color_start == std::string::npos) color_start = remaining.find("rgb(");
+            if (color_start != std::string::npos) {
+                const auto color_end = remaining.find(')', color_start);
+                if (color_end != std::string::npos) {
+                    color = native_document::parse_color(
+                        remaining.substr(color_start, color_end - color_start + 1U));
+                    remaining.erase(color_start, color_end - color_start + 1U);
+                }
+            }
+            std::istringstream stream(remaining);
             for (std::string token; stream >> token;) {
                 if (token == "none") {
                     width = {};
@@ -6527,12 +16439,27 @@ struct v8_dom_runtime::implementation final {
                     || token.front() == '.' || token.front() == '-') {
                     width = native_document::parse_length(token);
                 } else {
-                    const auto parsed = native_document::parse_color(token);
-                    if (parsed != 0U || token == "transparent") color = parsed;
+                    const auto parsed = parse_declared_color(token);
+                    if (parsed != 0U || token == "transparent"
+                        || lower_html_name(token) == "currentcolor") color = parsed;
                 }
             }
         };
         const auto parse_four_border_values = [&](bool colors) {
+            if (colors) {
+                // Functional colors contain spaces after commas and therefore
+                // form one CSS component value even though a whitespace stream
+                // would split them into several apparent border sides.
+                const auto single = parse_declared_color(value);
+                if (single != 0U || value == "transparent"
+                    || lower_html_name(value) == "currentcolor") {
+                    node.style.border_top_rgba = single;
+                    node.style.border_right_rgba = single;
+                    node.style.border_bottom_rgba = single;
+                    node.style.border_left_rgba = single;
+                    return;
+                }
+            }
             std::vector<std::string> values;
             std::istringstream stream(value);
             for (std::string token; stream >> token;) values.push_back(std::move(token));
@@ -6543,10 +16470,10 @@ struct v8_dom_runtime::implementation final {
             const auto left = values.size() > 3 ? values[3]
                 : values.size() > 1 ? values[1] : values[0];
             if (colors) {
-                node.style.border_top_rgba = native_document::parse_color(top);
-                node.style.border_right_rgba = native_document::parse_color(right);
-                node.style.border_bottom_rgba = native_document::parse_color(bottom);
-                node.style.border_left_rgba = native_document::parse_color(left);
+                node.style.border_top_rgba = parse_declared_color(top);
+                node.style.border_right_rgba = parse_declared_color(right);
+                node.style.border_bottom_rgba = parse_declared_color(bottom);
+                node.style.border_left_rgba = parse_declared_color(left);
             } else {
                 node.style.border_top_width = native_document::parse_length(top);
                 node.style.border_right_width = native_document::parse_length(right);
@@ -6586,66 +16513,57 @@ struct v8_dom_runtime::implementation final {
             }
             return;
         } else if (name == "transform-origin") {
-            if (!is_inline(inline_transform)) {
-                std::istringstream stream(value);
-                std::string x;
-                std::string y;
-                stream >> x >> y;
-                node.style.transform_origin_x = native_document::parse_length(x);
-                node.style.transform_origin_y = native_document::parse_length(y.empty() ? x : y);
+            if (!is_inline(inline_transform_origin)) {
+                native_document::parse_transform_origin(
+                    value,
+                    node.style.transform_origin_x,
+                    node.style.transform_origin_y);
+                node.style.transform_origin_specified = true;
             }
             return;
-        } else if (name == "transition" || name == "transition-duration") {
-            if (name == "transition-duration" || value.find("transform") != std::string::npos) {
-                std::istringstream stream(value);
-                for (std::string token; stream >> token;) {
-                    if (token.ends_with("ms")) {
-                        token.resize(token.size() - 2U);
-                        node.style.transform_transition_duration_ms =
-                            std::max(0.0F, std::strtof(token.c_str(), nullptr));
-                        break;
-                    }
-                    if (token.ends_with('s')) {
-                        token.pop_back();
-                        node.style.transform_transition_duration_ms =
-                            std::max(0.0F, std::strtof(token.c_str(), nullptr) * 1000.0F);
-                        break;
-                    }
-                }
-                const auto set_timing = [&](float x1, float y1, float x2, float y2) {
-                    node.style.transform_transition_x1 = x1;
-                    node.style.transform_transition_y1 = y1;
-                    node.style.transform_transition_x2 = x2;
-                    node.style.transform_transition_y2 = y2;
-                };
-                const auto bezier = value.find("cubic-bezier(");
-                if (bezier != std::string::npos) {
-                    const auto start = bezier + std::string_view("cubic-bezier(").size();
-                    const auto end = value.find(')', start);
-                    if (end != std::string::npos) {
-                        auto points = value.substr(start, end - start);
-                        std::replace(points.begin(), points.end(), ',', ' ');
-                        std::istringstream point_stream(points);
-                        float x1 = 0.25F;
-                        float y1 = 0.1F;
-                        float x2 = 0.25F;
-                        float y2 = 1.0F;
-                        if (point_stream >> x1 >> y1 >> x2 >> y2) {
-                            set_timing(
-                                std::clamp(x1, 0.0F, 1.0F), y1,
-                                std::clamp(x2, 0.0F, 1.0F), y2);
-                        }
-                    }
-                } else if (value.find("linear") != std::string::npos) {
-                    set_timing(0.0F, 0.0F, 1.0F, 1.0F);
-                } else if (value.find("ease-in-out") != std::string::npos) {
-                    set_timing(0.42F, 0.0F, 0.58F, 1.0F);
-                } else if (value.find("ease-in") != std::string::npos) {
-                    set_timing(0.42F, 0.0F, 1.0F, 1.0F);
-                } else if (value.find("ease-out") != std::string::npos) {
-                    set_timing(0.0F, 0.0F, 0.58F, 1.0F);
-                }
-            }
+        } else if (name == "transition") {
+            apply_transition_shorthand(node.style, value);
+            return;
+        } else if (name == "transition-property") {
+            node.style.transition_property_value = value;
+            configure_style_transitions(node.style);
+            return;
+        } else if (name == "transition-duration") {
+            node.style.transition_duration_value = value;
+            configure_style_transitions(node.style);
+            return;
+        } else if (name == "transition-delay") {
+            node.style.transition_delay_value = value;
+            configure_style_transitions(node.style);
+            return;
+        } else if (name == "transition-timing-function") {
+            node.style.transition_timing_function_value = value;
+            configure_style_transitions(node.style);
+            return;
+        } else if (name == "animation") {
+            apply_animation_shorthand(node.style, value);
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "first animation; opacity @keyframes";
+            return;
+        } else if (name == "animation-name") {
+            node.style.animation_name_value = value;
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "first animation; opacity @keyframes";
+            return;
+        } else if (name == "animation-duration") {
+            node.style.animation_duration_value = value;
+            return;
+        } else if (name == "animation-delay") {
+            node.style.animation_delay_value = value;
+            return;
+        } else if (name == "animation-timing-function") {
+            node.style.animation_timing_function_value = value;
+            return;
+        } else if (name == "animation-iteration-count") {
+            node.style.animation_iteration_count_value = value;
+            return;
+        } else if (inline_style_mask(name) == inline_border
+            && is_inline(inline_border)) {
             return;
         } else if (name == "border") {
             parse_border(node.style.border_top_width, node.style.border_top_rgba);
@@ -6671,6 +16589,17 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "border-width") {
             parse_four_border_values(false);
             return;
+        } else if (name == "outline") {
+            node.style.outline_width = {};
+            node.style.outline_rgba = 0;
+            parse_border(node.style.outline_width, node.style.outline_rgba);
+            return;
+        } else if (name == "outline-width") {
+            node.style.outline_width = native_document::parse_length(value);
+            return;
+        } else if (name == "outline-color") {
+            node.style.outline_rgba = native_document::parse_color(value);
+            return;
         } else if (name == "border-style" && value == "none") {
             node.style.border_top_width = {};
             node.style.border_right_width = {};
@@ -6678,16 +16607,16 @@ struct v8_dom_runtime::implementation final {
             node.style.border_left_width = {};
             return;
         } else if (name == "border-top-color") {
-            node.style.border_top_rgba = native_document::parse_color(value);
+            node.style.border_top_rgba = parse_declared_color(value);
             return;
         } else if (name == "border-right-color") {
-            node.style.border_right_rgba = native_document::parse_color(value);
+            node.style.border_right_rgba = parse_declared_color(value);
             return;
         } else if (name == "border-bottom-color") {
-            node.style.border_bottom_rgba = native_document::parse_color(value);
+            node.style.border_bottom_rgba = parse_declared_color(value);
             return;
         } else if (name == "border-left-color") {
-            node.style.border_left_rgba = native_document::parse_color(value);
+            node.style.border_left_rgba = parse_declared_color(value);
             return;
         } else if (name == "border-top-width") {
             node.style.border_top_width = native_document::parse_length(value);
@@ -6706,15 +16635,15 @@ struct v8_dom_runtime::implementation final {
             node.style.width = native_document::parse_length(value);
         } else if (name == "height" && !is_inline(inline_height)) {
             node.style.height = native_document::parse_length(value);
-        } else if (name == "min-width" && !is_inline(inline_min_max_size)) {
+        } else if (name == "min-width" && !is_inline(inline_min_width)) {
             node.style.min_width = native_document::parse_length(value);
-        } else if (name == "min-height" && !is_inline(inline_min_max_size)) {
+        } else if (name == "min-height" && !is_inline(inline_min_height)) {
             node.style.min_height = native_document::parse_length(value);
-        } else if (name == "max-width" && !is_inline(inline_min_max_size)) {
+        } else if (name == "max-width" && !is_inline(inline_max_width)) {
             node.style.max_width = value == "none" || value == "fit-content"
                 || value == "max-content" || value == "min-content"
                 ? css_length{} : native_document::parse_length(value);
-        } else if (name == "max-height" && !is_inline(inline_min_max_size)) {
+        } else if (name == "max-height" && !is_inline(inline_max_height)) {
             node.style.max_height = value == "none" || value == "fit-content"
                 || value == "max-content" || value == "min-content"
                 ? css_length{} : native_document::parse_length(value);
@@ -6728,11 +16657,22 @@ struct v8_dom_runtime::implementation final {
             node.style.bottom = native_document::parse_length(value);
         }
         else if (name == "inset") {
-            const auto length = native_document::parse_length(value);
-            if (!is_inline(inline_left)) node.style.left = length;
-            if (!is_inline(inline_top)) node.style.top = length;
-            if (!is_inline(inline_right)) node.style.right = length;
-            if (!is_inline(inline_bottom)) node.style.bottom = length;
+            std::vector<css_length> values;
+            std::istringstream stream(value);
+            for (std::string token; stream >> token;) {
+                values.push_back(native_document::parse_length(token));
+            }
+            if (!values.empty()) {
+                const auto top = values[0];
+                const auto right = values.size() > 1 ? values[1] : values[0];
+                const auto bottom = values.size() > 2 ? values[2] : values[0];
+                const auto left = values.size() > 3 ? values[3]
+                    : values.size() > 1 ? values[1] : values[0];
+                if (!is_inline(inline_left)) node.style.left = left;
+                if (!is_inline(inline_top)) node.style.top = top;
+                if (!is_inline(inline_right)) node.style.right = right;
+                if (!is_inline(inline_bottom)) node.style.bottom = bottom;
+            }
         } else if (name == "padding" && !is_inline(inline_padding)) {
             std::vector<css_length> values;
             size_t cursor = 0;
@@ -6784,6 +16724,7 @@ struct v8_dom_runtime::implementation final {
             node.style.padding_bottom = native_document::parse_length(value);
         } else if (name == "margin" && !is_inline(inline_margin)) {
             std::vector<css_length> values;
+            std::vector<bool> automatic;
             size_t cursor = 0;
             while (cursor < value.size()) {
                 while (cursor < value.size()
@@ -6791,7 +16732,9 @@ struct v8_dom_runtime::implementation final {
                 if (cursor >= value.size()) break;
                 auto end = value.find(' ', cursor);
                 if (end == std::string::npos) end = value.size();
-                values.push_back(native_document::parse_length(value.substr(cursor, end - cursor)));
+                const auto token = value.substr(cursor, end - cursor);
+                values.push_back(native_document::parse_length(token));
+                automatic.push_back(token == "auto");
                 cursor = end + 1U;
             }
             if (!values.empty()) {
@@ -6800,6 +16743,11 @@ struct v8_dom_runtime::implementation final {
                 node.style.margin_bottom = values.size() > 2 ? values[2] : values[0];
                 node.style.margin_left = values.size() > 3 ? values[3]
                     : values.size() > 1 ? values[1] : values[0];
+                node.style.margin_top_auto = automatic[0];
+                node.style.margin_right_auto = automatic.size() > 1 ? automatic[1] : automatic[0];
+                node.style.margin_bottom_auto = automatic.size() > 2 ? automatic[2] : automatic[0];
+                node.style.margin_left_auto = automatic.size() > 3 ? automatic[3]
+                    : automatic.size() > 1 ? automatic[1] : automatic[0];
             }
         } else if ((name == "margin-block" || name == "margin-inline")
             && !is_inline(inline_margin)) {
@@ -6813,41 +16761,103 @@ struct v8_dom_runtime::implementation final {
                 if (name == "margin-block") {
                     node.style.margin_top = start;
                     node.style.margin_bottom = end;
+                    node.style.margin_top_auto = first == "auto";
+                    node.style.margin_bottom_auto = (second.empty() ? first : second) == "auto";
                 } else {
                     node.style.margin_left = start;
                     node.style.margin_right = end;
+                    node.style.margin_left_auto = first == "auto";
+                    node.style.margin_right_auto = (second.empty() ? first : second) == "auto";
                 }
             }
         } else if ((name == "margin-left" || name == "margin-inline-start")
             && !is_inline(inline_margin)) {
             node.style.margin_left = native_document::parse_length(value);
+            node.style.margin_left_auto = value == "auto";
         } else if ((name == "margin-right" || name == "margin-inline-end")
             && !is_inline(inline_margin)) {
             node.style.margin_right = native_document::parse_length(value);
+            node.style.margin_right_auto = value == "auto";
         } else if ((name == "margin-top" || name == "margin-block-start")
             && !is_inline(inline_margin)) {
             node.style.margin_top = native_document::parse_length(value);
+            node.style.margin_top_auto = value == "auto";
         } else if ((name == "margin-bottom" || name == "margin-block-end")
             && !is_inline(inline_margin)) {
             node.style.margin_bottom = native_document::parse_length(value);
+            node.style.margin_bottom_auto = value == "auto";
+        } else if (name == "gap" && !is_inline(inline_gap)) {
+            std::istringstream stream(value);
+            std::string row;
+            std::string column;
+            stream >> row >> column;
+            node.style.row_gap = row == "normal" ? css_length{}
+                : native_document::parse_length(row);
+            node.style.column_gap = column.empty() ? node.style.row_gap
+                : column == "normal" ? css_length{}
+                : native_document::parse_length(column);
+        } else if (name == "row-gap" && !is_inline(inline_gap)) {
+            node.style.row_gap = value == "normal" ? css_length{}
+                : native_document::parse_length(value);
+        } else if (name == "column-gap" && !is_inline(inline_gap)) {
+            node.style.column_gap = value == "normal" ? css_length{}
+                : native_document::parse_length(value);
         } else if (name == "display" && !is_inline(inline_display)) {
-            node.style.display = value == "flex" ? display_mode::flex
-                : value == "inline-flex" ? display_mode::inline_flex
-                : value == "grid" ? display_mode::grid
-                : value == "inline-grid" ? display_mode::inline_grid
-                : value == "inline" || value == "inline-block" ? display_mode::inline_block
-                : value == "none" ? display_mode::none : display_mode::block;
+            node.style.display = parse_display_mode(value);
+        } else if (name == "table-layout") {
+            node.style.table_layout_fixed = value == "fixed";
+            if (value != "fixed" && value != "auto") {
+                decision.classification = "unsupported";
+                decision.semantic_slice = "auto and fixed keywords";
+            }
         } else if (name == "grid-template-columns") {
-            node.style.grid_two_columns = value.find("1fr") != std::string::npos;
-        } else if (name == "grid-column") {
-            node.style.grid_span_all = value.find('/') != std::string::npos;
+            node.style.grid_two_columns = has_multiple_grid_columns(value);
+            node.style.grid_template_columns = parse_simple_grid_tracks(value);
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "two-column component grids and explicit fixed track lengths";
+        } else if (name == "grid-template-rows") {
+            node.style.grid_fractional_rows = value.find("1fr") != std::string::npos;
+            node.style.grid_template_rows = parse_simple_grid_tracks(value);
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "fractional component rows and explicit fixed track lengths";
+        } else if (apply_grid_placement_declaration(node.style, name, value)) {
+            decision.classification = "supported";
+            decision.semantic_slice =
+                "grid-area, grid-row, grid-column, and placement longhand CSSOM values";
         } else if (name == "position" && !is_inline(inline_position)) {
-            node.style.position = value == "absolute" ? position_mode::absolute
+            const auto explicit_document_element = node.tag == "html"
+                && node.parent == &document.body();
+            node.style.position = value == "inherit" && node.parent != nullptr
+                    && !explicit_document_element
+                ? node.parent->style.position
+                : value == "absolute" ? position_mode::absolute
                 : value == "fixed" ? position_mode::fixed
                 : value == "relative" ? position_mode::relative
                 : position_mode::normal;
-        } else if (name == "z-index") {
-            node.style.z_index = value == "auto" ? 0 : std::atoi(value.c_str());
+        } else if (name == "float" && !is_inline(inline_float)) {
+            node.style.floating = value == "left" ? float_mode::left
+                : value == "right" ? float_mode::right
+                : float_mode::none;
+            decision.classification = "partially-supported";
+            decision.semantic_slice =
+                "left/right block floats sharing a bounded formatting-context line";
+        } else if (name == "z-index" && !is_inline(inline_z_index)) {
+            if (value == "inherit") {
+                const auto explicit_document_element = node.tag == "html"
+                    && node.parent == &document.body();
+                if (!explicit_document_element && node.parent != nullptr) {
+                    node.style.z_index = node.parent->style.z_index;
+                    node.style.z_index_auto = node.parent->style.z_index_auto;
+                } else {
+                    node.style.z_index = 0;
+                    node.style.z_index_auto = true;
+                }
+            } else {
+                node.style.z_index_auto = value == "auto" || value == "initial"
+                    || value == "unset";
+                node.style.z_index = node.style.z_index_auto
+                    ? 0 : std::atoi(value.c_str());
+            }
         } else if (name == "flex-direction" && !is_inline(inline_flex_direction)) {
             node.style.direction = value == "row" || value == "row-reverse"
                 ? flex_direction::row : flex_direction::column;
@@ -6858,32 +16868,47 @@ struct v8_dom_runtime::implementation final {
             node.style.align_items = value == "center" ? align_mode::center
                 : value == "flex-start" || value == "start" ? align_mode::start
                 : value == "flex-end" || value == "end" ? align_mode::end
+                : value == "baseline" || value == "first baseline" ? align_mode::baseline
                 : align_mode::stretch;
+        } else if (name == "vertical-align" && node.tag == "tr" && value == "middle"
+            && !is_inline(inline_align_items)) {
+            // A flex-backed row uses cross-axis alignment to preserve the table-row
+            // meaning of vertical-align: middle for its cells.
+            node.style.vertical_align = value;
+            node.style.align_items = align_mode::center;
         } else if (name == "align-self" && !is_inline(inline_align_self)) {
             node.style.align_self_specified = value != "auto";
             node.style.align_self = value == "center" ? align_mode::center
                 : value == "flex-start" || value == "start" ? align_mode::start
                 : value == "flex-end" || value == "end" ? align_mode::end
+                : value == "baseline" || value == "first baseline" ? align_mode::baseline
                 : align_mode::stretch;
         } else if (name == "justify-content" && !is_inline(inline_justify_content)) {
             node.style.justify_content = value == "center" ? justify_mode::center
                 : value == "flex-end" || value == "end" ? justify_mode::end
                 : value == "space-between" ? justify_mode::space_between
+                : value == "space-around" ? justify_mode::space_around
+                : value == "space-evenly" ? justify_mode::space_evenly
                 : justify_mode::start;
         } else if (name == "flex-grow" && !is_inline(inline_flex_grow)) {
             node.style.flex_grow = std::strtof(value.c_str(), nullptr);
         } else if (name == "flex-shrink" && !is_inline(inline_flex_shrink)) {
             node.style.flex_shrink = std::max(0.0F, std::strtof(value.c_str(), nullptr));
+        } else if (name == "flex-basis" && !is_inline(inline_flex_basis)) {
+            node.style.flex_basis = native_document::parse_length(value);
         } else if (name == "flex"
-            && (!is_inline(inline_flex_grow) || !is_inline(inline_flex_shrink))) {
+            && (!is_inline(inline_flex_grow) || !is_inline(inline_flex_shrink)
+                || !is_inline(inline_flex_basis))) {
             if (value == "none") {
                 if (!is_inline(inline_flex_grow)) node.style.flex_grow = 0;
                 if (!is_inline(inline_flex_shrink)) node.style.flex_shrink = 0;
+                if (!is_inline(inline_flex_basis)) node.style.flex_basis = {};
             } else {
                 std::istringstream stream(value);
                 std::string grow_value;
                 std::string shrink_value;
-                stream >> grow_value >> shrink_value;
+                std::string basis_value;
+                stream >> grow_value >> shrink_value >> basis_value;
                 if (!is_inline(inline_flex_grow) && !grow_value.empty()) {
                     node.style.flex_grow = grow_value == "auto" ? 1.0F
                         : std::max(0.0F, std::strtof(grow_value.c_str(), nullptr));
@@ -6892,17 +16917,112 @@ struct v8_dom_runtime::implementation final {
                     node.style.flex_shrink = shrink_value.empty()
                         ? 1.0F : std::max(0.0F, std::strtof(shrink_value.c_str(), nullptr));
                 }
+                if (!is_inline(inline_flex_basis) && !basis_value.empty()) {
+                    node.style.flex_basis = native_document::parse_length(basis_value);
+                }
             }
         } else if (name == "box-sizing" && !is_inline(inline_box_sizing)) {
             node.style.border_box = value == "border-box";
+        } else if (name == "box-shadow" && !is_inline(inline_box_shadow)) {
+            auto complete = true;
+            if (!apply_box_shadow_value(node.style, value, complete)) {
+                decision.classification = "unsupported";
+                decision.semantic_slice = "outer shadows with two to four pixel lengths";
+            } else if (!complete) {
+                decision.classification = "partially-supported";
+                decision.semantic_slice = "first outer shadow with pixel lengths";
+            }
+        } else if (name == "background-image") {
+            node.style.background_image_value = value;
+            node.style.background_image_markup.clear();
+            node.style.background_image_view_box.clear();
+            if (value == "none") return;
+            const auto url = first_css_url(value);
+            if (!url.has_value()) {
+                decision.classification = "unsupported";
+                decision.semantic_slice = "single URL-backed SVG layer";
+                return;
+            }
+            std::string markup;
+            std::string resolved_url;
+            const auto& base = in_frame_context()
+                ? frame_base_address : document_base_address;
+            if (!load_text_resource(
+                    *url,
+                    base,
+                    HTMLML_RESOURCE_IMAGE,
+                    markup,
+                    resolved_url)) {
+                decision.classification = "unsupported";
+                decision.semantic_slice = "URL-backed SVG resource load failed";
+                return;
+            }
+            const auto view_box = svg_view_box(markup);
+            if (view_box.empty()) {
+                decision.classification = "unsupported";
+                decision.semantic_slice =
+                    "SVG images with an explicit viewBox or numeric width and height";
+                return;
+            }
+            node.style.background_image_value = "url(\"" + resolved_url + "\")";
+            node.style.background_image_markup = std::move(markup);
+            node.style.background_image_view_box = view_box;
+            decision.classification = "partially-supported";
+            decision.semantic_slice =
+                "first URL-backed SVG layer with explicit viewBox or numeric width and height";
+        } else if (name == "background-repeat") {
+            node.style.background_repeat = value;
+            if (value != "no-repeat") {
+                decision.classification = "partially-supported";
+                decision.semantic_slice = "no-repeat";
+            }
+        } else if (name == "background-position") {
+            apply_background_position(node.style, value);
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "two-value keywords, percentages, and pixel lengths";
+        } else if (name == "background-size") {
+            std::istringstream stream(value);
+            stream >> node.style.background_size_x >> node.style.background_size_y;
+            if (node.style.background_size_x.empty()) node.style.background_size_x = "auto";
+            if (node.style.background_size_y.empty()) {
+                node.style.background_size_y = node.style.background_size_x == "cover"
+                    || node.style.background_size_x == "contain"
+                    ? node.style.background_size_x : "auto";
+            }
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "cover, contain, auto, percentages, and pixel lengths";
         } else if ((name == "background" || name == "background-color")
             && !is_inline(inline_background)) {
-            const auto parsed = native_document::parse_color(value);
-            if (parsed != 0U || value == "transparent") node.style.background_rgba = parsed;
+            const auto parsed = parse_declared_color(value);
+            if (parsed != 0U || value == "transparent"
+                || lower_html_name(value) == "currentcolor") node.style.background_rgba = parsed;
         } else if ((name == "overflow" || name == "overflow-x" || name == "overflow-y")
             && !is_inline(inline_overflow)) {
-            node.style.clip = value == "hidden" || value == "clip"
-                || value == "auto" || value == "scroll";
+            const auto explicit_document_element = node.tag == "html"
+                && node.parent == &document.body();
+            if (value == "inherit" && node.parent != nullptr
+                && !explicit_document_element) {
+                if (name == "overflow") {
+                    node.style.overflow_x = node.parent->style.overflow_x;
+                    node.style.overflow_y = node.parent->style.overflow_y;
+                } else if (name == "overflow-x") {
+                    node.style.overflow_x = node.parent->style.overflow_x;
+                } else {
+                    node.style.overflow_y = node.parent->style.overflow_y;
+                }
+            } else if (name == "overflow") {
+                std::istringstream stream(value);
+                std::string x;
+                std::string y;
+                stream >> x >> y;
+                node.style.overflow_x = parse_overflow_mode(x);
+                node.style.overflow_y = parse_overflow_mode(y.empty() ? x : y);
+            } else if (name == "overflow-x") {
+                node.style.overflow_x = parse_overflow_mode(value);
+            } else {
+                node.style.overflow_y = parse_overflow_mode(value);
+            }
+            refresh_overflow_state(node.style);
         } else if (name == "visibility" && !is_inline(inline_visibility)) {
             node.style.visibility_specified = value != "inherit" && value != "unset";
             node.style.visibility_hidden = value == "hidden" || value == "collapse";
@@ -6914,60 +17034,161 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "color" && !is_inline(inline_color)) {
             const auto parsed = native_document::parse_color(value);
             if (parsed != 0U || value == "transparent") node.style.foreground_rgba = parsed;
+        } else if (name == "fill" && !is_inline(inline_svg_fill)) {
+            node.style.svg_fill = value == "inherit" || value == "unset"
+                ? std::string{} : value;
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "solid SVG paint, none, and currentColor";
+        } else if (name == "stroke" && !is_inline(inline_svg_stroke)) {
+            node.style.svg_stroke = value == "inherit" || value == "unset"
+                ? std::string{} : value;
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "solid SVG paint, none, and currentColor";
+        } else if (name == "cursor" && !is_inline(inline_cursor)) {
+            node.style.cursor = value == "initial" ? "auto" : value;
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "host cursor projection for common keyword cursors";
+        } else if (name == "font") {
+            if (value == "inherit" || value == "unset") {
+                node.style.font_size = -1;
+                node.style.line_height = -1;
+                node.style.font_weight = 0;
+                node.style.font_family.clear();
+                decision.classification = "partially-supported";
+                decision.semantic_slice =
+                    "inherit/unset for size, line-height, weight, and family";
+            } else if (const auto font = parse_font_shorthand(node, value); font.has_value()) {
+                if (!is_inline(inline_font_size)) node.style.font_size = font->font_size;
+                if (!is_inline(inline_line_height)) node.style.line_height = font->line_height;
+                if (!is_inline(inline_font_weight)) node.style.font_weight = font->font_weight;
+                if (!is_inline(inline_font_family)) node.style.font_family = font->font_family;
+                decision.classification = "partially-supported";
+                decision.semantic_slice = font->complete
+                    ? "font-size, line-height, weight, and family"
+                    : "font-size, line-height, weight, and family; style/variant/stretch retained without native shaping";
+            } else {
+                decision.classification = "unsupported";
+                decision.semantic_slice = "unparsed font shorthand";
+            }
         } else if (name == "font-size" && !is_inline(inline_font_size)) {
-            node.style.font_size = std::max(0.0F, native_document::parse_length(value).value);
+            node.style.font_size = resolved_declared_font_size(node, value);
         } else if (name == "font-family" && !is_inline(inline_font_family)) {
-            node.style.font_family = value;
+            node.style.font_family = value == "inherit" || value == "unset"
+                ? std::string{} : value;
         } else if (name == "font-weight" && !is_inline(inline_font_weight)) {
-            node.style.font_weight = value == "bold" ? 700
+            node.style.font_weight = value == "inherit" || value == "unset" ? 0
+                : value == "bold" ? 700
                 : value == "normal" ? 400
                 : std::max(1, static_cast<int>(std::lround(
                     native_document::parse_length(value).value)));
+        } else if (name == "letter-spacing" && !is_inline(inline_letter_spacing)) {
+            node.style.letter_spacing_specified = value != "inherit" && value != "unset";
+            const auto length = native_document::parse_length(value);
+            const auto font_size = node.style.font_size >= 0
+                ? node.style.font_size : inherited_font_size(node);
+            node.style.letter_spacing = value == "normal" ? 0
+                : length.unit == length_unit::em ? length.value * font_size
+                : length.unit == length_unit::rem ? length.value * 14.0F
+                : length.value;
+        } else if (name == "word-spacing" && !is_inline(inline_word_spacing)) {
+            node.style.word_spacing_specified = value != "inherit" && value != "unset";
+            const auto length = native_document::parse_length(value);
+            const auto font_size = node.style.font_size >= 0
+                ? node.style.font_size : inherited_font_size(node);
+            node.style.word_spacing = value == "normal" ? 0
+                : length.unit == length_unit::em ? length.value * font_size
+                : length.unit == length_unit::rem ? length.value * 14.0F
+                : length.value;
         } else if (name == "line-height" && !is_inline(inline_line_height)) {
-            const auto parsed = std::max(0.0F, native_document::parse_length(value).value);
-            node.style.line_height = parsed > 0 && parsed <= 4
-                ? parsed * (node.style.font_size >= 0 ? node.style.font_size : 14.0F)
-                : parsed;
+            const auto font_size = node.style.font_size >= 0
+                ? node.style.font_size : inherited_font_size(node);
+            node.style.line_height = resolved_declared_line_height(node, value, font_size);
         } else if (name == "text-align" && !is_inline(inline_text_align)) {
             node.style.text_align = value;
+        } else if (name == "text-transform") {
+            node.style.text_transform = value == "inherit" || value == "unset"
+                ? std::string{} : value;
+            if (value != "none" && value != "uppercase" && value != "lowercase"
+                && value != "capitalize" && value != "inherit" && value != "unset") {
+                decision.classification = "unsupported";
+                decision.semantic_slice = "ASCII none, uppercase, lowercase, and capitalize";
+            } else {
+                decision.classification = "partially-supported";
+                decision.semantic_slice = "ASCII none, uppercase, lowercase, and capitalize";
+            }
         } else if (name == "white-space" && !is_inline(inline_white_space)) {
             node.style.white_space = value == "inherit" || value == "unset"
                 ? std::string{} : value;
+        } else if (name == "list-style-position") {
+            node.style.list_style_position = value;
+        } else if (name == "list-style-type") {
+            node.style.list_style_type = value;
+        } else if (name == "list-style") {
+            std::istringstream stream(value);
+            std::string token;
+            while (stream >> token) {
+                if (token == "inside" || token == "outside") {
+                    node.style.list_style_position = token;
+                } else if (token == "none" || token == "decimal"
+                    || token == "decimal-leading-zero" || token == "disc"
+                    || token == "circle" || token == "square") {
+                    node.style.list_style_type = token;
+                }
+            }
+        } else if (name == "border-style") {
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "none";
+        } else if (name == "vertical-align") {
+            node.style.vertical_align = value;
+            decision.classification = "partially-supported";
+            decision.semantic_slice = "middle on table rows and inline line boxes";
+        } else if (property_mask == 0U) {
+            decision.classification = "unsupported";
         }
     }
 
     void apply_css_rules(dom_node& node)
     {
         binding_callback_timer timer(profile_startup ? &startup_css_apply : nullptr);
+        const auto trace_css = profile_css;
+        const auto css_apply_started = trace_css
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         // Text nodes generate anonymous inline boxes and are not CSS selector
         // subjects. Their inherited values are resolved from their ancestors.
         if (node.tag == "#text") {
-            node.style.display = display_mode::inline_block;
+            node.style.display = display_mode::inline_flow;
             document.mark_dirty();
             return;
         }
-        const auto previous_transform_rotation = node.style.transform_rotate_degrees;
         node.style.important_property_mask = 0;
         if ((node.style.inline_property_mask & inline_position) == 0U) {
             node.style.position = position_mode::normal;
         }
-        node.style.z_index = 0;
+        if ((node.style.inline_property_mask & inline_float) == 0U) {
+            node.style.floating = float_mode::none;
+        }
+        if ((node.style.inline_property_mask & inline_z_index) == 0U) {
+            node.style.z_index = 0;
+            node.style.z_index_auto = true;
+        }
         node.style.grid_two_columns = false;
+        node.style.grid_fractional_rows = false;
+        node.style.grid_template_columns.clear();
+        node.style.grid_template_rows.clear();
         node.style.grid_span_all = false;
         if ((node.style.inline_property_mask & inline_width) == 0U) node.style.width = {};
         if ((node.style.inline_property_mask & inline_height) == 0U) node.style.height = {};
-        if ((node.style.inline_property_mask & inline_min_max_size) == 0U) {
-            node.style.min_width = {};
-            node.style.min_height = {};
-            node.style.max_width = {};
-            node.style.max_height = {};
-        }
+        if ((node.style.inline_property_mask & inline_min_width) == 0U) node.style.min_width = {};
+        if ((node.style.inline_property_mask & inline_min_height) == 0U) node.style.min_height = {};
+        if ((node.style.inline_property_mask & inline_max_width) == 0U) node.style.max_width = {};
+        if ((node.style.inline_property_mask & inline_max_height) == 0U) node.style.max_height = {};
         if ((node.style.inline_property_mask & inline_left) == 0U) node.style.left = {};
         if ((node.style.inline_property_mask & inline_top) == 0U) node.style.top = {};
         if ((node.style.inline_property_mask & inline_right) == 0U) node.style.right = {};
         if ((node.style.inline_property_mask & inline_bottom) == 0U) node.style.bottom = {};
         if ((node.style.inline_property_mask & inline_display) == 0U) {
-            node.style.display = default_display_for_tag(node.tag);
+            node.style.display = default_display_for_node(node);
         }
         if ((node.style.inline_property_mask & inline_padding) == 0U) {
             node.style.padding_left = {};
@@ -6980,15 +17201,23 @@ struct v8_dom_runtime::implementation final {
             node.style.margin_top = {};
             node.style.margin_right = {};
             node.style.margin_bottom = {};
+            node.style.margin_left_auto = false;
+            node.style.margin_top_auto = false;
+            node.style.margin_right_auto = false;
+            node.style.margin_bottom_auto = false;
         }
-        node.style.border_left_width = {};
-        node.style.border_top_width = {};
-        node.style.border_right_width = {};
-        node.style.border_bottom_width = {};
-        node.style.border_left_rgba = 0;
-        node.style.border_top_rgba = 0;
-        node.style.border_right_rgba = 0;
-        node.style.border_bottom_rgba = 0;
+        if ((node.style.inline_property_mask & inline_border) == 0U) {
+            node.style.border_left_width = {};
+            node.style.border_top_width = {};
+            node.style.border_right_width = {};
+            node.style.border_bottom_width = {};
+            node.style.border_left_rgba = 0;
+            node.style.border_top_rgba = 0;
+            node.style.border_right_rgba = 0;
+            node.style.border_bottom_rgba = 0;
+        }
+        node.style.outline_width = {};
+        node.style.outline_rgba = 0;
         if ((node.style.inline_property_mask & inline_border_radius) == 0U) {
             node.style.border_top_left_radius = {};
             node.style.border_top_right_radius = {};
@@ -6998,18 +17227,32 @@ struct v8_dom_runtime::implementation final {
         if ((node.style.inline_property_mask & inline_transform) == 0U) {
             node.style.transform_translate_x = {};
             node.style.transform_translate_y = {};
-            node.style.transform_origin_x = {50, length_unit::percent};
-            node.style.transform_origin_y = {50, length_unit::percent};
             node.style.transform_scale_x = 1;
             node.style.transform_scale_y = 1;
             node.style.transform_rotate_degrees = 0;
             node.style.transform_specified = false;
         }
-        node.style.transform_transition_duration_ms = 0;
-        node.style.transform_transition_x1 = 0.25F;
-        node.style.transform_transition_y1 = 0.1F;
-        node.style.transform_transition_x2 = 0.25F;
-        node.style.transform_transition_y2 = 1.0F;
+        if ((node.style.inline_property_mask & inline_transform_origin) == 0U) {
+            node.style.transform_origin_x = {50, length_unit::percent};
+            node.style.transform_origin_y = {50, length_unit::percent};
+            node.style.transform_origin_specified = false;
+        }
+        node.style.transition_property_value = "all";
+        node.style.transition_duration_value = "0s";
+        node.style.transition_delay_value = "0s";
+        node.style.transition_timing_function_value = "ease";
+        node.style.transform_transition = {};
+        node.style.opacity_transition = {};
+        node.style.color_transition = {};
+        node.style.animation_name_value = "none";
+        node.style.animation_duration_value = "0s";
+        node.style.animation_delay_value = "0s";
+        node.style.animation_timing_function_value = "ease";
+        node.style.animation_iteration_count_value = "1";
+        node.style.opacity_keyframe_animation_signature.clear();
+        node.style.opacity_keyframes.clear();
+        node.style.rotation_keyframe_animation_signature.clear();
+        node.style.rotation_keyframes.clear();
         if ((node.style.inline_property_mask & inline_flex_direction) == 0U) {
             node.style.direction = flex_direction::row;
             node.style.flex_reverse = false;
@@ -7024,12 +17267,39 @@ struct v8_dom_runtime::implementation final {
         if ((node.style.inline_property_mask & inline_justify_content) == 0U) {
             node.style.justify_content = justify_mode::start;
         }
+        if ((node.style.inline_property_mask & inline_gap) == 0U) {
+            node.style.row_gap = {};
+            node.style.column_gap = {};
+        }
         if ((node.style.inline_property_mask & inline_flex_wrap) == 0U) node.style.flex_wrap = false;
         if ((node.style.inline_property_mask & inline_flex_grow) == 0U) node.style.flex_grow = 0;
         if ((node.style.inline_property_mask & inline_flex_shrink) == 0U) node.style.flex_shrink = 1;
+        if ((node.style.inline_property_mask & inline_flex_basis) == 0U) {
+            node.style.flex_basis = {};
+        }
         if ((node.style.inline_property_mask & inline_box_sizing) == 0U) node.style.border_box = false;
+        if ((node.style.inline_property_mask & inline_box_shadow) == 0U) {
+            node.style.box_shadow_offset_x = 0;
+            node.style.box_shadow_offset_y = 0;
+            node.style.box_shadow_blur_radius = 0;
+            node.style.box_shadow_spread_radius = 0;
+            node.style.box_shadow_rgba = 0;
+            node.style.box_shadow_present = false;
+        }
         if ((node.style.inline_property_mask & inline_background) == 0U) node.style.background_rgba = 0;
-        if ((node.style.inline_property_mask & inline_overflow) == 0U) node.style.clip = false;
+        node.style.background_image_value = "none";
+        node.style.background_image_markup.clear();
+        node.style.background_image_view_box.clear();
+        node.style.background_repeat = "repeat";
+        node.style.background_position_x = "0%";
+        node.style.background_position_y = "0%";
+        node.style.background_size_x = "auto";
+        node.style.background_size_y = "auto";
+        if ((node.style.inline_property_mask & inline_overflow) == 0U) {
+            node.style.overflow_x = overflow_mode::visible;
+            node.style.overflow_y = overflow_mode::visible;
+            refresh_overflow_state(node.style);
+        }
         if ((node.style.inline_property_mask & inline_pointer_events) == 0U) {
             node.style.pointer_events_none = false;
             node.style.pointer_events_specified = false;
@@ -7040,8 +17310,27 @@ struct v8_dom_runtime::implementation final {
         if ((node.style.inline_property_mask & inline_font_family) == 0U) node.style.font_family.clear();
         if ((node.style.inline_property_mask & inline_font_weight) == 0U) node.style.font_weight = 0;
         if ((node.style.inline_property_mask & inline_line_height) == 0U) node.style.line_height = -1;
+        if ((node.style.inline_property_mask & inline_letter_spacing) == 0U) {
+            node.style.letter_spacing = 0;
+            node.style.letter_spacing_specified = false;
+        }
+        if ((node.style.inline_property_mask & inline_word_spacing) == 0U) {
+            node.style.word_spacing = 0;
+            node.style.word_spacing_specified = false;
+        }
+        node.style.list_style_position.clear();
+        node.style.list_style_type.clear();
         if ((node.style.inline_property_mask & inline_text_align) == 0U) node.style.text_align.clear();
         if ((node.style.inline_property_mask & inline_white_space) == 0U) node.style.white_space.clear();
+        node.style.custom_properties.clear();
+        node.style.important_custom_properties.clear();
+        for (const auto& [name, value] : node.inline_style_declarations) {
+            if (!name.starts_with("--")) continue;
+            node.style.custom_properties[name] = value;
+            if (node.inline_important_declarations.contains(name)) {
+                node.style.important_custom_properties.insert(name);
+            }
+        }
         node.style.before = {};
         node.style.after = {};
         // Recompute stylesheet visibility from the current class/selector set.
@@ -7051,6 +17340,9 @@ struct v8_dom_runtime::implementation final {
             node.style.visibility_hidden = false;
             node.style.visibility_specified = false;
         }
+        const auto reset_completed = trace_css
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         std::vector<size_t> candidates = unindexed_css_rules;
         const auto append_candidates = [&](const auto& index, const std::string& key) {
             const auto match = index.find(key);
@@ -7059,7 +17351,26 @@ struct v8_dom_runtime::implementation final {
             }
         };
         append_candidates(css_rules_by_tag, node.tag);
+        const auto has_explicit_document_element = node.tag == "body"
+            && std::any_of(node.children.begin(), node.children.end(), [](const auto* child) {
+                return child != nullptr && child->tag == "html";
+            });
+        if (node.tag == "body"
+            && (node.parent == nullptr || node.parent->tag == "iframe")
+            && !has_explicit_document_element) {
+            append_candidates(css_rules_by_tag, "html");
+        }
         if (!node.id_attribute.empty()) append_candidates(css_rules_by_id, node.id_attribute);
+        for (const auto& [name, value] : node.attributes) {
+            static_cast<void>(value);
+            append_candidates(css_rules_by_attribute, name);
+        }
+        if (&node == active_element) {
+            candidates.insert(
+                candidates.end(),
+                css_focus_rules.begin(),
+                css_focus_rules.end());
+        }
         const std::string_view classes(node.class_name);
         size_t class_cursor = 0;
         while (class_cursor < classes.size()) {
@@ -7074,11 +17385,13 @@ struct v8_dom_runtime::implementation final {
                     std::string(classes.substr(start, class_cursor - start)));
             }
         }
-        std::sort(candidates.begin(), candidates.end());
+        sort_css_candidates(candidates);
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        if (trace_css) css_profile_candidate_checks += candidates.size();
         std::vector<const css_rule*> matched_rules;
         for (const auto index : candidates) {
             const auto& rule = css_rules[index];
+            if (!rule.media_matches) continue;
             std::string pseudo_origin;
             const auto pseudo_kind = split_pseudo_element_selector(rule.selector, pseudo_origin);
             if (pseudo_kind != 0) {
@@ -7090,9 +17403,13 @@ struct v8_dom_runtime::implementation final {
                 }
                 continue;
             }
-            if (!css_selector_matches(node, rule.selector)) continue;
+            if (!css_rule_matches(node, rule)) continue;
             matched_rules.push_back(&rule);
         }
+        if (trace_css) css_profile_matched_rules += matched_rules.size();
+        const auto matching_completed = trace_css
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         // CSS custom properties are cascaded before dependent declarations are
         // computed. Applying each rule eagerly made a base button height resolve
         // with the default medium size before its later `.small-*` rule set the
@@ -7110,8 +17427,28 @@ struct v8_dom_runtime::implementation final {
                 apply_css_declaration(node, declaration);
             }
         }
-        document.update_transform_animation(node, previous_transform_rotation);
+        const auto declarations_completed = trace_css
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
+        configure_style_keyframe_animation(node);
+        document.update_style_animations(node);
+        detect_css_compositions(node);
         document.mark_dirty();
+        if (trace_css) {
+            const auto completed = std::chrono::steady_clock::now();
+            css_profile_reset_nanoseconds +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    reset_completed - css_apply_started).count();
+            css_profile_matching_nanoseconds +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    matching_completed - reset_completed).count();
+            css_profile_declarations_nanoseconds +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    declarations_completed - matching_completed).count();
+            css_profile_finalize_nanoseconds +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    completed - declarations_completed).count();
+        }
     }
 
     void apply_appended_css_rules(dom_node& node, size_t first_new_rule)
@@ -7128,7 +17465,21 @@ struct v8_dom_runtime::implementation final {
             }
         };
         append_candidates(css_rules_by_tag, node.tag);
+        if (node.tag == "body"
+            && (node.parent == nullptr || node.parent->tag == "iframe")) {
+            append_candidates(css_rules_by_tag, "html");
+        }
         if (!node.id_attribute.empty()) append_candidates(css_rules_by_id, node.id_attribute);
+        for (const auto& [name, value] : node.attributes) {
+            static_cast<void>(value);
+            append_candidates(css_rules_by_attribute, name);
+        }
+        if (&node == active_element) {
+            candidates.insert(
+                candidates.end(),
+                css_focus_rules.begin(),
+                css_focus_rules.end());
+        }
         const std::string_view classes(node.class_name);
         size_t class_cursor = 0;
         while (class_cursor < classes.size()) {
@@ -7143,17 +17494,17 @@ struct v8_dom_runtime::implementation final {
                     std::string(classes.substr(start, class_cursor - start)));
             }
         }
-        std::sort(candidates.begin(), candidates.end());
+        sort_css_candidates(candidates);
         candidates.erase(std::remove_if(
             candidates.begin(),
             candidates.end(),
             [first_new_rule](size_t index) { return index < first_new_rule; }), candidates.end());
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
 
-        const auto previous_transform_rotation = node.style.transform_rotate_degrees;
         std::vector<const css_rule*> matched_rules;
         for (const auto index : candidates) {
             const auto& rule = css_rules[index];
+            if (!rule.media_matches) continue;
             std::string pseudo_origin;
             const auto pseudo_kind = split_pseudo_element_selector(rule.selector, pseudo_origin);
             if (pseudo_kind != 0) {
@@ -7165,7 +17516,7 @@ struct v8_dom_runtime::implementation final {
                 }
                 continue;
             }
-            if (css_selector_matches(node, rule.selector)) matched_rules.push_back(&rule);
+            if (css_rule_matches(node, rule)) matched_rules.push_back(&rule);
         }
         for (const auto* rule : matched_rules) {
             for (const auto& declaration : rule->declarations) {
@@ -7177,7 +17528,65 @@ struct v8_dom_runtime::implementation final {
                 if (!declaration.name.starts_with("--")) apply_css_declaration(node, declaration);
             }
         }
-        document.update_transform_animation(node, previous_transform_rotation);
+        configure_style_keyframe_animation(node);
+        document.update_style_animations(node);
+        detect_css_compositions(node);
+        document.mark_dirty();
+    }
+
+    bool appended_css_rules_define_custom_properties(size_t first_new_rule) const
+    {
+        for (auto index = first_new_rule; index < css_rules.size(); ++index) {
+            for (const auto& declaration : css_rules[index].declarations) {
+                if (declaration.name.starts_with("--")) return true;
+            }
+        }
+        return false;
+    }
+
+    void reapply_css_variable_dependent_rules(dom_node& node)
+    {
+        if (node.tag == "#text") return;
+        std::vector<size_t> candidates = unindexed_css_rules;
+        const auto append_candidates = [&](const auto& index, const std::string& key) {
+            const auto match = index.find(key);
+            if (match != index.end()) {
+                candidates.insert(candidates.end(), match->second.begin(), match->second.end());
+            }
+        };
+        append_candidates(css_rules_by_tag, node.tag);
+        if (node.tag == "body"
+            && (node.parent == nullptr || node.parent->tag == "iframe")) {
+            append_candidates(css_rules_by_tag, "html");
+        }
+        if (!node.id_attribute.empty()) append_candidates(css_rules_by_id, node.id_attribute);
+        for (const auto& [name, value] : node.attributes) {
+            static_cast<void>(value);
+            append_candidates(css_rules_by_attribute, name);
+        }
+        if (&node == active_element) {
+            candidates.insert(
+                candidates.end(),
+                css_focus_rules.begin(),
+                css_focus_rules.end());
+        }
+        std::istringstream classes(node.class_name);
+        for (std::string class_name; classes >> class_name;) {
+            append_candidates(css_rules_by_class, class_name);
+        }
+        sort_css_candidates(candidates);
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        for (const auto index : candidates) {
+            const auto& rule = css_rules[index];
+            if (!rule.media_matches || !css_rule_matches(node, rule)) continue;
+            for (const auto& declaration : rule.declarations) {
+                if (!declaration.name.starts_with("--")
+                    && declaration.value.find("var(") != std::string::npos) {
+                    apply_css_declaration(node, declaration);
+                }
+            }
+        }
         document.mark_dirty();
     }
 
@@ -7187,18 +17596,47 @@ struct v8_dom_runtime::implementation final {
         for (auto* child : node.children) apply_css_rules_subtree(*child);
     }
 
-    bool is_connected(const dom_node& node) const
+    bool is_connected(const dom_node& node)
     {
         for (auto* current = &node; current != nullptr; current = current->parent) {
             if (current == &document.body()) return true;
+            for (const auto& [frame_id, provisional_body] : provisional_frame_bodies) {
+                if (current != provisional_body) continue;
+                const auto* frame = document.find_by_native_id(frame_id);
+                for (auto* owner = frame; owner != nullptr; owner = owner->parent) {
+                    if (owner == &document.body()) return true;
+                }
+            }
         }
         return false;
     }
 
-    void recascade_connected_subtree(dom_node& node)
+    void recascade_connected_subtree(
+        dom_node& node,
+        std::string_view reason = {})
     {
         if (!is_connected(node)) return;
-        const auto trace = std::getenv("HTMLML_PROBE_PROFILE_CSS") != nullptr;
+        retain_connected_subtree_wrappers(node);
+        const auto trace = profile_css;
+        const auto candidate_checks_before = css_profile_candidate_checks;
+        const auto matched_rules_before = css_profile_matched_rules;
+        const auto declarations_before = css_profile_declaration_applications;
+        const auto reset_nanoseconds_before = css_profile_reset_nanoseconds;
+        const auto matching_nanoseconds_before = css_profile_matching_nanoseconds;
+        const auto declaration_nanoseconds_before =
+            css_profile_declarations_nanoseconds;
+        const auto finalize_nanoseconds_before = css_profile_finalize_nanoseconds;
+        if (trace
+            && std::getenv("HTMLML_PROBE_TRACE_UNINDEXED_CSS") != nullptr
+            && last_traced_unindexed_css_count != unindexed_css_rules.size()) {
+            last_traced_unindexed_css_count = unindexed_css_rules.size();
+            for (const auto index : unindexed_css_rules) {
+                if (index < css_rules.size()) {
+                    std::cerr << "[Native Engine Probe] CSS unindexed rule="
+                        << index << ", selector=" << css_rules[index].selector << '\n';
+                }
+            }
+        }
         const auto started = trace ? std::chrono::steady_clock::now()
             : std::chrono::steady_clock::time_point{};
         binding_callback_timer timer(profile_startup ? &startup_subtree_recascade : nullptr);
@@ -7217,23 +17655,228 @@ struct v8_dom_runtime::implementation final {
                 }
                 std::cerr << "[Native Engine Probe] CSS recascade "
                     << std::fixed << std::setprecision(3) << elapsed << " ms, nodes="
-                    << descendants << ", tag=" << node.tag << ", id=" << node.id_attribute
+                    << descendants
+                    << ", candidates="
+                    << (css_profile_candidate_checks - candidate_checks_before)
+                    << ", matched="
+                    << (css_profile_matched_rules - matched_rules_before)
+                    << ", declarations="
+                    << (css_profile_declaration_applications - declarations_before)
+                    << ", stages-ms="
+                    << (css_profile_reset_nanoseconds - reset_nanoseconds_before)
+                        / 1'000'000.0
+                    << "/"
+                    << (css_profile_matching_nanoseconds - matching_nanoseconds_before)
+                        / 1'000'000.0
+                    << "/"
+                    << (css_profile_declarations_nanoseconds
+                            - declaration_nanoseconds_before)
+                        / 1'000'000.0
+                    << "/"
+                    << (css_profile_finalize_nanoseconds - finalize_nanoseconds_before)
+                        / 1'000'000.0
+                    << ", rules=" << css_rules.size()
+                    << ", unindexed=" << unindexed_css_rules.size()
+                    << ", tag=" << node.tag << ", id=" << node.id_attribute
+                    << ", reason=" << reason
                     << ", class=" << node.class_name.substr(0, 180) << '\n';
             }
         }
     }
 
+    void recascade_hover_transition(
+        dom_node* previous,
+        dom_node* next,
+        std::string_view reason)
+    {
+        if (previous == next || hover_selector_dependencies.empty()) return;
+
+        std::vector<dom_node*> previous_path;
+        std::vector<dom_node*> next_path;
+        for (auto* node = previous; node != nullptr; node = node->parent) {
+            previous_path.push_back(node);
+        }
+        for (auto* node = next; node != nullptr; node = node->parent) {
+            next_path.push_back(node);
+        }
+        while (!previous_path.empty() && !next_path.empty()
+            && previous_path.back() == next_path.back()) {
+            previous_path.pop_back();
+            next_path.pop_back();
+        }
+        std::vector<dom_node*> changed = std::move(previous_path);
+        changed.insert(changed.end(), next_path.begin(), next_path.end());
+
+        struct invalidation_request final
+        {
+            dom_node* root{nullptr};
+            bool subtree{false};
+        };
+        std::vector<invalidation_request> requests;
+        const auto add_request = [&](dom_node* root, bool subtree) {
+            if (root == nullptr || !is_connected(*root)) return;
+            for (auto& existing : requests) {
+                if (existing.root != root) continue;
+                existing.subtree = existing.subtree || subtree;
+                return;
+            }
+            if (std::any_of(
+                    requests.begin(),
+                    requests.end(),
+                    [root](const invalidation_request& existing) {
+                        return existing.subtree
+                            && subtree_contains(*existing.root, root);
+                    })) {
+                return;
+            }
+            if (subtree) {
+                std::erase_if(
+                    requests,
+                    [root](const invalidation_request& existing) {
+                        return subtree_contains(*root, existing.root);
+                    });
+            }
+            requests.push_back({root, subtree});
+        };
+
+        for (auto* changed_node : changed) {
+            if (changed_node == nullptr) continue;
+            for (const auto& dependency : hover_selector_dependencies) {
+                if (dependency.trigger_compound != "*"
+                    && !css_compound_selector_matches(
+                        *changed_node,
+                        dependency.trigger_compound)) {
+                    continue;
+                }
+                switch (dependency.scope) {
+                case hover_invalidation_scope::subject:
+                    add_request(changed_node, false);
+                    break;
+                case hover_invalidation_scope::subtree:
+                    add_request(changed_node, true);
+                    break;
+                case hover_invalidation_scope::siblings:
+                    add_request(
+                        changed_node->parent == nullptr
+                            ? changed_node
+                            : changed_node->parent,
+                        true);
+                    break;
+                }
+            }
+        }
+
+        const auto trace = profile_css;
+        const auto started = trace
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
+        size_t recalculated_nodes = 0U;
+        for (const auto& request : requests) {
+            if (request.root == nullptr) continue;
+            if (request.subtree) {
+                if (trace) {
+                    visit_subtree(*request.root, [&](const dom_node&) {
+                        ++recalculated_nodes;
+                    });
+                }
+                recascade_connected_subtree(*request.root, reason);
+            } else {
+                if (trace) ++recalculated_nodes;
+                apply_css_rules(*request.root);
+            }
+        }
+        if (trace) {
+            const auto elapsed = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+            std::cerr << "[Native Engine Probe] CSS hover invalidation "
+                << std::fixed << std::setprecision(3) << elapsed
+                << " ms, changed=" << changed.size()
+                << ", dependencies=" << hover_selector_dependencies.size()
+                << ", roots=" << requests.size()
+                << ", nodes=" << recalculated_nodes
+                << ", reason=" << reason << '\n';
+        }
+    }
+
+    void rebuild_css_rule_indexes_and_root_variables()
+    {
+        css_rules_by_class.clear();
+        css_rules_by_id.clear();
+        css_rules_by_tag.clear();
+        css_rules_by_attribute.clear();
+        css_focus_rules.clear();
+        unindexed_css_rules.clear();
+        css_attribute_dependencies.clear();
+        css_variables.clear();
+        important_css_variables.clear();
+        for (size_t index = 0; index < css_rules.size(); ++index) {
+            index_css_rule(index);
+            const auto& rule = css_rules[index];
+            if (!rule.media_matches
+                || (rule.selector != ":root" && rule.selector != "html")) continue;
+            for (const auto& declaration : rule.declarations) {
+                if (!declaration.name.starts_with("--")) continue;
+                if (!declaration.important
+                    && important_css_variables.contains(declaration.name)) continue;
+                css_variables[declaration.name] = declaration.value;
+                if (declaration.important) important_css_variables.insert(declaration.name);
+                else important_css_variables.erase(declaration.name);
+            }
+        }
+    }
+
+    void recascade_after_stylesheet_change()
+    {
+        apply_css_rules_subtree(active_root());
+        document.mark_dirty();
+    }
+
+    bool deactivate_connected_stylesheets(dom_node& root, bool recascade = true)
+    {
+        std::unordered_set<uint32_t> owners;
+        visit_subtree(root, [&](const dom_node& node) {
+            if (node.tag == "style") owners.insert(node.id);
+        });
+        if (owners.empty()) return false;
+        const auto previous_size = css_rules.size();
+        std::erase_if(css_rules, [&](const css_rule& rule) {
+            return rule.stylesheet_owner_id != 0
+                && owners.contains(rule.stylesheet_owner_id);
+        });
+        if (css_rules.size() == previous_size) return false;
+        rebuild_css_rule_indexes_and_root_variables();
+        if (recascade) recascade_after_stylesheet_change();
+        return true;
+    }
+
     void activate_connected_stylesheet(dom_node& node)
     {
-        if (node.tag != "style" || !is_connected(node)) return;
-        std::string stylesheet;
-        append_node_text(node, stylesheet);
-        if (stylesheet.empty()) return;
-
-        const auto first_new_rule = add_stylesheet(std::move(stylesheet));
-        for (auto* existing : document.query_selector_all(document.body(), "*")) {
-            apply_appended_css_rules(*existing, first_new_rule);
+        std::vector<dom_node*> styles;
+        for (auto* ancestor = &node; ancestor != nullptr; ancestor = ancestor->parent) {
+            if (ancestor->tag != "style") continue;
+            styles.push_back(ancestor);
+            break;
         }
+        if (styles.empty()) {
+            visit_subtree(node, [&](dom_node& candidate) {
+                if (candidate.tag == "style") styles.push_back(&candidate);
+            });
+        }
+        std::erase_if(styles, [&](const dom_node* style) {
+            return style == nullptr || !is_connected(*style);
+        });
+        if (styles.empty()) return;
+
+        for (auto* style : styles) deactivate_connected_stylesheets(*style, false);
+        const auto& base = in_frame_context() ? frame_base_address : document_base_address;
+        for (auto* style : styles) {
+            std::string stylesheet;
+            append_node_text(*style, stylesheet);
+            if (!stylesheet.empty()) {
+                add_stylesheet(std::move(stylesheet), base, style->id);
+            }
+        }
+        recascade_after_stylesheet_change();
     }
 
     static std::vector<std::string> parse_frame_stylesheets(const std::string& html)
@@ -7259,6 +17902,263 @@ struct v8_dom_runtime::implementation final {
         if (compilation_cache_directory.empty()) return {};
         return std::filesystem::path(compilation_cache_directory)
             / (to_hex(key) + ".v8cache");
+    }
+
+    std::filesystem::path resource_cache_path(const std::array<uint8_t, 32>& key) const
+    {
+        if (compilation_cache_directory.empty()) return {};
+        return std::filesystem::path(compilation_cache_directory)
+            / "resources"
+            / (to_hex(key) + ".htmlmlresource");
+    }
+
+    static bool read_process_resource_cache(
+        const std::filesystem::path& path,
+        cached_text_resource& resource)
+    {
+        const auto memory_key = path.generic_string();
+        std::lock_guard lock(process_resource_cache_mutex);
+        const auto known = process_resource_cache.find(memory_key);
+        if (known == process_resource_cache.end()) return false;
+        known->second.access = ++process_resource_cache_access;
+        resource = known->second.resource;
+        return true;
+    }
+
+    static void remember_process_resource_cache(
+        const std::filesystem::path& path,
+        cached_text_resource resource)
+    {
+        const auto memory_key = path.generic_string();
+        const auto bytes = resource.content.size() + resource.entity_tag.size();
+        if (memory_key.empty() || bytes > maximum_process_resource_cache_bytes) return;
+        std::lock_guard lock(process_resource_cache_mutex);
+        if (const auto known = process_resource_cache.find(memory_key);
+            known != process_resource_cache.end()) {
+            process_resource_cache_bytes -= known->second.bytes;
+            process_resource_cache.erase(known);
+        }
+        process_resource_cache_bytes += bytes;
+        process_resource_cache.emplace(
+            memory_key,
+            process_resource_cache_entry{
+                std::move(resource),
+                bytes,
+                ++process_resource_cache_access});
+        while (process_resource_cache.size() > maximum_process_resource_cache_entries
+            || process_resource_cache_bytes > maximum_process_resource_cache_bytes) {
+            const auto oldest = std::min_element(
+                process_resource_cache.begin(),
+                process_resource_cache.end(),
+                [](const auto& left, const auto& right) {
+                    return left.second.access < right.second.access;
+                });
+            if (oldest == process_resource_cache.end()) break;
+            process_resource_cache_bytes -= oldest->second.bytes;
+            process_resource_cache.erase(oldest);
+        }
+    }
+
+    static void forget_process_resource_cache(const std::filesystem::path& path)
+    {
+        const auto memory_key = path.generic_string();
+        std::lock_guard lock(process_resource_cache_mutex);
+        const auto known = process_resource_cache.find(memory_key);
+        if (known == process_resource_cache.end()) return;
+        process_resource_cache_bytes -= known->second.bytes;
+        process_resource_cache.erase(known);
+    }
+
+    bool read_resource_cache(
+        const std::array<uint8_t, 32>& key,
+        uint32_t kind,
+        cached_text_resource& resource)
+    {
+        const auto path = resource_cache_path(key);
+        if (path.empty()) return false;
+        if (read_process_resource_cache(path, resource)) {
+            ++resource_cache_memory_hit_count;
+            return true;
+        }
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream) return false;
+
+        constexpr std::array<char, 8> magic{'H', 'M', 'L', 'R', 'E', 'S', '0', '1'};
+        std::array<char, 8> stored_magic{};
+        uint32_t schema = 0U;
+        uint32_t stored_kind = 0U;
+        std::array<uint8_t, 32> stored_key{};
+        std::array<uint8_t, 32> stored_content_hash{};
+        uint32_t entity_tag_length = 0U;
+        int64_t last_modified_unix_seconds = 0;
+        int64_t fresh_until_unix_seconds = 0;
+        uint64_t content_length = 0U;
+        stream.read(stored_magic.data(), static_cast<std::streamsize>(stored_magic.size()));
+        stream.read(reinterpret_cast<char*>(&schema), sizeof(schema));
+        stream.read(reinterpret_cast<char*>(&stored_kind), sizeof(stored_kind));
+        stream.read(reinterpret_cast<char*>(stored_key.data()), static_cast<std::streamsize>(stored_key.size()));
+        stream.read(reinterpret_cast<char*>(stored_content_hash.data()), static_cast<std::streamsize>(stored_content_hash.size()));
+        stream.read(reinterpret_cast<char*>(&entity_tag_length), sizeof(entity_tag_length));
+        stream.read(reinterpret_cast<char*>(&last_modified_unix_seconds), sizeof(last_modified_unix_seconds));
+        stream.read(reinterpret_cast<char*>(&fresh_until_unix_seconds), sizeof(fresh_until_unix_seconds));
+        stream.read(reinterpret_cast<char*>(&content_length), sizeof(content_length));
+        if (!stream || stored_magic != magic || schema != 3U || stored_kind != kind
+            || stored_key != key || entity_tag_length > maximum_resource_entity_tag_bytes
+            || content_length > maximum_resource_cache_entry_bytes) {
+            ++resource_cache_rejection_count;
+            std::error_code error;
+            std::filesystem::remove(path, error);
+            return false;
+        }
+        resource.entity_tag.resize(entity_tag_length);
+        if (!resource.entity_tag.empty()) {
+            stream.read(resource.entity_tag.data(), static_cast<std::streamsize>(resource.entity_tag.size()));
+        }
+        resource.content.resize(static_cast<size_t>(content_length));
+        if (!resource.content.empty()) {
+            stream.read(resource.content.data(), static_cast<std::streamsize>(resource.content.size()));
+        }
+        if (!stream || stream.peek() != std::ifstream::traits_type::eof()
+            || sha256(
+                reinterpret_cast<const uint8_t*>(resource.content.data()),
+                resource.content.size())
+                != stored_content_hash) {
+            resource = {};
+            ++resource_cache_rejection_count;
+            std::error_code error;
+            std::filesystem::remove(path, error);
+            return false;
+        }
+        resource.last_modified_unix_seconds = last_modified_unix_seconds;
+        resource.fresh_until_unix_seconds = fresh_until_unix_seconds;
+        std::error_code access_error;
+        std::filesystem::last_write_time(
+            path,
+            std::filesystem::file_time_type::clock::now(),
+            access_error);
+        remember_process_resource_cache(path, resource);
+        return true;
+    }
+
+    void write_resource_cache(
+        const std::array<uint8_t, 32>& key,
+        uint32_t kind,
+        const std::string& content,
+        const std::string& entity_tag,
+        int64_t last_modified_unix_seconds,
+        int64_t fresh_until_unix_seconds)
+    {
+        const auto path = resource_cache_path(key);
+        if (path.empty() || content.size() > maximum_resource_cache_entry_bytes) return;
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        if (error) return;
+
+        static std::atomic<uint64_t> temporary_sequence{0};
+        const auto temporary = path.string()
+            + "." + std::to_string(current_process_id())
+            + "." + std::to_string(temporary_sequence.fetch_add(1, std::memory_order_relaxed))
+            + ".tmp";
+        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+        if (!stream) return;
+        constexpr std::array<char, 8> magic{'H', 'M', 'L', 'R', 'E', 'S', '0', '1'};
+        constexpr uint32_t schema = 3U;
+        const auto content_hash = sha256(
+            reinterpret_cast<const uint8_t*>(content.data()),
+            content.size());
+        const auto content_length = static_cast<uint64_t>(content.size());
+        const auto entity_tag_length = static_cast<uint32_t>(std::min(
+            entity_tag.size(),
+            static_cast<size_t>(maximum_resource_entity_tag_bytes)));
+        stream.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+        stream.write(reinterpret_cast<const char*>(&schema), sizeof(schema));
+        stream.write(reinterpret_cast<const char*>(&kind), sizeof(kind));
+        stream.write(reinterpret_cast<const char*>(key.data()), static_cast<std::streamsize>(key.size()));
+        stream.write(reinterpret_cast<const char*>(content_hash.data()), static_cast<std::streamsize>(content_hash.size()));
+        stream.write(reinterpret_cast<const char*>(&entity_tag_length), sizeof(entity_tag_length));
+        stream.write(
+            reinterpret_cast<const char*>(&last_modified_unix_seconds),
+            sizeof(last_modified_unix_seconds));
+        stream.write(
+            reinterpret_cast<const char*>(&fresh_until_unix_seconds),
+            sizeof(fresh_until_unix_seconds));
+        stream.write(reinterpret_cast<const char*>(&content_length), sizeof(content_length));
+        if (entity_tag_length > 0U) {
+            stream.write(entity_tag.data(), static_cast<std::streamsize>(entity_tag_length));
+        }
+        if (!content.empty()) stream.write(content.data(), static_cast<std::streamsize>(content.size()));
+        stream.close();
+        if (!stream) {
+            std::filesystem::remove(temporary, error);
+            return;
+        }
+        std::filesystem::rename(temporary, path, error);
+        if (error) {
+            std::filesystem::remove(temporary, error);
+            return;
+        }
+        remember_process_resource_cache(
+            path,
+            cached_text_resource{
+                content,
+                entity_tag.substr(0U, entity_tag_length),
+                last_modified_unix_seconds,
+                fresh_until_unix_seconds});
+        resource_cache_bytes_written_count += content.size();
+        if (++resource_writes_since_prune >= 64U) {
+            resource_writes_since_prune = 0U;
+            prune_resource_cache();
+        }
+    }
+
+    void remove_resource_cache(const std::array<uint8_t, 32>& key)
+    {
+        const auto path = resource_cache_path(key);
+        if (path.empty()) return;
+        forget_process_resource_cache(path);
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+
+    void prune_resource_cache()
+    {
+        const auto directory = std::filesystem::path(compilation_cache_directory) / "resources";
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error)) return;
+        struct cache_file final {
+            std::filesystem::path path;
+            std::filesystem::file_time_type last_write;
+            uint64_t size;
+        };
+        std::vector<cache_file> files;
+        uint64_t total_bytes = 0U;
+        std::filesystem::directory_iterator iterator(directory, error);
+        const std::filesystem::directory_iterator end;
+        while (!error && iterator != end) {
+            const auto path = iterator->path();
+            iterator.increment(error);
+            if (path.extension() != ".htmlmlresource") continue;
+            std::error_code metadata_error;
+            const auto size = std::filesystem::file_size(path, metadata_error);
+            if (metadata_error) continue;
+            const auto last_write = std::filesystem::last_write_time(path, metadata_error);
+            if (metadata_error) continue;
+            files.push_back({path, last_write, size});
+            total_bytes += size;
+        }
+        std::sort(files.begin(), files.end(), [](const cache_file& left, const cache_file& right) {
+            return left.last_write < right.last_write;
+        });
+        size_t first_retained = 0U;
+        while (first_retained < files.size()
+            && (files.size() - first_retained > maximum_resource_cache_entries
+                || total_bytes > maximum_resource_cache_bytes)) {
+            std::error_code remove_error;
+            if (std::filesystem::remove(files[first_retained].path, remove_error)) {
+                total_bytes -= files[first_retained].size;
+            }
+            ++first_retained;
+        }
     }
 
     void prune_persistent_compilation_cache()
@@ -7406,11 +18306,13 @@ struct v8_dom_runtime::implementation final {
 
     void retain_compiled_script(
         const std::string& key,
+        const std::array<uint8_t, 32>& key_digest,
         v8::Local<v8::UnboundScript> script,
         size_t source_bytes)
     {
         compilation_cache_entry entry;
         entry.script.Reset(isolate, script);
+        entry.key_digest = key_digest;
         entry.source_bytes = source_bytes;
         compilation_cache_bytes += source_bytes;
         compilation_cache.emplace(key, std::move(entry));
@@ -7493,7 +18395,7 @@ struct v8_dom_runtime::implementation final {
                 if (generated) write_compilation_cache(key_digest, *generated);
             }
         }
-        retain_compiled_script(key, unbound, source.size());
+        retain_compiled_script(key, key_digest, unbound, source.size());
         script = unbound->BindToCurrentContext();
         return true;
     }
@@ -7506,6 +18408,9 @@ struct v8_dom_runtime::implementation final {
         bool checkpoint_microtasks = true)
     {
         binding_callback_timer timer(profile_startup ? &startup_script_execute : nullptr);
+        const auto profile_started = profile_startup
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         v8::Context::Scope context_scope(local_context);
         v8::TryCatch try_catch(isolate);
         v8::Local<v8::Script> script;
@@ -7515,6 +18420,13 @@ struct v8_dom_runtime::implementation final {
             return false;
         }
         if (checkpoint_microtasks) isolate->PerformMicrotaskCheckpoint();
+        if (profile_startup) {
+            auto& stats = startup_script_profiles[resource_leaf_name(document_name)];
+            ++stats.calls;
+            stats.nanoseconds += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - profile_started).count());
+        }
         return true;
     }
 
@@ -7533,7 +18445,7 @@ struct v8_dom_runtime::implementation final {
         auto frame_document_value = document_template.Get(isolate)->NewInstance(local_context).ToLocalChecked();
         frame_document_value->SetAlignedPointerInInternalField(
             0,
-            this,
+            &frame_body,
             v8::kEmbedderDataTypeTagDefault);
         frame_document_value->Set(
             local_context,
@@ -7543,19 +18455,34 @@ struct v8_dom_runtime::implementation final {
             local_context,
             js_string(isolate, "currentScript"),
             v8::Null(isolate)).Check();
+        frame_document_value->Set(
+            local_context,
+            js_string(isolate, "oninput"),
+            v8::Null(isolate)).Check();
 
         global->Set(local_context, js_string(isolate, "window"), global).Check();
         global->Set(local_context, js_string(isolate, "self"), global).Check();
         global->Set(local_context, js_string(isolate, "document"), frame_document_value).Check();
+        auto& frame_storage = frame_session_storage.try_emplace(
+            frame.id,
+            std::make_unique<session_storage_state>()).first->second;
+        global->Set(
+            local_context,
+            js_string(isolate, "sessionStorage"),
+            create_session_storage(local_context, *frame_storage)).Check();
         actual_frame_windows[frame.id].Reset(isolate, global);
         actual_frame_documents[frame.id].Reset(isolate, frame_document_value);
         global->Set(local_context, js_string(isolate, "name"), js_string(isolate, frame.attributes["name"].c_str())).Check();
         global->Set(local_context, js_string(isolate, "parent"), context.Get(isolate)->Global()).Check();
         global->Set(local_context, js_string(isolate, "top"), context.Get(isolate)->Global()).Check();
         global->Set(local_context, js_string(isolate, "frameElement"), wrap_node(frame)).Check();
-        global->Set(local_context, js_string(isolate, "devicePixelRatio"), v8::Number::New(isolate, 1)).Check();
+        global->SetNativeDataProperty(
+            local_context,
+            js_string(isolate, "devicePixelRatio"),
+            get_device_pixel_ratio).Check();
         global->SetNativeDataProperty(local_context, js_string(isolate, "innerWidth"), get_inner_width).Check();
         global->SetNativeDataProperty(local_context, js_string(isolate, "innerHeight"), get_inner_height).Check();
+        install_screen(local_context, global);
         global->Set(local_context, js_string(isolate, "setTimeout"), v8::Function::New(local_context, set_timeout).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "clearTimeout"), v8::Function::New(local_context, clear_timeout).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "setInterval"), v8::Function::New(local_context, set_interval).ToLocalChecked()).Check();
@@ -7567,18 +18494,50 @@ struct v8_dom_runtime::implementation final {
         global->Set(local_context, js_string(isolate, "removeEventListener"), v8::Function::New(local_context, remove_event_listener).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "dispatchEvent"), v8::Function::New(local_context, dispatch_event).ToLocalChecked()).Check();
         auto event_template = v8::FunctionTemplate::New(isolate, event_constructor);
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "preventDefault"),
+            v8::FunctionTemplate::New(isolate, event_prevent_default));
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "stopPropagation"),
+            v8::FunctionTemplate::New(isolate, event_stop_propagation));
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "stopImmediatePropagation"),
+            v8::FunctionTemplate::New(isolate, event_stop_immediate_propagation));
+        event_template->PrototypeTemplate()->Set(
+            js_string(isolate, "composedPath"),
+            v8::FunctionTemplate::New(isolate, event_composed_path));
         global->Set(local_context, js_string(isolate, "Event"), event_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "CustomEvent"), event_template->GetFunction(local_context).ToLocalChecked()).Check();
-        auto observer_template = v8::FunctionTemplate::New(isolate, observer_constructor);
-        global->Set(local_context, js_string(isolate, "MutationObserver"), observer_template->GetFunction(local_context).ToLocalChecked()).Check();
+        auto mouse_event_template = v8::FunctionTemplate::New(isolate, mouse_event_constructor);
+        mouse_event_template->Inherit(event_template);
+        auto css = v8::Object::New(isolate);
+        css->Set(
+            local_context,
+            js_string(isolate, "escape"),
+            v8::Function::New(local_context, css_escape, {}, 1).ToLocalChecked()).Check();
+        css->Set(
+            local_context,
+            js_string(isolate, "supports"),
+            v8::Function::New(local_context, css_supports).ToLocalChecked()).Check();
+        global->Set(local_context, js_string(isolate, "CSS"), css).Check();
+        auto mutation_observer_template = v8::FunctionTemplate::New(
+            isolate,
+            observer_constructor,
+            js_string(isolate, "MutationObserver.constructor"));
+        global->Set(local_context, js_string(isolate, "MutationObserver"), mutation_observer_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(
             local_context,
             js_string(isolate, "ResizeObserver"),
             v8::FunctionTemplate::New(isolate, resize_observer_constructor)
                 ->GetFunction(local_context).ToLocalChecked()).Check();
-        global->Set(local_context, js_string(isolate, "IntersectionObserver"), observer_template->GetFunction(local_context).ToLocalChecked()).Check();
+        auto intersection_observer_template = v8::FunctionTemplate::New(
+            isolate,
+            observer_constructor,
+            js_string(isolate, "IntersectionObserver.constructor"));
+        global->Set(local_context, js_string(isolate, "IntersectionObserver"), intersection_observer_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "AbortController"), v8::FunctionTemplate::New(isolate, abort_controller_constructor)->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "matchMedia"), v8::Function::New(local_context, match_media).ToLocalChecked()).Check();
+        global->Set(local_context, js_string(isolate, "open"), v8::Function::New(local_context, window_open).ToLocalChecked()).Check();
         auto element_constructor = element_template.Get(isolate)->GetFunction(local_context).ToLocalChecked();
         element_constructor->Set(
             local_context,
@@ -7597,17 +18556,20 @@ struct v8_dom_runtime::implementation final {
         global->Set(local_context, js_string(isolate, "HTMLImageElement"), element_constructor).Check();
         global->Set(local_context, js_string(isolate, "HTMLInputElement"), element_constructor).Check();
         global->Set(local_context, js_string(isolate, "SVGElement"), element_constructor).Check();
-        global->Set(local_context, js_string(isolate, "Document"), element_constructor).Check();
+        install_document_constructor(
+            local_context,
+            global,
+            frame_document_value);
         global->Set(local_context, js_string(isolate, "DocumentFragment"), element_constructor).Check();
         global->Set(local_context, js_string(isolate, "Window"), element_constructor).Check();
         global->Set(local_context, js_string(isolate, "KeyboardEvent"),
             event_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "MouseEvent"),
-            event_template->GetFunction(local_context).ToLocalChecked()).Check();
+            mouse_event_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "PointerEvent"),
-            event_template->GetFunction(local_context).ToLocalChecked()).Check();
+            mouse_event_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "WheelEvent"),
-            event_template->GetFunction(local_context).ToLocalChecked()).Check();
+            mouse_event_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "FocusEvent"),
             event_template->GetFunction(local_context).ToLocalChecked()).Check();
         global->Set(local_context, js_string(isolate, "InputEvent"),
@@ -7636,23 +18598,26 @@ struct v8_dom_runtime::implementation final {
         global->Set(local_context, js_string(isolate, "Image"),
             v8::FunctionTemplate::New(isolate, image_constructor)
                 ->GetFunction(local_context).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "__htmlMlCreateObjectUrl"),
+            v8::Function::New(local_context, create_object_url).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "__htmlMlResolveUrl"),
+            v8::Function::New(local_context, resolve_url).ToLocalChecked()).Check();
+        global->Set(
+            local_context,
+            js_string(isolate, "__htmlMlRecordWebApi"),
+            v8::Function::New(local_context, record_web_api_use).ToLocalChecked()).Check();
 
-        const auto frame_path = std::string("/")
-            + resource_root.filename().generic_string() + '/';
-        const auto frame_href = std::string("http://127.0.0.1") + frame_path;
-        auto location = v8::Object::New(isolate);
-        location->Set(local_context, js_string(isolate, "href"), js_string(isolate, frame_href.c_str())).Check();
-        location->Set(local_context, js_string(isolate, "protocol"), js_string(isolate, "http:")).Check();
-        location->Set(local_context, js_string(isolate, "host"), js_string(isolate, "127.0.0.1")).Check();
-        location->Set(local_context, js_string(isolate, "pathname"), js_string(isolate, frame_path.c_str())).Check();
-        location->Set(local_context, js_string(isolate, "search"), js_string(isolate, "")).Check();
-        location->Set(local_context, js_string(isolate, "hash"), js_string(isolate, "")).Check();
-        global->Set(local_context, js_string(isolate, "location"), location).Check();
+        const auto frame_href = !frame_base_address.empty()
+            ? frame_base_address
+            : std::string("http://127.0.0.1/")
+                + resource_root.filename().generic_string() + '/';
+        set_context_location(local_context, global, frame_href);
 
-        auto navigator = v8::Object::New(isolate);
-        navigator->Set(local_context, js_string(isolate, "userAgent"), js_string(isolate, "HtmlML.Native/V8")).Check();
-        navigator->Set(local_context, js_string(isolate, "language"), js_string(isolate, "en-US")).Check();
-        global->Set(local_context, js_string(isolate, "navigator"), navigator).Check();
+        install_navigator(isolate, local_context, global);
 
         auto console = v8::Object::New(isolate);
         console->Set(local_context, js_string(isolate, "log"),
@@ -7693,6 +18658,9 @@ struct v8_dom_runtime::implementation final {
                   this._closed = false;
                 }
                 postMessage(data) {
+                  __htmlMlRecordWebApi(
+                    'MessagePort.postMessage', 'partially-supported',
+                    'same-realm queued delivery without structured clone or transferable objects');
                   const target = this._peer;
                   if (this._closed || target === null || target._closed) return;
                   setTimeout(() => {
@@ -7725,11 +18693,67 @@ struct v8_dom_runtime::implementation final {
               }
               class MessageChannel {
                 constructor() {
+                  __htmlMlRecordWebApi(
+                    'MessageChannel.constructor', 'partially-supported',
+                    'same-realm paired ports without transferable-object semantics');
                   this.port1 = new MessagePort();
                   this.port2 = new MessagePort();
                   this.port1._peer = this.port2;
                   this.port2._peer = this.port1;
                 }
+              }
+              class HtmlMLBlob {
+                constructor(parts = []) {
+                  __htmlMlRecordWebApi(
+                    'Blob.constructor', 'partially-supported',
+                    'text serialization without MIME type, byte preservation, slicing, or streaming');
+                  this._text = Array.from(parts, String).join('');
+                }
+                toString() { return this._text; }
+              }
+              class HtmlMLURLSearchParams {
+                constructor(owner = null) {
+                  this._owner = owner;
+                  this._pairs = [];
+                }
+                append(name, value) {
+                  __htmlMlRecordWebApi(
+                    'URLSearchParams.append', 'partially-supported',
+                    'ordered append and URL serialization without the complete mutation/query surface');
+                  this._pairs.push([String(name), String(value)]);
+                  if (!this._owner) return;
+                  const serialized = `${encodeURIComponent(String(name))}=${encodeURIComponent(String(value))}`;
+                  this._owner.search += (this._owner.search ? '&' : '?') + serialized;
+                  this._owner.href = this._owner.origin + this._owner.pathname
+                    + this._owner.search + this._owner.hash;
+                }
+                toString() {
+                  return this._pairs.map(([name, value]) =>
+                    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join('&');
+                }
+              }
+              class HtmlMLURL {
+                constructor(value, base = globalThis.location?.href || '') {
+                  __htmlMlRecordWebApi(
+                    'URL.constructor', 'partially-supported',
+                    'hierarchical URL resolution and common components without the complete URL parser');
+                  this.href = __htmlMlResolveUrl(String(value), String(base));
+                  const match = /^(?:([a-z][a-z0-9+.-]*:))?(?:\/\/([^/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(this.href) || [];
+                  this.protocol = match[1] || '';
+                  this.host = match[2] || '';
+                  const separator = this.host.lastIndexOf(':');
+                  this.hostname = separator > 0 ? this.host.slice(0, separator) : this.host;
+                  this.port = separator > 0 ? this.host.slice(separator + 1) : '';
+                  this.pathname = match[3] || '';
+                  this.search = match[4] || '';
+                  this.hash = match[5] || '';
+                  this.origin = this.protocol && this.host ? `${this.protocol}//${this.host}` : 'null';
+                  this.searchParams = new HtmlMLURLSearchParams(this);
+                }
+                toString() { return this.href; }
+                toJSON() { return this.href; }
+                static createObjectURL(blob) { return __htmlMlCreateObjectUrl(String(blob)); }
+                static revokeObjectURL() {}
               }
               class HtmlMLDOMException extends Error {
                 constructor(message = '', name = 'Error') {
@@ -7803,7 +18827,12 @@ struct v8_dom_runtime::implementation final {
                 }
               }
               class HtmlMLAbortController {
-                constructor() { this.signal = new HtmlMLAbortSignal(); }
+                constructor() {
+                  __htmlMlRecordWebApi(
+                    'AbortController.constructor', 'partially-supported',
+                    'abort state and listener delivery without static AbortSignal composition helpers');
+                  this.signal = new HtmlMLAbortSignal();
+                }
                 abort(reason) { this.signal._abort(reason); }
               }
               Object.defineProperties(globalThis, {
@@ -7812,10 +18841,21 @@ struct v8_dom_runtime::implementation final {
                 DOMException: { value: HtmlMLDOMException, configurable: true },
                 AbortSignal: { value: HtmlMLAbortSignal, configurable: true },
                 AbortController: { value: HtmlMLAbortController, configurable: true },
+                Blob: { value: HtmlMLBlob, configurable: true },
+                URL: { value: HtmlMLURL, configurable: true },
+                URLSearchParams: { value: HtmlMLURLSearchParams, configurable: true },
                 CSS: {
                   value: {
-                    supports() { return false; },
+                    supports() {
+                      __htmlMlRecordWebApi(
+                        'CSS.supports', 'unsupported',
+                        'capability conditions are reported false without property/value evaluation');
+                      return false;
+                    },
                     escape(value) {
+                      __htmlMlRecordWebApi(
+                        'CSS.escape', 'partially-supported',
+                        'ASCII identifier escaping without the complete CSSOM serialization algorithm');
                       return String(value).replace(/[^a-zA-Z0-9_-]/g, character => `\\${character}`);
                     }
                   },
@@ -7824,6 +18864,9 @@ struct v8_dom_runtime::implementation final {
                 crypto: {
                   value: {
                     getRandomValues(array) {
+                      __htmlMlRecordWebApi(
+                        'Crypto.getRandomValues', 'partially-supported',
+                        'integer TypedArray filling without a cryptographic entropy guarantee');
                       if (!ArrayBuffer.isView(array) || array instanceof DataView) {
                         throw new TypeError('Expected an integer TypedArray');
                       }
@@ -7842,6 +18885,7 @@ struct v8_dom_runtime::implementation final {
             local_context,
             js_string(isolate, std::string(message_channel_source).c_str())).ToLocalChecked();
         message_channel_script->Run(local_context).ToLocalChecked();
+        install_intersection_observer_polyfill(local_context);
         static_cast<void>(frame_body);
     }
 
@@ -7861,30 +18905,6 @@ struct v8_dom_runtime::implementation final {
             ++frame_script_error_count;
             return false;
         }
-        if (resource_root.empty()) {
-            frame_last_error_value = "The connected component resource root was not configured";
-            ++frame_script_error_count;
-            return false;
-        }
-
-        css_rules.clear();
-        css_rules_by_class.clear();
-        css_rules_by_id.clear();
-        css_rules_by_tag.clear();
-        unindexed_css_rules.clear();
-        css_variables.clear();
-        for (const auto& href : parse_frame_stylesheets(html)) {
-            std::string stylesheet;
-            const auto path = resolve_resource_path(href);
-            if (path.empty()) continue;
-            if (!profiled_read_text_file(path, stylesheet)) {
-                frame_last_error_value = "Unable to load iframe stylesheet: " + path.string();
-                ++frame_script_error_count;
-                return false;
-            }
-            add_stylesheet(std::move(stylesheet));
-        }
-
         const auto opening_tag = [&](std::string_view name) {
             const auto open = html.find("<" + std::string(name));
             const auto close = open == std::string::npos ? std::string::npos : html.find('>', open);
@@ -7892,16 +18912,87 @@ struct v8_dom_runtime::implementation final {
                 ? std::string{}
                 : html.substr(open, close - open + 1U);
         };
+        const auto frame_source = frame.attributes.find("src");
+        frame_base_address = frame_source != frame.attributes.end()
+            && (frame_source->second.starts_with("http://")
+                || frame_source->second.starts_with("https://"))
+            ? resolve_resource_url(frame_source->second, document_base_address)
+            : document_base_address;
+        const auto base_opening = opening_tag("base");
+        if (!base_opening.empty()) {
+            for (const auto& [name, value] : parse_html_attributes(base_opening, 5U)) {
+                if (lower_html_name(name) == "href" && !value.empty()) {
+                    frame_base_address = resolve_resource_url(value, document_base_address);
+                    break;
+                }
+            }
+        }
+        if (resource_root.empty() && !load_resource_callback) {
+            frame_last_error_value = "The connected component resource root was not configured";
+            ++frame_script_error_count;
+            return false;
+        }
+
+        const auto stylesheets = parse_frame_stylesheets(html);
+        const auto scripts = parse_frame_scripts(html);
+        for (const auto& href : stylesheets) {
+            start_resource_prefetch(href, frame_base_address, HTMLML_RESOURCE_STYLESHEET);
+        }
+        for (const auto& script : scripts) {
+            if (!script.source.empty()) {
+                start_resource_prefetch(
+                    script.source,
+                    frame_base_address,
+                    HTMLML_RESOURCE_SCRIPT);
+            }
+        }
+
+        css_rules.clear();
+        opacity_keyframes.clear();
+        css_rules_by_class.clear();
+        css_rules_by_id.clear();
+        css_rules_by_tag.clear();
+        css_rules_by_attribute.clear();
+        css_focus_rules.clear();
+        unindexed_css_rules.clear();
+        css_attribute_dependencies.clear();
+        css_variables.clear();
+        important_css_variables.clear();
+        for (const auto& href : stylesheets) {
+            std::string stylesheet;
+            std::string stylesheet_name;
+            if (!load_text_resource(
+                    href,
+                    frame_base_address,
+                    HTMLML_RESOURCE_STYLESHEET,
+                    stylesheet,
+                    stylesheet_name)) {
+                frame_last_error_value = "Unable to load iframe stylesheet: " + href;
+                ++frame_script_error_count;
+                return false;
+            }
+            add_stylesheet(std::move(stylesheet), stylesheet_name);
+        }
+
         const auto html_opening = opening_tag("html");
         const auto body_opening = opening_tag("body");
 
         auto& frame_body = document.create_element("body");
+        record_feature(
+            "html",
+            "element:body",
+            "supported",
+            {},
+            "html-element");
         // A browsing context currently uses one native layout root for the
         // browser's HTML and BODY boxes. Preserve the authored state of both
         // elements on that root so `html[data-theme=dark]`, `body.chart-page`,
         // inherited custom properties, language, and direction all cascade.
         const auto html_class = extract_html_attribute(html_opening, "class");
         const auto body_class = extract_html_attribute(body_opening, "class");
+        if (!html_class.empty() || !body_class.empty()) {
+            record_html_attribute_feature("class", "html-parser");
+        }
         frame_body.class_name = html_class;
         if (!body_class.empty()) {
             if (!frame_body.class_name.empty()) frame_body.class_name.push_back(' ');
@@ -7911,7 +19002,10 @@ struct v8_dom_runtime::implementation final {
         for (const auto* attribute : {"data-theme", "lang", "dir"}) {
             auto value = extract_html_attribute(html_opening, attribute);
             if (value.empty()) value = extract_html_attribute(body_opening, attribute);
-            if (!value.empty()) frame_body.attributes[attribute] = std::move(value);
+            if (!value.empty()) {
+                record_html_attribute_feature(attribute, "html-parser");
+                frame_body.attributes[attribute] = std::move(value);
+            }
         }
         frame_body.style.width = {100, length_unit::percent};
         frame_body.style.height = {100, length_unit::percent};
@@ -7923,6 +19017,7 @@ struct v8_dom_runtime::implementation final {
         loading.class_name = "loading-indicator";
         apply_css_rules(loading);
         document.append_child(frame_body, loading);
+        append_script_elements(frame_body, scripts);
 
         auto frame_global_template = v8::ObjectTemplate::New(isolate);
         frame_global_template->SetHandler(v8::NamedPropertyHandlerConfiguration(
@@ -7942,17 +19037,19 @@ struct v8_dom_runtime::implementation final {
         frame_context.Reset(isolate, local_frame_context);
         install_frame_globals(local_frame_context, frame, frame_body);
 
-        auto scripts = parse_frame_scripts(html);
         const auto execute_group = [&](bool defer) {
             for (const auto& script : scripts) {
                 if (script.defer != defer) continue;
                 std::string source = script.code;
                 auto name = "htmlml-frame-inline-" + std::to_string(script.index) + ".js";
                 if (!script.source.empty()) {
-                    const auto path = resolve_resource_path(script.source);
-                    name = path.string();
-                    if (path.empty() || !profiled_read_text_file(path, source)) {
-                        frame_last_error_value = "Unable to load iframe script: " + path.string();
+                    if (!load_text_resource(
+                            script.source,
+                            frame_base_address,
+                            HTMLML_RESOURCE_SCRIPT,
+                            source,
+                            name)) {
+                        frame_last_error_value = "Unable to load iframe script: " + script.source;
                         ++frame_script_error_count;
                         return false;
                     }
@@ -7962,31 +19059,7 @@ struct v8_dom_runtime::implementation final {
                     auto document_value = local_frame_context->Global()->Get(
                         local_frame_context,
                         js_string(isolate, "document")).ToLocalChecked().As<v8::Object>();
-                    auto current_script = v8::Object::New(isolate);
-                    const auto script_url = script.source.empty()
-                        ? name
-                        : std::string("http://127.0.0.1/")
-                            + resource_root.filename().generic_string() + '/' + script.source;
-                    current_script->Set(
-                        local_frame_context,
-                        js_string(isolate, "src"),
-                        js_string(isolate, script_url.c_str())).Check();
-                    current_script->Set(
-                        local_frame_context,
-                        js_string(isolate, "tagName"),
-                        js_string(isolate, "SCRIPT")).Check();
-                    current_script->Set(
-                        local_frame_context,
-                        js_string(isolate, "nonce"),
-                        js_string(isolate, "")).Check();
-                    current_script->Set(
-                        local_frame_context,
-                        js_string(isolate, "getAttribute"),
-                        v8::Function::New(local_frame_context, current_script_get_attribute).ToLocalChecked()).Check();
-                    document_value->Set(
-                        local_frame_context,
-                        js_string(isolate, "currentScript"),
-                        current_script).Check();
+                    set_current_script(local_frame_context, document_value, name);
                 }
                 std::string error;
                 if (!execute_in_context(local_frame_context, source, name, error)) {
@@ -8019,6 +19092,12 @@ struct v8_dom_runtime::implementation final {
         // that event have run.
         v8::Context::Scope lifecycle_context_scope(local_frame_context);
         const auto dispatch_lifecycle_event = [&](v8::Local<v8::Object> target, const char* type) {
+            record_feature(
+                "event",
+                std::string("type:") + type,
+                "supported",
+                {},
+                "event-dispatch");
             auto event = v8::Object::New(isolate);
             event->Set(
                 local_frame_context,
@@ -8085,7 +19164,59 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_property));
-        info.GetReturnValue().Set(js_string(info.GetIsolate(), ""));
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        std::string html;
+        for (const auto* child : node->children) {
+            if (child != nullptr) append_serialized_html(*child, html);
+        }
+        info.GetReturnValue().Set(js_string(info.GetIsolate(), html.c_str()));
+    }
+
+    static void append_escaped_html(std::string_view value, std::string& result, bool attribute)
+    {
+        for (const auto character : value) {
+            switch (character) {
+                case '&': result += "&amp;"; break;
+                case '<': result += "&lt;"; break;
+                case '>': result += "&gt;"; break;
+                case '"': result += attribute ? "&quot;" : "\""; break;
+                default: result.push_back(character); break;
+            }
+        }
+    }
+
+    static void append_serialized_html(const dom_node& node, std::string& result)
+    {
+        if (node.tag == "#text") {
+            append_escaped_html(node.text_content, result, false);
+            return;
+        }
+        if (node.tag.empty() || node.tag.front() == '#') return;
+        result.push_back('<');
+        result += node.tag;
+        for (const auto& [name, value] : node.attributes) {
+            if (name == "namespace" || name == "object-html") continue;
+            result.push_back(' ');
+            result += name;
+            result += "=\"";
+            append_escaped_html(value, result, true);
+            result.push_back('"');
+        }
+        result.push_back('>');
+        const auto void_element = node.tag == "area" || node.tag == "base" || node.tag == "br"
+            || node.tag == "col" || node.tag == "embed" || node.tag == "hr"
+            || node.tag == "img" || node.tag == "input" || node.tag == "link"
+            || node.tag == "meta" || node.tag == "param" || node.tag == "source"
+            || node.tag == "track" || node.tag == "wbr";
+        if (void_element) return;
+        if (!node.text_content.empty()) append_escaped_html(node.text_content, result, false);
+        for (const auto* child : node.children) {
+            if (child != nullptr) append_serialized_html(*child, result);
+        }
+        result += "</";
+        result += node.tag;
+        result.push_back('>');
     }
 
     static std::string lower_html_name(std::string value)
@@ -8096,55 +19227,183 @@ struct v8_dom_runtime::implementation final {
         return value;
     }
 
+    void record_html_attribute_feature(std::string name, std::string source)
+    {
+        name = lower_html_name(std::move(name));
+        auto classification = std::string("supported");
+        auto semantic_slice = std::string{};
+        if (name == "role" || name.starts_with("aria-")) {
+            classification = "partially-supported";
+            semantic_slice = "retained for selectors and DOM inspection; native platform accessibility projection is not certified";
+        } else if (name == "allowfullscreen"
+            || name == "allowtransparency"
+            || name == "autocomplete"
+            || name == "draggable"
+            || name == "frameborder"
+            || name == "inputmode"
+            || name == "maxlength"
+            || name == "placeholder"
+            || name == "scope"
+            || name == "scrolling") {
+            classification = "unsupported";
+            semantic_slice = "retained as an attribute but its browser behavior is not implemented";
+        } else if (name == "type") {
+            classification = "partially-supported";
+            semantic_slice = "button and retained text-input types only";
+        } else if (name == "xmlns" || name == "version") {
+            classification = "partially-supported";
+            semantic_slice = "retained for SVG/DOM inspection; XML namespace processing is not implemented";
+        } else if (name == "clip-rule"
+            || name == "cliprule"
+            || name == "cx"
+            || name == "cy"
+            || name == "d"
+            || name == "fill"
+            || name == "fill-rule"
+            || name == "fillrule"
+            || name == "r"
+            || name == "rx"
+            || name == "stroke"
+            || name == "stroke-linecap"
+            || name == "stroke-width"
+            || name == "transform"
+            || name == "viewbox"
+            || name == "x"
+            || name == "y") {
+            classification = "partially-supported";
+            semantic_slice = "retained for the native SVG icon paint subset";
+        }
+        record_feature(
+            "html",
+            "attribute:" + name,
+            std::move(classification),
+            std::move(semantic_slice),
+            std::move(source));
+    }
+
     static std::string decode_html_text(std::string value)
     {
-        const std::pair<std::string_view, std::string_view> entities[] = {
-            {"&lt;", "<"}, {"&gt;", ">"}, {"&amp;", "&"},
-            {"&quot;", "\""}, {"&#39;", "'"}, {"&nbsp;", " "}};
-        for (const auto& [encoded, decoded] : entities) {
-            size_t cursor = 0;
-            while ((cursor = value.find(encoded, cursor)) != std::string::npos) {
-                value.replace(cursor, encoded.size(), decoded);
-                cursor += decoded.size();
+        std::string result;
+        result.reserve(value.size());
+        size_t cursor = 0;
+        while (cursor < value.size()) {
+            if (value[cursor] != '&') {
+                result.push_back(value[cursor++]);
+                continue;
             }
+            const auto semicolon = value.find(';', cursor + 1U);
+            if (semicolon == std::string::npos || semicolon - cursor > 32U) {
+                result.push_back(value[cursor++]);
+                continue;
+            }
+            const auto entity = std::string_view(value).substr(
+                cursor + 1U, semicolon - cursor - 1U);
+            uint32_t codepoint = 0U;
+            auto recognized = true;
+            if (!entity.empty() && entity.front() == '#') {
+                const auto hex = entity.size() > 1U
+                    && (entity[1] == 'x' || entity[1] == 'X');
+                const auto digits = entity.substr(hex ? 2U : 1U);
+                if (digits.empty()) {
+                    recognized = false;
+                } else {
+                    char* end = nullptr;
+                    const auto digits_copy = std::string(digits);
+                    const auto parsed = std::strtoul(
+                        digits_copy.c_str(), &end, hex ? 16 : 10);
+                    recognized = end != digits_copy.c_str() && end != nullptr && *end == '\0';
+                    codepoint = recognized ? static_cast<uint32_t>(parsed) : 0U;
+                }
+            } else if (entity == "lt") codepoint = '<';
+            else if (entity == "gt") codepoint = '>';
+            else if (entity == "amp") codepoint = '&';
+            else if (entity == "quot") codepoint = '"';
+            else if (entity == "apos") codepoint = '\'';
+            else if (entity == "nbsp") codepoint = 0x00A0U;
+            else recognized = false;
+            if (!recognized) {
+                result.append(value, cursor, semicolon - cursor + 1U);
+            } else {
+                if (codepoint == 0U || codepoint > 0x10FFFFU
+                    || (codepoint >= 0xD800U && codepoint <= 0xDFFFU)) {
+                    codepoint = 0xFFFDU;
+                }
+                append_utf8_codepoint(result, codepoint);
+            }
+            cursor = semicolon + 1U;
         }
-        return value;
+        return result;
     }
 
     static uint64_t inline_style_mask(std::string_view name)
     {
         if (name == "width") return inline_width;
         if (name == "height") return inline_height;
-        if (name == "min-width" || name == "min-height"
-            || name == "max-width" || name == "max-height") return inline_min_max_size;
+        if (name == "min-width") return inline_min_width;
+        if (name == "min-height") return inline_min_height;
+        if (name == "max-width") return inline_max_width;
+        if (name == "max-height") return inline_max_height;
         if (name == "left" || name == "inset-inline-start") return inline_left;
         if (name == "top" || name == "inset-block-start") return inline_top;
         if (name == "right" || name == "inset-inline-end") return inline_right;
         if (name == "bottom" || name == "inset-block-end") return inline_bottom;
+        if (name == "inset") {
+            return inline_left | inline_top | inline_right | inline_bottom;
+        }
         if (name == "display") return inline_display;
         if (name == "position") return inline_position;
+        if (name == "float" || name == "cssFloat") return inline_float;
+        if (name == "z-index" || name == "zIndex") return inline_z_index;
         if (name == "flex-direction") return inline_flex_direction;
-        if (name == "flex") return inline_flex_grow | inline_flex_shrink;
+        if (name == "flex") {
+            return inline_flex_grow | inline_flex_shrink | inline_flex_basis;
+        }
         if (name == "flex-grow") return inline_flex_grow;
         if (name == "flex-shrink") return inline_flex_shrink;
+        if (name == "flex-basis") return inline_flex_basis;
         if (name == "flex-wrap") return inline_flex_wrap;
         if (name == "background" || name == "background-color") return inline_background;
         if (name == "overflow" || name == "overflow-x" || name == "overflow-y") return inline_overflow;
         if (name == "visibility") return inline_visibility;
         if (name == "pointer-events") return inline_pointer_events;
         if (name == "color") return inline_color;
+        if (name == "fill") return inline_svg_fill;
+        if (name == "stroke") return inline_svg_stroke;
+        if (name == "cursor") return inline_cursor;
         if (name == "font-size") return inline_font_size;
         if (name == "font-family") return inline_font_family;
         if (name == "font-weight") return inline_font_weight;
         if (name == "line-height") return inline_line_height;
+        if (name == "letter-spacing") return inline_letter_spacing;
+        if (name == "word-spacing") return inline_word_spacing;
         if (name == "text-align") return inline_text_align;
         if (name == "white-space") return inline_white_space;
         if (name == "padding" || name.starts_with("padding-")) return inline_padding;
-        if (name == "margin" || name.starts_with("margin-")) return inline_margin;
+        const auto canonical_name = canonical_css_property_name(name);
+        if (canonical_name == "margin" || canonical_name.starts_with("margin-")) {
+            return inline_margin;
+        }
         if (name == "align-items") return inline_align_items;
         if (name == "align-self") return inline_align_self;
         if (name == "justify-content") return inline_justify_content;
+        if (name == "gap" || name == "row-gap" || name == "column-gap"
+            || name == "rowGap" || name == "columnGap") return inline_gap;
         if (name == "box-sizing") return inline_box_sizing;
+        if (name == "box-shadow" || name == "boxShadow") return inline_box_shadow;
+        if (canonical_name == "border"
+            || canonical_name == "border-width"
+            || canonical_name == "border-style"
+            || canonical_name == "border-color"
+            || (canonical_name.starts_with("border-")
+                && (canonical_name.ends_with("-width")
+                    || canonical_name.ends_with("-style")
+                    || canonical_name.ends_with("-color")))
+            || canonical_name == "border-top"
+            || canonical_name == "border-right"
+            || canonical_name == "border-bottom"
+            || canonical_name == "border-left") {
+            return inline_border;
+        }
         if (name == "border-radius"
             || name == "border-top-left-radius" || name == "border-top-right-radius"
             || name == "border-bottom-right-radius" || name == "border-bottom-left-radius"
@@ -8153,6 +19412,9 @@ struct v8_dom_runtime::implementation final {
             return inline_border_radius;
         }
         if (name == "transform") return inline_transform;
+        if (name == "transform-origin" || name == "transformOrigin") {
+            return inline_transform_origin;
+        }
         if (name == "opacity") return inline_opacity;
         return 0U;
     }
@@ -8168,6 +19430,37 @@ struct v8_dom_runtime::implementation final {
                 quote = character;
             } else if (character == '>') {
                 return cursor;
+            }
+        }
+        return std::string::npos;
+    }
+
+    static size_t raw_text_closing_tag(
+        const std::string& html,
+        size_t cursor,
+        std::string_view tag)
+    {
+        for (auto candidate = html.find("</", cursor);
+             candidate != std::string::npos;
+             candidate = html.find("</", candidate + 2U)) {
+            auto index = candidate + 2U;
+            while (index < html.size()
+                && std::isspace(static_cast<unsigned char>(html[index]))) ++index;
+            if (index + tag.size() > html.size()) continue;
+            auto matches = true;
+            for (size_t offset = 0; offset < tag.size(); ++offset) {
+                const auto character = static_cast<unsigned char>(html[index + offset]);
+                if (static_cast<char>(std::tolower(character)) != tag[offset]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (!matches) continue;
+            const auto boundary = index + tag.size();
+            if (boundary >= html.size()
+                || std::isspace(static_cast<unsigned char>(html[boundary]))
+                || html[boundary] == '>') {
+                return candidate;
             }
         }
         return std::string::npos;
@@ -8218,6 +19511,16 @@ struct v8_dom_runtime::implementation final {
         std::vector<dom_node*> stack{&parent};
         size_t cursor = 0;
         while (cursor < html.size()) {
+            if (stack.back()->tag == "script" || stack.back()->tag == "style") {
+                const auto raw_end = raw_text_closing_tag(html, cursor, stack.back()->tag);
+                const auto content_end = raw_end == std::string::npos ? html.size() : raw_end;
+                if (content_end > cursor) {
+                    stack.back()->text_content.append(html, cursor, content_end - cursor);
+                    cursor = content_end;
+                    continue;
+                }
+                if (raw_end == std::string::npos) break;
+            }
             const auto open = html.find('<', cursor);
             if (open == std::string::npos) {
                 const auto value = decode_html_text(html.substr(cursor));
@@ -8277,8 +19580,15 @@ struct v8_dom_runtime::implementation final {
                                 stylesheet += child->text_content;
                             }
                         }
-                        if (!stylesheet.empty()) add_stylesheet(std::move(stylesheet));
-                        stack.back()->text_content.clear();
+                        // A connected STYLE parsed through innerHTML must
+                        // invalidate boxes that predate it, including the
+                        // collapsed virtual HTML/BODY root. Merely appending
+                        // rules makes following siblings match but leaves root
+                        // font metrics and already-parsed siblings stale.
+                        if (!stylesheet.empty()) {
+                            stack.back()->text_content = std::move(stylesheet);
+                            activate_connected_stylesheet(*stack.back());
+                        }
                     }
                     stack.pop_back();
                     if (matched) break;
@@ -8300,6 +19610,12 @@ struct v8_dom_runtime::implementation final {
                 continue;
             }
 
+            record_feature(
+                "html",
+                "element:" + name,
+                "supported",
+                {},
+                "html-element");
             auto& node = document.create_element(name);
             const auto svg = name == "svg"
                 || stack.back()->tag == "svg"
@@ -8309,20 +19625,45 @@ struct v8_dom_runtime::implementation final {
                 std::string_view(html).substr(open, close - open + 1U),
                 name_end - open)) {
                 const auto lower_name = lower_html_name(attribute_name);
-                if (lower_name == "class") node.class_name = value;
-                else if (lower_name == "id") node.id_attribute = value;
+                record_html_attribute_feature(lower_name, "html-parser");
+                if (lower_name == "class") {
+                    node.class_name = value;
+                    node.attributes["class"] = value;
+                } else if (lower_name == "id") {
+                    node.id_attribute = value;
+                    node.attributes["id"] = value;
+                }
                 else {
-                    if (lower_name == "viewbox") attribute_name = "viewBox";
-                    node.attributes[attribute_name] = value;
+                    // HTML attribute names are ASCII case-insensitive. SVG's
+                    // canonical viewBox spelling is retained for its native
+                    // paint projection; non-ASCII code points are untouched by
+                    // lower_html_name.
+                    const auto stored_name = svg && lower_name == "viewbox"
+                        ? std::string("viewBox")
+                        : lower_name;
+                    node.attributes[stored_name] = value;
+                }
+            }
+            if (name == "input" || name == "textarea") {
+                const auto value = node.attributes.find("value");
+                if (value != node.attributes.end()) {
+                    node.form_value = value->second;
+                    node.form_value_initialized = true;
+                    node.selection_start = node.form_value.size();
+                    node.selection_end = node.form_value.size();
+                    node.selection_direction = "none";
                 }
             }
             document.append_child(*stack.back(), node);
             apply_css_rules(node);
             if (const auto style = node.attributes.find("style"); style != node.attributes.end()) {
-                for (const auto& declaration : parse_css_declarations(style->second)) {
+                for (const auto& declaration : parse_css_declarations(style->second, true)) {
+                    inventory_css_value_functions(declaration.value, "inline-style-parser");
+                    if (!store_inline_declaration(node, declaration)) continue;
                     apply_css_declaration(node, declaration);
                     node.style.inline_property_mask |= inline_style_mask(declaration.name);
                 }
+                detect_css_compositions(node);
             }
             if (name == "iframe") {
                 const auto source = node.attributes.find("src");
@@ -8345,6 +19686,12 @@ struct v8_dom_runtime::implementation final {
             if (!self_closing && !void_element) stack.push_back(&node);
             cursor = close + 1U;
         }
+        // Structural pseudo-classes are evaluated against the completed child
+        // list. During parsing, the first of several siblings temporarily also
+        // matches :last-child; without this final recascade, rules such as
+        // `.dot:not(:last-child)` remain stale even though Element.matches()
+        // observes the finished tree.
+        recascade_connected_subtree(parent);
         document.mark_dirty();
     }
 
@@ -8358,7 +19705,8 @@ struct v8_dom_runtime::implementation final {
         auto* parent = unwrap_node(info.Holder());
         if (parent == nullptr) return;
         const auto html = to_utf8(info.GetIsolate(), raw_value);
-        self->document.remove_all_children(*parent);
+        if (!self->blur_active_descendant_before_replacing_children(*parent)) return;
+        self->detach_all_children(*parent);
         if (!html.empty()) self->parse_inner_html(*parent, html);
     }
 
@@ -8400,13 +19748,19 @@ struct v8_dom_runtime::implementation final {
 
     static void frame_document_open(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
-        auto* node = unwrap_node(info.This());
-        if (node != nullptr) node->attributes["frame-html"].clear();
+        auto* self = current(info.GetIsolate());
+        auto* node = provisional_frame_owner(info.This());
+        if (node == nullptr) return;
+        node->attributes["frame-html"].clear();
+        const auto body = self->provisional_frame_bodies.find(node->id);
+        if (body != self->provisional_frame_bodies.end() && body->second != nullptr) {
+            self->detach_all_children(*body->second);
+        }
     }
 
     static void frame_document_write(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
-        auto* node = unwrap_node(info.This());
+        auto* node = provisional_frame_owner(info.This());
         if (node != nullptr && info.Length() > 0) {
             node->attributes["frame-html"] += to_utf8(info.GetIsolate(), info[0]);
         }
@@ -8415,8 +19769,23 @@ struct v8_dom_runtime::implementation final {
     static void frame_document_close(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
-        auto* node = unwrap_node(info.This());
-        if (node != nullptr) self->pending_frame_hydrations.push_back(node);
+        auto* node = provisional_frame_owner(info.This());
+        if (node == nullptr) return;
+        const auto html = node->attributes["frame-html"];
+        const auto body = self->provisional_frame_bodies.find(node->id);
+        if (body != self->provisional_frame_bodies.end() && body->second != nullptr) {
+            self->detach_all_children(*body->second);
+            auto body_html = extract_element_contents(html, "body");
+            if (body_html.empty()) body_html = html;
+            self->parse_inner_html(*body->second, body_html);
+        }
+        // Documents containing executable/resource-bearing markup still need
+        // their independent frame realm. Plain document.write replacement is
+        // complete synchronously in the initial about:blank realm.
+        if (html.find("<script") != std::string::npos
+            || html.find("<link") != std::string::npos) {
+            self->pending_frame_hydrations.push_back(node);
+        }
     }
 
     static void frame_window_add_event_listener(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -8432,7 +19801,22 @@ struct v8_dom_runtime::implementation final {
 
     static bool clear_inline_style(dom_node& node, const std::string& name)
     {
-        if (name == "width") {
+        const auto canonical_name = canonical_css_property_name(name);
+        node.inline_style_declarations.erase(canonical_name);
+        node.inline_important_declarations.erase(canonical_name);
+        if (apply_grid_placement_declaration(node.style, name, "auto")) {
+            // Removing a placement declaration restores its affected
+            // longhands to their computed initial value.
+        } else if (apply_inset_declaration(node.style, name, "auto")) {
+            node.style.inline_property_mask &=
+                ~(inline_left | inline_top | inline_right | inline_bottom);
+        } else if (apply_margin_declaration(node.style, name, "0px")) {
+            node.style.inline_property_mask &= ~inline_margin;
+        } else if (apply_padding_declaration(node.style, name, "0px")) {
+            node.style.inline_property_mask &= ~inline_padding;
+        } else if (apply_border_declaration(node.style, name, "")) {
+            node.style.inline_property_mask &= ~inline_border;
+        } else if (name == "width") {
             node.style.width = {};
             node.style.inline_property_mask &= ~inline_width;
         } else if (name == "height") {
@@ -8440,16 +19824,16 @@ struct v8_dom_runtime::implementation final {
             node.style.inline_property_mask &= ~inline_height;
         } else if (name == "minWidth" || name == "min-width") {
             node.style.min_width = {};
-            node.style.inline_property_mask &= ~inline_min_max_size;
+            node.style.inline_property_mask &= ~inline_min_width;
         } else if (name == "minHeight" || name == "min-height") {
             node.style.min_height = {};
-            node.style.inline_property_mask &= ~inline_min_max_size;
+            node.style.inline_property_mask &= ~inline_min_height;
         } else if (name == "maxWidth" || name == "max-width") {
             node.style.max_width = {};
-            node.style.inline_property_mask &= ~inline_min_max_size;
+            node.style.inline_property_mask &= ~inline_max_width;
         } else if (name == "maxHeight" || name == "max-height") {
             node.style.max_height = {};
-            node.style.inline_property_mask &= ~inline_min_max_size;
+            node.style.inline_property_mask &= ~inline_max_height;
         } else if (name == "left") {
             node.style.left = {};
             node.style.inline_property_mask &= ~inline_left;
@@ -8463,11 +19847,18 @@ struct v8_dom_runtime::implementation final {
             node.style.bottom = {};
             node.style.inline_property_mask &= ~inline_bottom;
         } else if (name == "display") {
-            node.style.display = default_display_for_tag(node.tag);
+            node.style.display = default_display_for_node(node);
             node.style.inline_property_mask &= ~inline_display;
         } else if (name == "position") {
             node.style.position = position_mode::normal;
             node.style.inline_property_mask &= ~inline_position;
+        } else if (name == "cssFloat" || name == "float") {
+            node.style.floating = float_mode::none;
+            node.style.inline_property_mask &= ~inline_float;
+        } else if (name == "zIndex" || name == "z-index") {
+            node.style.z_index = 0;
+            node.style.z_index_auto = true;
+            node.style.inline_property_mask &= ~inline_z_index;
         } else if (name == "flexDirection" || name == "flex-direction") {
             node.style.direction = flex_direction::row;
             node.style.flex_reverse = false;
@@ -8482,6 +19873,9 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "flexShrink" || name == "flex-shrink") {
             node.style.flex_shrink = 1;
             node.style.inline_property_mask &= ~inline_flex_shrink;
+        } else if (name == "flexBasis" || name == "flex-basis") {
+            node.style.flex_basis = {};
+            node.style.inline_property_mask &= ~inline_flex_basis;
         } else if (name == "flexWrap" || name == "flex-wrap") {
             node.style.flex_wrap = false;
             node.style.inline_property_mask &= ~inline_flex_wrap;
@@ -8495,9 +19889,26 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "justifyContent" || name == "justify-content") {
             node.style.justify_content = justify_mode::start;
             node.style.inline_property_mask &= ~inline_justify_content;
+        } else if (name == "gap" || name == "rowGap" || name == "row-gap"
+            || name == "columnGap" || name == "column-gap") {
+            if (name == "gap" || name == "rowGap" || name == "row-gap") {
+                node.style.row_gap = {};
+            }
+            if (name == "gap" || name == "columnGap" || name == "column-gap") {
+                node.style.column_gap = {};
+            }
+            node.style.inline_property_mask &= ~inline_gap;
         } else if (name == "boxSizing" || name == "box-sizing") {
             node.style.border_box = false;
             node.style.inline_property_mask &= ~inline_box_sizing;
+        } else if (name == "boxShadow" || name == "box-shadow") {
+            node.style.box_shadow_offset_x = 0;
+            node.style.box_shadow_offset_y = 0;
+            node.style.box_shadow_blur_radius = 0;
+            node.style.box_shadow_spread_radius = 0;
+            node.style.box_shadow_rgba = 0;
+            node.style.box_shadow_present = false;
+            node.style.inline_property_mask &= ~inline_box_shadow;
         } else if (name == "borderRadius" || name == "border-radius") {
             node.style.border_top_left_radius = {};
             node.style.border_top_right_radius = {};
@@ -8515,7 +19926,29 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "transformOrigin" || name == "transform-origin") {
             node.style.transform_origin_x = {50, length_unit::percent};
             node.style.transform_origin_y = {50, length_unit::percent};
-            node.style.inline_property_mask &= ~inline_transform;
+            node.style.transform_origin_specified = false;
+            node.style.inline_property_mask &= ~inline_transform_origin;
+        } else if (name == "transition" || name == "transitionProperty"
+            || name == "transition-property" || name == "transitionDuration"
+            || name == "transition-duration" || name == "transitionDelay"
+            || name == "transition-delay" || name == "transitionTimingFunction"
+            || name == "transition-timing-function") {
+            node.style.transition_property_value = "all";
+            node.style.transition_duration_value = "0s";
+            node.style.transition_delay_value = "0s";
+            node.style.transition_timing_function_value = "ease";
+            configure_style_transitions(node.style);
+        } else if (name == "animation" || name == "animationName"
+            || name == "animation-name" || name == "animationDuration"
+            || name == "animation-duration" || name == "animationDelay"
+            || name == "animation-delay" || name == "animationTimingFunction"
+            || name == "animation-timing-function" || name == "animationIterationCount"
+            || name == "animation-iteration-count") {
+            node.style.animation_name_value = "none";
+            node.style.animation_duration_value = "0s";
+            node.style.animation_delay_value = "0s";
+            node.style.animation_timing_function_value = "ease";
+            node.style.animation_iteration_count_value = "1";
         } else if (name == "opacity") {
             node.style.opacity = 1;
             node.style.inline_property_mask &= ~inline_opacity;
@@ -8524,7 +19957,9 @@ struct v8_dom_runtime::implementation final {
             node.style.background_rgba = 0;
             node.style.inline_property_mask &= ~inline_background;
         } else if (name == "overflow") {
-            node.style.clip = false;
+            node.style.overflow_x = overflow_mode::visible;
+            node.style.overflow_y = overflow_mode::visible;
+            refresh_overflow_state(node.style);
             node.style.inline_property_mask &= ~inline_overflow;
         } else if (name == "visibility") {
             node.style.visibility_hidden = false;
@@ -8534,9 +19969,19 @@ struct v8_dom_runtime::implementation final {
             node.style.pointer_events_none = false;
             node.style.pointer_events_specified = false;
             node.style.inline_property_mask &= ~inline_pointer_events;
+        } else if (name == "cursor") {
+            node.style.cursor.clear();
+            node.style.inline_property_mask &= ~inline_cursor;
         } else if (name == "color") {
             node.style.foreground_rgba = 0;
             node.style.inline_property_mask &= ~inline_color;
+        } else if (name == "font") {
+            node.style.font_size = -1;
+            node.style.line_height = -1;
+            node.style.font_weight = 0;
+            node.style.font_family.clear();
+            node.style.inline_property_mask &= ~(
+                inline_font_size | inline_line_height | inline_font_weight | inline_font_family);
         } else if (name == "fontSize" || name == "font-size") {
             node.style.font_size = -1;
             node.style.inline_property_mask &= ~inline_font_size;
@@ -8549,6 +19994,14 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "lineHeight" || name == "line-height") {
             node.style.line_height = -1;
             node.style.inline_property_mask &= ~inline_line_height;
+        } else if (name == "letterSpacing" || name == "letter-spacing") {
+            node.style.letter_spacing = 0;
+            node.style.letter_spacing_specified = false;
+            node.style.inline_property_mask &= ~inline_letter_spacing;
+        } else if (name == "wordSpacing" || name == "word-spacing") {
+            node.style.word_spacing = 0;
+            node.style.word_spacing_specified = false;
+            node.style.inline_property_mask &= ~inline_word_spacing;
         } else if (name == "textAlign" || name == "text-align") {
             node.style.text_align.clear();
             node.style.inline_property_mask &= ~inline_text_align;
@@ -8559,6 +20012,63 @@ struct v8_dom_runtime::implementation final {
             return false;
         }
         return true;
+    }
+
+    static std::string serialized_inline_style(const dom_node& node)
+    {
+        std::vector<std::pair<std::string, std::string>> declarations(
+            node.inline_style_declarations.begin(),
+            node.inline_style_declarations.end());
+        std::sort(declarations.begin(), declarations.end());
+        std::string result;
+        for (const auto& [name, value] : declarations) {
+            if (!result.empty()) result.push_back(' ');
+            result += name;
+            result += ": ";
+            result += value;
+            if (node.inline_important_declarations.contains(name)) {
+                result += " !important";
+            }
+            result.push_back(';');
+        }
+        return result;
+    }
+
+    static void sync_style_attribute(dom_node& node)
+    {
+        node.attributes["style"] = serialized_inline_style(node);
+    }
+
+    static void get_style_css_text(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* node = unwrap_node(info.Holder());
+        info.GetReturnValue().Set(js_dom_string(
+            info.GetIsolate(),
+            node == nullptr ? std::string{} : serialized_inline_style(*node)));
+    }
+
+    static void set_style_css_text(
+        v8::Local<v8::Name>,
+        v8::Local<v8::Value> raw_value,
+        const v8::PropertyCallbackInfo<void>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        auto* node = unwrap_node(info.Holder());
+        if (node == nullptr) return;
+        node->inline_style_declarations.clear();
+        node->inline_important_declarations.clear();
+        node->style.inline_property_mask = 0U;
+        node->style.important_property_mask = 0U;
+        const auto value = to_utf8(info.GetIsolate(), raw_value);
+        for (const auto& declaration : parse_css_declarations(value, true)) {
+            if (!store_inline_declaration(*node, declaration)) continue;
+            self->apply_css_declaration(*node, declaration);
+            node->style.inline_property_mask |= inline_style_mask(declaration.name);
+        }
+        sync_style_attribute(*node);
+        self->recascade_connected_subtree(*node, "style.removeProperty");
     }
 
     static void style_set_property(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -8573,18 +20083,45 @@ struct v8_dom_runtime::implementation final {
         const auto has_important_rule =
             (node->style.important_property_mask & property_mask) != 0U;
         const auto value = to_utf8(info.GetIsolate(), info[1]);
+        self->inventory_css_value_functions(value, "cssom-style");
         if (name.starts_with("--")) {
-            if (value.empty()) node->style.custom_properties.erase(name);
-            else node->style.custom_properties[name] = value;
+            if (!valid_custom_property_name(name)) return;
+            if (value.empty()) {
+                node->style.custom_properties.erase(name);
+                node->inline_style_declarations.erase(name);
+                node->inline_important_declarations.erase(name);
+            } else {
+                node->style.custom_properties[name] = value;
+                node->inline_style_declarations[name] = value;
+                node->inline_important_declarations.erase(name);
+            }
+            sync_style_attribute(*node);
             self->recascade_connected_subtree(*node);
             return;
         }
         if (value.empty()) {
             clear_inline_style(*node, name);
+            sync_style_attribute(*node);
             self->recascade_connected_subtree(*node);
             return;
         }
-        if (name == "width") {
+        if (!valid_cssom_declaration_value(name, value)) return;
+        const auto canonical_name = canonical_css_property_name(name);
+        node->inline_style_declarations[canonical_name] = value;
+        node->inline_important_declarations.erase(canonical_name);
+        if (apply_grid_placement_declaration(node->style, name, value)) {
+            // Placement CSSOM is stored as computed tokens; layout consumes the
+            // existing numeric grid-column projection when applicable.
+        } else if (apply_inset_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |=
+                inline_left | inline_top | inline_right | inline_bottom;
+        } else if (apply_margin_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |= inline_margin;
+        } else if (apply_padding_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |= inline_padding;
+        } else if (apply_border_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |= inline_border;
+        } else if (name == "width") {
             node->style.width = native_document::parse_length(value);
             node->style.inline_property_mask |= inline_width;
         } else if (name == "height") {
@@ -8592,41 +20129,47 @@ struct v8_dom_runtime::implementation final {
             node->style.inline_property_mask |= inline_height;
         } else if (name == "minWidth") {
             node->style.min_width = native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_min_width;
         } else if (name == "minHeight") {
             node->style.min_height = native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_min_height;
         } else if (name == "maxWidth") {
             node->style.max_width = value == "none" ? css_length{} : native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_max_width;
         } else if (name == "maxHeight") {
             node->style.max_height = value == "none" ? css_length{} : native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_max_height;
         } else if (name == "min-width") {
             node->style.min_width = native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_min_width;
         } else if (name == "min-height") {
             node->style.min_height = native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_min_height;
         } else if (name == "max-width") {
             node->style.max_width = value == "none" ? css_length{} : native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_max_width;
         } else if (name == "max-height") {
             node->style.max_height = value == "none" ? css_length{} : native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_max_height;
         } else if (name == "position") {
             node->style.position = value == "absolute" ? position_mode::absolute
                 : value == "fixed" ? position_mode::fixed
                 : value == "relative" ? position_mode::relative
                 : position_mode::normal;
             node->style.inline_property_mask |= inline_position;
+        } else if (name == "float" || name == "cssFloat") {
+            node->style.floating = value == "left" ? float_mode::left
+                : value == "right" ? float_mode::right
+                : float_mode::none;
+            node->style.inline_property_mask |= inline_float;
+        } else if (name == "z-index") {
+            node->style.z_index_auto = value == "auto" || value == "initial"
+                || value == "unset";
+            node->style.z_index = node->style.z_index_auto
+                ? 0 : std::atoi(value.c_str());
+            node->style.inline_property_mask |= inline_z_index;
         } else if (name == "display") {
-            node->style.display = value == "flex" ? display_mode::flex
-                : value == "inline-flex" ? display_mode::inline_flex
-                : value == "grid" ? display_mode::grid
-                : value == "inline-grid" ? display_mode::inline_grid
-                : value == "inline" || value == "inline-block" ? display_mode::inline_block
-                : value == "none" ? display_mode::none : display_mode::block;
+            node->style.display = parse_display_mode(value);
             node->style.inline_property_mask |= inline_display;
         } else if (name == "flex-direction") {
             node->style.direction = value == "row" || value == "row-reverse"
@@ -8639,6 +20182,9 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "flex-shrink") {
             node->style.flex_shrink = std::max(0.0F, std::strtof(value.c_str(), nullptr));
             node->style.inline_property_mask |= inline_flex_shrink;
+        } else if (name == "flex-basis") {
+            node->style.flex_basis = native_document::parse_length(value);
+            node->style.inline_property_mask |= inline_flex_basis;
         } else if (name == "flex-wrap") {
             node->style.flex_wrap = value == "wrap" || value == "wrap-reverse";
             node->style.inline_property_mask |= inline_flex_wrap;
@@ -8646,6 +20192,7 @@ struct v8_dom_runtime::implementation final {
             node->style.align_items = value == "center" ? align_mode::center
                 : value == "flex-start" || value == "start" ? align_mode::start
                 : value == "flex-end" || value == "end" ? align_mode::end
+                : value == "baseline" || value == "first baseline" ? align_mode::baseline
                 : align_mode::stretch;
             node->style.inline_property_mask |= inline_align_items;
         } else if (name == "align-self") {
@@ -8653,17 +20200,39 @@ struct v8_dom_runtime::implementation final {
             node->style.align_self = value == "center" ? align_mode::center
                 : value == "flex-start" || value == "start" ? align_mode::start
                 : value == "flex-end" || value == "end" ? align_mode::end
+                : value == "baseline" || value == "first baseline" ? align_mode::baseline
                 : align_mode::stretch;
             node->style.inline_property_mask |= inline_align_self;
         } else if (name == "justify-content") {
             node->style.justify_content = value == "center" ? justify_mode::center
                 : value == "flex-end" || value == "end" ? justify_mode::end
                 : value == "space-between" ? justify_mode::space_between
+                : value == "space-around" ? justify_mode::space_around
+                : value == "space-evenly" ? justify_mode::space_evenly
                 : justify_mode::start;
             node->style.inline_property_mask |= inline_justify_content;
+        } else if (name == "gap" || name == "row-gap" || name == "column-gap") {
+            std::istringstream stream(value);
+            std::string first;
+            std::string second;
+            stream >> first >> second;
+            if (name == "gap") {
+                node->style.row_gap = native_document::parse_length(first);
+                node->style.column_gap = native_document::parse_length(
+                    second.empty() ? first : second);
+            } else if (name == "row-gap") {
+                node->style.row_gap = native_document::parse_length(first);
+            } else {
+                node->style.column_gap = native_document::parse_length(first);
+            }
+            node->style.inline_property_mask |= inline_gap;
         } else if (name == "box-sizing") {
             node->style.border_box = value == "border-box";
             node->style.inline_property_mask |= inline_box_sizing;
+        } else if (name == "box-shadow") {
+            auto complete = true;
+            apply_box_shadow_value(node->style, value, complete);
+            node->style.inline_property_mask |= inline_box_shadow;
         } else if (name == "border-radius") {
             apply_corner_radius_declaration(
                 name,
@@ -8684,13 +20253,26 @@ struct v8_dom_runtime::implementation final {
             node->style.transform_specified = true;
             node->style.inline_property_mask |= inline_transform;
         } else if (name == "transform-origin") {
-            std::istringstream stream(value);
-            std::string x;
-            std::string y;
-            stream >> x >> y;
-            node->style.transform_origin_x = native_document::parse_length(x);
-            node->style.transform_origin_y = native_document::parse_length(y.empty() ? x : y);
-            node->style.inline_property_mask |= inline_transform;
+            native_document::parse_transform_origin(
+                value,
+                node->style.transform_origin_x,
+                node->style.transform_origin_y);
+            node->style.transform_origin_specified = true;
+            node->style.inline_property_mask |= inline_transform_origin;
+        } else if (name == "transition") {
+            apply_transition_shorthand(node->style, value);
+        } else if (name == "transition-property") {
+            node->style.transition_property_value = value;
+            configure_style_transitions(node->style);
+        } else if (name == "transition-duration") {
+            node->style.transition_duration_value = value;
+            configure_style_transitions(node->style);
+        } else if (name == "transition-delay") {
+            node->style.transition_delay_value = value;
+            configure_style_transitions(node->style);
+        } else if (name == "transition-timing-function") {
+            node->style.transition_timing_function_value = value;
+            configure_style_transitions(node->style);
         } else if (name == "opacity") {
             node->style.opacity = std::clamp(std::strtof(value.c_str(), nullptr), 0.0F, 1.0F);
             node->style.inline_property_mask |= inline_opacity;
@@ -8702,6 +20284,9 @@ struct v8_dom_runtime::implementation final {
             node->style.pointer_events_none = value == "none";
             node->style.pointer_events_specified = value != "inherit" && value != "unset";
             node->style.inline_property_mask |= inline_pointer_events;
+        } else if (name == "cursor") {
+            node->style.cursor = value;
+            node->style.inline_property_mask |= inline_cursor;
         }
         else if (name == "background" || name == "background-color") {
             node->style.background_rgba = native_document::parse_color(value);
@@ -8709,24 +20294,59 @@ struct v8_dom_runtime::implementation final {
         } else if (name == "color") {
             node->style.foreground_rgba = native_document::parse_color(value);
             node->style.inline_property_mask |= inline_color;
+        } else if (name == "font") {
+            if (value == "inherit" || value == "unset") {
+                node->style.font_size = -1;
+                node->style.line_height = -1;
+                node->style.font_weight = 0;
+                node->style.font_family.clear();
+                node->style.inline_property_mask |= inline_font_size | inline_line_height
+                    | inline_font_weight | inline_font_family;
+            } else if (const auto font = parse_font_shorthand(*node, value); font.has_value()) {
+                node->style.font_size = font->font_size;
+                node->style.line_height = font->line_height;
+                node->style.font_weight = font->font_weight;
+                node->style.font_family = font->font_family;
+                node->style.inline_property_mask |= inline_font_size | inline_line_height
+                    | inline_font_weight | inline_font_family;
+            }
         } else if (name == "font-size") {
-            node->style.font_size = std::max(0.0F, native_document::parse_length(value).value);
+            node->style.font_size = resolved_declared_font_size(*node, value);
             node->style.inline_property_mask |= inline_font_size;
         } else if (name == "font-family") {
-            node->style.font_family = value;
+            node->style.font_family = value == "inherit" || value == "unset"
+                ? std::string{} : value;
             node->style.inline_property_mask |= inline_font_family;
         } else if (name == "font-weight") {
-            node->style.font_weight = value == "bold" ? 700
+            node->style.font_weight = value == "inherit" || value == "unset" ? 0
+                : value == "bold" ? 700
                 : value == "normal" ? 400
                 : std::max(1, static_cast<int>(std::lround(
                     native_document::parse_length(value).value)));
             node->style.inline_property_mask |= inline_font_weight;
         } else if (name == "line-height") {
-            const auto parsed = std::max(0.0F, native_document::parse_length(value).value);
-            node->style.line_height = parsed > 0 && parsed <= 4
-                ? parsed * (node->style.font_size >= 0 ? node->style.font_size : 14.0F)
-                : parsed;
+            const auto font_size = node->style.font_size >= 0
+                ? node->style.font_size : inherited_font_size(*node);
+            node->style.line_height = resolved_declared_line_height(*node, value, font_size);
             node->style.inline_property_mask |= inline_line_height;
+        } else if (name == "letter-spacing" || name == "word-spacing") {
+            const auto length = native_document::parse_length(value);
+            const auto font_size = node->style.font_size >= 0
+                ? node->style.font_size : inherited_font_size(*node);
+            const auto spacing = value == "normal" ? 0
+                : length.unit == length_unit::em ? length.value * font_size
+                : length.unit == length_unit::rem ? length.value * 14.0F
+                : length.value;
+            const auto specified = value != "inherit" && value != "unset";
+            if (name == "letter-spacing") {
+                node->style.letter_spacing = spacing;
+                node->style.letter_spacing_specified = specified;
+                node->style.inline_property_mask |= inline_letter_spacing;
+            } else {
+                node->style.word_spacing = spacing;
+                node->style.word_spacing_specified = specified;
+                node->style.inline_property_mask |= inline_word_spacing;
+            }
         } else if (name == "text-align") {
             node->style.text_align = value;
             node->style.inline_property_mask |= inline_text_align;
@@ -8734,8 +20354,14 @@ struct v8_dom_runtime::implementation final {
             node->style.white_space = value;
             node->style.inline_property_mask |= inline_white_space;
         }
+        sync_style_attribute(*node);
         if (has_important_rule) self->apply_css_rules(*node);
-        else self->document.mark_dirty();
+        else {
+            self->configure_style_keyframe_animation(*node);
+            self->document.update_style_animations(*node);
+            self->detect_css_compositions(*node);
+            self->document.mark_dirty();
+        }
     }
 
     static void style_get_property(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -8750,17 +20376,54 @@ struct v8_dom_runtime::implementation final {
             return;
         }
         const auto name = to_utf8(info.GetIsolate(), info[0]);
+        if (name.starts_with("--") && !valid_custom_property_name(name)) {
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), ""));
+            return;
+        }
         const auto computed = info.This()->InternalFieldCount() > 1
             && info.This()->GetInternalField(1).As<v8::Value>()->BooleanValue(info.GetIsolate());
-        if (computed) current(info.GetIsolate())->ensure_layout();
+        auto* self = current(info.GetIsolate());
+        if (computed && !self->is_connected(*node)) {
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), ""));
+            return;
+        }
+        if (computed) self->ensure_layout();
         std::string value;
-        if (name.starts_with("--")) {
-            const auto known = node->style.custom_properties.find(name);
-            value = known == node->style.custom_properties.end() ? "" : known->second;
+        if (!computed) {
+            const auto authored = node->inline_style_declarations.find(
+                canonical_css_property_name(name));
+            value = authored == node->inline_style_declarations.end()
+                ? "" : authored->second;
+        } else if (name.starts_with("--")) {
+            const std::string* known_value = nullptr;
+            for (auto* current_node = node; current_node != nullptr;
+                 current_node = current_node->parent) {
+                const auto known = current_node->style.custom_properties.find(name);
+                if (known != current_node->style.custom_properties.end()) {
+                    known_value = &known->second;
+                    break;
+                }
+            }
+            if (known_value == nullptr) {
+                auto* self = current(info.GetIsolate());
+                const auto known = self->css_variables.find(name);
+                if (known != self->css_variables.end()) known_value = &known->second;
+            }
+            value = known_value == nullptr ? "" : *known_value;
         } else {
             const auto format_length = [](const css_length& length) {
                 if (length.unit == length_unit::automatic) return std::string {};
+                if (length.unit == length_unit::max_content) return std::string{"max-content"};
+                if (length.unit == length_unit::min_content) return std::string{"min-content"};
+                if (length.unit == length_unit::fit_content) return std::string{"fit-content"};
                 std::ostringstream stream;
+                if (length.unit == length_unit::percent
+                    && std::abs(length.pixel_offset) > 0.000001F) {
+                    stream << "calc(" << length.value << "% "
+                        << (length.pixel_offset < 0 ? "- " : "+ ")
+                        << std::abs(length.pixel_offset) << "px)";
+                    return stream.str();
+                }
                 stream << length.value;
                 stream << (length.unit == length_unit::percent ? "%" : "px");
                 return stream.str();
@@ -8770,47 +20433,178 @@ struct v8_dom_runtime::implementation final {
                 stream << pixels << "px";
                 return stream.str();
             };
-            if (name == "overflow" || name == "overflow-x" || name == "overflow-y") {
+            const auto format_computed_length = [&](const css_length& length, float reference) {
+                if (length.unit == length_unit::em
+                    || length.unit == length_unit::rem
+                    || length.unit == length_unit::viewport_width
+                    || length.unit == length_unit::viewport_height) {
+                    return format_pixels(resolve_connected_css_length(
+                        *node, length, reference));
+                }
+                return format_length(length);
+            };
+            const auto format_box_length = [&](const css_length& length) {
+                return length.unit == length_unit::automatic
+                    ? std::string{"0px"} : format_computed_length(length, 0);
+            };
+            const auto resolve_transform_origin = [](css_length length, float available) {
+                return length.unit == length_unit::percent
+                    ? available * length.value / 100.0F + length.pixel_offset
+                    : length.value;
+            };
+            float connected_used_value = 0.0F;
+            if (try_connected_used_geometry_value(
+                    *node,
+                    canonical_css_property_name(name),
+                    connected_used_value)) {
+                value = format_pixels(connected_used_value);
+            } else if (name == "z-index") {
+                value = node->style.z_index_auto
+                    ? "auto" : std::to_string(node->style.z_index);
+            } else if (name == "float") {
+                value = node->style.floating == float_mode::left ? "left"
+                    : node->style.floating == float_mode::right ? "right" : "none";
+            } else if (name == "overflow" || name == "overflow-x" || name == "overflow-y") {
                 // CSSOM returns the computed initial value rather than an
                 // absent/undefined value. Modal scroll-lock implementations
                 // unconditionally calls toLowerCase() on this result.
-                value = node->style.clip ? "hidden" : "visible";
+                const auto [x, y] = computed_overflow(node->style);
+                value = name == "overflow-x" ? serialize_overflow_mode(x)
+                    : name == "overflow-y" ? serialize_overflow_mode(y)
+                    : x == y ? serialize_overflow_mode(x)
+                    : serialize_overflow_mode(x) + " " + serialize_overflow_mode(y);
+            } else if (name == "visibility") {
+                auto* current_node = node;
+                while (current_node != nullptr
+                    && !current_node->style.visibility_specified) {
+                    current_node = current_node->parent;
+                }
+                value = current_node != nullptr
+                    && current_node->style.visibility_hidden
+                    ? "hidden" : "visible";
             } else if (name == "padding-left") {
-                value = format_length(node->style.padding_left);
+                value = format_box_length(node->style.padding_left);
             } else if (name == "padding-top") {
-                value = format_length(node->style.padding_top);
+                value = format_box_length(node->style.padding_top);
             } else if (name == "padding-right") {
-                value = format_length(node->style.padding_right);
+                value = format_box_length(node->style.padding_right);
             } else if (name == "padding-bottom") {
-                value = format_length(node->style.padding_bottom);
+                value = format_box_length(node->style.padding_bottom);
+            } else if (name == "left" || name == "inset-inline-start") {
+                value = format_length(node->style.left);
+            } else if (name == "top" || name == "inset-block-start") {
+                value = format_length(node->style.top);
+            } else if (name == "right" || name == "inset-inline-end") {
+                value = format_length(node->style.right);
+            } else if (name == "bottom" || name == "inset-block-end") {
+                value = format_length(node->style.bottom);
             } else if (name == "margin-left") {
-                value = format_length(node->style.margin_left);
+                value = format_box_length(node->style.margin_left);
             } else if (name == "margin-top") {
-                value = format_length(node->style.margin_top);
+                value = format_box_length(node->style.margin_top);
             } else if (name == "margin-right") {
-                value = format_length(node->style.margin_right);
+                value = format_box_length(node->style.margin_right);
             } else if (name == "margin-bottom") {
-                value = format_length(node->style.margin_bottom);
+                value = format_box_length(node->style.margin_bottom);
+            } else if (name == "gap") {
+                value = format_computed_length(node->style.row_gap, node->layout.height)
+                    + " "
+                    + format_computed_length(node->style.column_gap, node->layout.width);
+            } else if (name == "row-gap") {
+                value = format_computed_length(node->style.row_gap, node->layout.height);
+            } else if (name == "column-gap") {
+                value = format_computed_length(node->style.column_gap, node->layout.width);
+            } else if (name == "flex-basis") {
+                value = format_computed_length(node->style.flex_basis, node->layout.width);
+            } else if (name == "grid-area") {
+                value = node->style.grid_area_value;
+            } else if (name == "grid-row") {
+                value = node->style.grid_row_value;
+            } else if (name == "grid-row-start") {
+                value = node->style.grid_row_start_value;
+            } else if (name == "grid-row-end") {
+                value = node->style.grid_row_end_value;
+            } else if (name == "grid-column") {
+                value = node->style.grid_column_value;
+            } else if (name == "grid-column-start") {
+                value = node->style.grid_column_start_value;
+            } else if (name == "grid-column-end") {
+                value = node->style.grid_column_end_value;
+            } else if (name == "background-image") {
+                value = node->style.background_image_value;
+            } else if (name == "background-repeat") {
+                value = node->style.background_repeat;
+            } else if (name == "background-position") {
+                value = node->style.background_position_x + " "
+                    + node->style.background_position_y;
+            } else if (name == "background-size") {
+                value = node->style.background_size_x + " "
+                    + node->style.background_size_y;
+            } else if (name == "box-shadow") {
+                if (!node->style.box_shadow_present) {
+                    value = "none";
+                } else {
+                    const auto color = node->style.box_shadow_rgba;
+                    std::ostringstream stream;
+                    stream << node->style.box_shadow_offset_x << "px "
+                        << node->style.box_shadow_offset_y << "px "
+                        << node->style.box_shadow_blur_radius << "px "
+                        << node->style.box_shadow_spread_radius << "px rgba("
+                        << ((color >> 24U) & 0xFFU) << ", "
+                        << ((color >> 16U) & 0xFFU) << ", "
+                        << ((color >> 8U) & 0xFFU) << ", "
+                        << std::setprecision(6)
+                        << static_cast<double>(color & 0xFFU) / 255.0 << ')';
+                    value = stream.str();
+                }
+            } else if (name == "outline-width") {
+                value = format_box_length(node->style.outline_width);
+            } else if (name == "outline-style") {
+                value = node->style.outline_width.value > 0
+                    && (node->style.outline_rgba & 0xFFU) != 0U ? "solid" : "none";
+            } else if (name == "border-top-width") {
+                value = format_box_length(node->style.border_top_width);
+            } else if (name == "border-top-style") {
+                value = node->style.border_top_width.value > 0 ? "solid" : "none";
             } else if (name == "width") {
-                value = computed ? format_pixels(node->layout.width) : format_length(node->style.width);
+                value = computed
+                    ? format_pixels(connected_computed_dimension(
+                        *node, node->style.width, true))
+                    : format_length(node->style.width);
             } else if (name == "height") {
-                value = computed ? format_pixels(node->layout.height) : format_length(node->style.height);
+                value = computed
+                    ? format_pixels(connected_computed_dimension(
+                        *node, node->style.height, false))
+                    : format_length(node->style.height);
+            } else if (name == "min-width") {
+                value = format_computed_length(node->style.min_width, node->layout.width);
+            } else if (name == "min-height") {
+                value = format_computed_length(node->style.min_height, node->layout.height);
             } else if (name == "max-width") {
                 value = node->style.max_width.value == 0
-                    ? "none" : format_length(node->style.max_width);
+                    ? "none"
+                    : format_computed_length(node->style.max_width, node->layout.width);
             } else if (name == "max-height") {
                 value = node->style.max_height.value == 0
-                    ? "none" : format_length(node->style.max_height);
+                    ? "none"
+                    : format_computed_length(node->style.max_height, node->layout.height);
+            } else if (name == "transform-origin") {
+                value = format_pixels(resolve_transform_origin(
+                    node->style.transform_origin_x, node->layout.width)) + " "
+                    + format_pixels(resolve_transform_origin(
+                        node->style.transform_origin_y, node->layout.height));
             } else if (name == "transform") {
-                if (node->style.transform_specified) {
+                if (node->style.transform_specified
+                    || node->rotation_keyframe_animation_active) {
                     constexpr double degrees_to_radians = 0.017453292519943295;
-                    const auto radians = static_cast<double>(node->style.transform_rotate_degrees)
+                    const auto radians = static_cast<double>(node->painted_transform_rotate_degrees)
                         * degrees_to_radians;
                     const auto cosine = std::cos(radians);
                     const auto sine = std::sin(radians);
                     const auto resolve = [](css_length length, float available) {
                         return length.unit == length_unit::percent
                             ? static_cast<double>(available) * length.value / 100.0
+                                + length.pixel_offset
                             : static_cast<double>(length.value);
                     };
                     const auto format_number = [](double number) {
@@ -8819,20 +20613,85 @@ struct v8_dom_runtime::implementation final {
                         stream << std::setprecision(8) << number;
                         return stream.str();
                     };
-                    const auto a = cosine * node->style.transform_scale_x;
-                    const auto b = sine * node->style.transform_scale_x;
-                    const auto c = -sine * node->style.transform_scale_y;
-                    const auto d = cosine * node->style.transform_scale_y;
-                    const auto e = resolve(node->style.transform_translate_x, node->layout.width);
-                    const auto f = resolve(node->style.transform_translate_y, node->layout.height);
+                    const auto a = cosine * node->painted_transform_scale_x;
+                    const auto b = sine * node->painted_transform_scale_x;
+                    const auto c = -sine * node->painted_transform_scale_y;
+                    const auto d = cosine * node->painted_transform_scale_y;
+                    const auto e = resolve(
+                        node->painted_transform_translate_x, node->layout.width);
+                    const auto f = resolve(
+                        node->painted_transform_translate_y, node->layout.height);
                     value = "matrix(" + format_number(a) + ", " + format_number(b)
                         + ", " + format_number(c) + ", " + format_number(d)
                         + ", " + format_number(e) + ", " + format_number(f) + ")";
                 } else {
                     value = "none";
                 }
+            } else if (name == "transition-property") {
+                value = node->style.transition_property_value;
+            } else if (name == "transition-duration") {
+                value = node->style.transition_duration_value;
+            } else if (name == "transition-delay") {
+                value = node->style.transition_delay_value;
+            } else if (name == "transition-timing-function") {
+                value = node->style.transition_timing_function_value;
+            } else if (name == "opacity") {
+                value = serialize_css_number(node->opacity_animation_initialized
+                    ? node->painted_opacity : node->style.opacity);
+            } else if (name == "color") {
+                uint32_t color = 0;
+                for (auto* current_node = node;
+                    current_node != nullptr && (color & 0xFFU) == 0U;
+                    current_node = current_node->parent) {
+                    if (current_node->color_animation_active) {
+                        color = current_node->painted_foreground_rgba;
+                    } else if ((current_node->style.foreground_rgba & 0xFFU) != 0U) {
+                        color = current_node->color_animation_initialized
+                            ? current_node->painted_foreground_rgba
+                            : current_node->style.foreground_rgba;
+                    }
+                }
+                if ((color & 0xFFU) == 0U) color = 0x000000FFU;
+                std::ostringstream stream;
+                const auto red = static_cast<unsigned>((color >> 24U) & 0xFFU);
+                const auto green = static_cast<unsigned>((color >> 16U) & 0xFFU);
+                const auto blue = static_cast<unsigned>((color >> 8U) & 0xFFU);
+                const auto alpha = static_cast<unsigned>(color & 0xFFU);
+                if (alpha == 0xFFU) {
+                    stream << "rgb(" << red << ", " << green << ", " << blue << ')';
+                } else {
+                    stream << "rgba(" << red << ", " << green << ", " << blue << ", "
+                        << std::setprecision(6) << static_cast<double>(alpha) / 255.0 << ')';
+                }
+                value = stream.str();
             } else if (name == "white-space") {
                 value = node->style.white_space;
+            } else if (name == "cursor") {
+                value = resolved_cursor(*node);
+            } else if (name == "font-size") {
+                value = serialize_css_number(node->style.font_size >= 0
+                    ? node->style.font_size : inherited_font_size(*node)) + "px";
+            } else if (name == "font-family") {
+                value = resolved_font_family(*node);
+            } else if (name == "font-weight") {
+                value = std::to_string(resolved_font_weight(*node));
+            } else if (name == "letter-spacing") {
+                value = serialize_css_number(resolved_letter_spacing(*node)) + "px";
+            } else if (name == "word-spacing") {
+                value = serialize_css_number(resolved_word_spacing(*node)) + "px";
+            } else if (name == "line-height") {
+                auto line_height = node->style.line_height;
+                for (auto* ancestor = node->parent;
+                    line_height < 0 && ancestor != nullptr;
+                    ancestor = ancestor->parent) {
+                    line_height = ancestor->style.line_height;
+                }
+                if (line_height < 0) {
+                    const auto font_size = node->style.font_size >= 0
+                        ? node->style.font_size : inherited_font_size(*node);
+                    line_height = font_size * 1.2F;
+                }
+                value = serialize_css_number(line_height) + "px";
             }
         }
         // CSSStyleDeclaration.getPropertyValue() returns the empty string for
@@ -8849,11 +20708,16 @@ struct v8_dom_runtime::implementation final {
         if (node == nullptr) return;
         const auto name = to_utf8(info.GetIsolate(), info[0]);
         if (name.starts_with("--")) {
+            if (!valid_custom_property_name(name)) return;
             node->style.custom_properties.erase(name);
+            node->inline_style_declarations.erase(name);
+            node->inline_important_declarations.erase(name);
+            sync_style_attribute(*node);
             self->recascade_connected_subtree(*node);
             return;
         }
         clear_inline_style(*node, name);
+        sync_style_attribute(*node);
         self->recascade_connected_subtree(*node);
     }
 
@@ -8865,14 +20729,45 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::style));
         auto* node = unwrap_node(info.Holder());
         if (node == nullptr) return;
-        const auto name = to_utf8(info.GetIsolate(), property);
+        const auto raw_name = to_utf8(info.GetIsolate(), property);
+        const auto name = css_property_idl_name(raw_name);
+        if (raw_name.find('-') != std::string::npos) {
+            self->record_feature(
+                "css",
+                "CSSStyleDeclaration.named-property:" + raw_name,
+                "supported",
+                {},
+                "cssom-binding");
+        }
         const auto computed = info.Holder()->InternalFieldCount() > 1
             && info.Holder()->GetInternalField(1).As<v8::Value>()->BooleanValue(info.GetIsolate());
+        if (computed && !self->is_connected(*node)) {
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), ""));
+            return;
+        }
         if (computed) self->ensure_layout();
         std::string value;
+        if (!computed) {
+            const auto authored = node->inline_style_declarations.find(
+                canonical_css_property_name(name));
+            value = authored == node->inline_style_declarations.end()
+                ? "" : authored->second;
+            info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
+            return;
+        }
         const auto format_length = [](const css_length& length) {
             if (length.unit == length_unit::automatic) return std::string {};
+            if (length.unit == length_unit::max_content) return std::string{"max-content"};
+            if (length.unit == length_unit::min_content) return std::string{"min-content"};
+            if (length.unit == length_unit::fit_content) return std::string{"fit-content"};
             std::ostringstream stream;
+            if (length.unit == length_unit::percent
+                && std::abs(length.pixel_offset) > 0.000001F) {
+                stream << "calc(" << length.value << "% "
+                    << (length.pixel_offset < 0 ? "- " : "+ ")
+                    << std::abs(length.pixel_offset) << "px)";
+                return stream.str();
+            }
             stream << length.value;
             stream << (length.unit == length_unit::percent ? "%" : "px");
             return stream.str();
@@ -8881,6 +20776,25 @@ struct v8_dom_runtime::implementation final {
             std::ostringstream stream;
             stream << pixels << "px";
             return stream.str();
+        };
+        const auto format_computed_length = [&](const css_length& length, float reference) {
+            if (length.unit == length_unit::em
+                || length.unit == length_unit::rem
+                || length.unit == length_unit::viewport_width
+                || length.unit == length_unit::viewport_height) {
+                return format_pixels(resolve_connected_css_length(
+                    *node, length, reference));
+            }
+            return format_length(length);
+        };
+        const auto format_box_length = [&](const css_length& length) {
+            return length.unit == length_unit::automatic
+                ? std::string{"0px"} : format_computed_length(length, 0);
+        };
+        const auto resolve_transform_origin = [](css_length length, float available) {
+            return length.unit == length_unit::percent
+                ? available * length.value / 100.0F + length.pixel_offset
+                : length.value;
         };
         const auto serialize_color = [](uint32_t color) {
             std::ostringstream stream;
@@ -8896,106 +20810,334 @@ struct v8_dom_runtime::implementation final {
             }
             return stream.str();
         };
-        if (name == "width") {
-            value = computed ? format_pixels(node->layout.width) : format_length(node->style.width);
+        float connected_used_value = 0.0F;
+        if (try_connected_used_geometry_value(
+                *node,
+                canonical_css_property_name(name),
+                connected_used_value)) {
+            value = format_pixels(connected_used_value);
+        } else if (name == "width") {
+            value = computed
+                ? format_pixels(connected_computed_dimension(
+                    *node, node->style.width, true))
+                : format_length(node->style.width);
         } else if (name == "height") {
-            value = computed ? format_pixels(node->layout.height) : format_length(node->style.height);
+            value = computed
+                ? format_pixels(connected_computed_dimension(
+                    *node, node->style.height, false))
+                : format_length(node->style.height);
+        } else if (name == "left" || name == "insetInlineStart") {
+            value = format_length(node->style.left);
+        } else if (name == "top") {
+            value = format_length(node->style.top);
+        } else if (name == "right" || name == "insetInlineEnd") {
+            value = format_length(node->style.right);
+        } else if (name == "bottom") {
+            value = format_length(node->style.bottom);
+        } else if (name == "minWidth") {
+            value = format_computed_length(node->style.min_width, node->layout.width);
+        } else if (name == "minHeight") {
+            value = format_computed_length(node->style.min_height, node->layout.height);
+        } else if (name == "maxWidth") {
+            value = node->style.max_width.value == 0
+                ? "none"
+                : format_computed_length(node->style.max_width, node->layout.width);
+        } else if (name == "maxHeight") {
+            value = node->style.max_height.value == 0
+                ? "none"
+                : format_computed_length(node->style.max_height, node->layout.height);
         } else if (name == "display") {
-            value = node->style.display == display_mode::flex ? "flex"
-                : node->style.display == display_mode::inline_flex ? "inline-flex"
-                : node->style.display == display_mode::grid ? "grid"
-                : node->style.display == display_mode::inline_grid ? "inline-grid"
-                : node->style.display == display_mode::inline_block ? "inline-block"
-                : node->style.display == display_mode::none ? "none" : "block";
+            value = display_mode_name(node->style.display);
+        } else if (name == "direction") {
+            value = "ltr";
         } else if (name == "position") {
             value = node->style.position == position_mode::absolute ? "absolute"
                 : node->style.position == position_mode::fixed ? "fixed"
                 : node->style.position == position_mode::relative ? "relative"
                 : "static";
+        } else if (name == "cssFloat") {
+            value = node->style.floating == float_mode::left ? "left"
+                : node->style.floating == float_mode::right ? "right" : "none";
         } else if (name == "flexDirection") {
             value = node->style.direction == flex_direction::row
                 ? node->style.flex_reverse ? "row-reverse" : "row"
                 : node->style.flex_reverse ? "column-reverse" : "column";
         } else if (name == "flexGrow") {
-            value = std::to_string(node->style.flex_grow);
+            value = serialize_css_number(node->style.flex_grow);
         } else if (name == "flexShrink") {
-            value = std::to_string(node->style.flex_shrink);
+            value = serialize_css_number(node->style.flex_shrink);
+        } else if (name == "flexBasis") {
+            value = format_computed_length(node->style.flex_basis, node->layout.width);
         } else if (name == "flexWrap") {
             value = node->style.flex_wrap ? "wrap" : "nowrap";
         } else if (name == "alignItems") {
             value = node->style.align_items == align_mode::center ? "center"
                 : node->style.align_items == align_mode::start ? "flex-start"
-                : node->style.align_items == align_mode::end ? "flex-end" : "stretch";
+                : node->style.align_items == align_mode::end ? "flex-end"
+                : node->style.align_items == align_mode::baseline ? "baseline" : "stretch";
         } else if (name == "alignSelf") {
             value = !node->style.align_self_specified ? "auto"
                 : node->style.align_self == align_mode::center ? "center"
                 : node->style.align_self == align_mode::start ? "flex-start"
-                : node->style.align_self == align_mode::end ? "flex-end" : "stretch";
+                : node->style.align_self == align_mode::end ? "flex-end"
+                : node->style.align_self == align_mode::baseline ? "baseline" : "stretch";
         } else if (name == "justifyContent") {
             value = node->style.justify_content == justify_mode::center ? "center"
                 : node->style.justify_content == justify_mode::end ? "flex-end"
                 : node->style.justify_content == justify_mode::space_between
-                    ? "space-between" : "flex-start";
+                    ? "space-between"
+                : node->style.justify_content == justify_mode::space_around
+                    ? "space-around"
+                : node->style.justify_content == justify_mode::space_evenly
+                    ? "space-evenly" : "flex-start";
+        } else if (name == "gap") {
+            value = format_computed_length(node->style.row_gap, node->layout.height)
+                + " "
+                + format_computed_length(node->style.column_gap, node->layout.width);
+        } else if (name == "rowGap") {
+            value = format_computed_length(node->style.row_gap, node->layout.height);
+        } else if (name == "columnGap") {
+            value = format_computed_length(node->style.column_gap, node->layout.width);
+        } else if (name == "paddingLeft") {
+            value = format_box_length(node->style.padding_left);
+        } else if (name == "paddingTop") {
+            value = format_box_length(node->style.padding_top);
+        } else if (name == "paddingRight") {
+            value = format_box_length(node->style.padding_right);
+        } else if (name == "paddingBottom") {
+            value = format_box_length(node->style.padding_bottom);
+        } else if (name == "marginLeft") {
+            value = format_box_length(node->style.margin_left);
+        } else if (name == "marginTop") {
+            value = format_box_length(node->style.margin_top);
+        } else if (name == "marginRight") {
+            value = format_box_length(node->style.margin_right);
+        } else if (name == "marginBottom") {
+            value = format_box_length(node->style.margin_bottom);
+        } else if (name == "borderTopWidth") {
+            value = format_box_length(node->style.border_top_width);
+        } else if (name == "borderRightWidth") {
+            value = format_box_length(node->style.border_right_width);
+        } else if (name == "borderBottomWidth") {
+            value = format_box_length(node->style.border_bottom_width);
+        } else if (name == "borderLeftWidth") {
+            value = format_box_length(node->style.border_left_width);
+        } else if (name == "borderTopColor") {
+            value = serialize_color(node->style.border_top_rgba);
+        } else if (name == "borderRightColor") {
+            value = serialize_color(node->style.border_right_rgba);
+        } else if (name == "borderBottomColor") {
+            value = serialize_color(node->style.border_bottom_rgba);
+        } else if (name == "borderLeftColor") {
+            value = serialize_color(node->style.border_left_rgba);
+        } else if (name == "borderTopLeftRadius") {
+            value = format_length(node->style.border_top_left_radius);
+        } else if (name == "borderTopRightRadius") {
+            value = format_length(node->style.border_top_right_radius);
+        } else if (name == "borderBottomRightRadius") {
+            value = format_length(node->style.border_bottom_right_radius);
+        } else if (name == "borderBottomLeftRadius") {
+            value = format_length(node->style.border_bottom_left_radius);
+        } else if (name == "gridArea") {
+            value = node->style.grid_area_value;
+        } else if (name == "gridRow") {
+            value = node->style.grid_row_value;
+        } else if (name == "gridRowStart") {
+            value = node->style.grid_row_start_value;
+        } else if (name == "gridRowEnd") {
+            value = node->style.grid_row_end_value;
+        } else if (name == "gridColumn") {
+            value = node->style.grid_column_value;
+        } else if (name == "gridColumnStart") {
+            value = node->style.grid_column_start_value;
+        } else if (name == "gridColumnEnd") {
+            value = node->style.grid_column_end_value;
+        } else if (name == "verticalAlign") {
+            value = node->style.vertical_align.empty() ? "baseline" : node->style.vertical_align;
         } else if (name == "boxSizing") {
             value = node->style.border_box ? "border-box" : "content-box";
         } else if (name == "borderRadius") {
-            value = std::to_string(node->style.border_top_left_radius.value) + "px";
+            value = serialize_css_number(node->style.border_top_left_radius.value) + "px";
+        } else if (name == "boxShadow") {
+            if (!node->style.box_shadow_present) {
+                value = "none";
+            } else {
+                const auto color = node->style.box_shadow_rgba;
+                std::ostringstream stream;
+                stream << node->style.box_shadow_offset_x << "px "
+                    << node->style.box_shadow_offset_y << "px "
+                    << node->style.box_shadow_blur_radius << "px "
+                    << node->style.box_shadow_spread_radius << "px "
+                    << serialize_color(color);
+                value = stream.str();
+            }
+        } else if (name == "transformOrigin") {
+            value = format_pixels(resolve_transform_origin(
+                node->style.transform_origin_x, node->layout.width)) + " "
+                + format_pixels(resolve_transform_origin(
+                    node->style.transform_origin_y, node->layout.height));
         } else if (name == "transform") {
-            const auto format_length = [](css_length length) {
-                return std::to_string(length.value)
+            if (!node->style.transform_specified
+                && !node->rotation_keyframe_animation_active) {
+                value = "none";
+            } else {
+                const auto format_transform_length = [](css_length length) {
+                if (length.unit == length_unit::percent
+                    && std::abs(length.pixel_offset) > 0.000001F) {
+                    return "calc(" + serialize_css_number(length.value) + "% "
+                        + (length.pixel_offset < 0 ? "- " : "+ ")
+                        + serialize_css_number(std::abs(length.pixel_offset)) + "px)";
+                }
+                return serialize_css_number(length.value)
                     + (length.unit == length_unit::percent ? "%" : "px");
-            };
-            value = "translate(" + format_length(node->style.transform_translate_x)
-                + ", " + format_length(node->style.transform_translate_y) + ") rotate("
-                + std::to_string(node->painted_transform_rotate_degrees) + "deg)";
+                };
+                value = "translate(" + format_transform_length(node->style.transform_translate_x)
+                    + ", " + format_transform_length(node->style.transform_translate_y) + ") rotate("
+                    + serialize_css_number(node->painted_transform_rotate_degrees) + "deg)";
+            }
+        } else if (name == "transition" ) {
+            value = node->style.transition_property_value + " "
+                + node->style.transition_duration_value + " "
+                + node->style.transition_timing_function_value + " "
+                + node->style.transition_delay_value;
+        } else if (name == "transitionProperty" || name == "transition-property") {
+            value = node->style.transition_property_value;
+        } else if (name == "transitionDuration" || name == "transition-duration") {
+            value = node->style.transition_duration_value;
+        } else if (name == "transitionDelay" || name == "transition-delay") {
+            value = node->style.transition_delay_value;
+        } else if (name == "transitionTimingFunction"
+            || name == "transition-timing-function") {
+            value = node->style.transition_timing_function_value;
+        } else if (name == "animation") {
+            value = node->style.animation_name_value + " "
+                + node->style.animation_duration_value + " "
+                + node->style.animation_timing_function_value + " "
+                + node->style.animation_delay_value + " "
+                + node->style.animation_iteration_count_value;
+        } else if (name == "animationName" || name == "animation-name") {
+            value = node->style.animation_name_value;
+        } else if (name == "animationDuration" || name == "animation-duration") {
+            value = node->style.animation_duration_value;
+        } else if (name == "animationDelay" || name == "animation-delay") {
+            value = node->style.animation_delay_value;
+        } else if (name == "animationTimingFunction"
+            || name == "animation-timing-function") {
+            value = node->style.animation_timing_function_value;
+        } else if (name == "animationIterationCount"
+            || name == "animation-iteration-count") {
+            value = node->style.animation_iteration_count_value;
         } else if (name == "zIndex") {
-            value = std::to_string(node->style.z_index);
+            value = node->style.z_index_auto
+                ? "auto" : std::to_string(node->style.z_index);
         } else if (name == "opacity") {
             std::ostringstream stream;
-            stream << std::setprecision(6) << node->style.opacity;
+            stream << std::setprecision(6) << (node->opacity_animation_initialized
+                ? node->painted_opacity : node->style.opacity);
             value = stream.str();
+        } else if (name == "backgroundImage") {
+            value = node->style.background_image_value;
+        } else if (name == "backgroundRepeat") {
+            value = node->style.background_repeat;
+        } else if (name == "backgroundPosition") {
+            value = node->style.background_position_x + " "
+                + node->style.background_position_y;
+        } else if (name == "backgroundSize") {
+            value = node->style.background_size_x + " "
+                + node->style.background_size_y;
         } else if (name == "background" || name == "backgroundColor") {
             value = serialize_color(node->style.background_rgba);
         } else if (name == "borderTopWidth") {
-            value = std::to_string(node->style.border_top_width.value) + "px";
+            value = serialize_css_number(node->style.border_top_width.value) + "px";
+        } else if (name == "borderTopStyle") {
+            value = node->style.border_top_width.value > 0 ? "solid" : "none";
         } else if (name == "borderTopColor") {
-            const auto color = node->style.border_top_rgba;
-            char buffer[10]{};
-            std::snprintf(buffer, sizeof(buffer), "#%02x%02x%02x",
-                static_cast<unsigned>((color >> 24U) & 0xFFU),
-                static_cast<unsigned>((color >> 16U) & 0xFFU),
-                static_cast<unsigned>((color >> 8U) & 0xFFU));
-            value = buffer;
+            value = serialize_color(node->style.border_top_rgba);
+        } else if (name == "outlineColor") {
+            value = serialize_color(node->style.outline_rgba);
+        } else if (name == "outlineWidth") {
+            value = serialize_css_number(node->style.outline_width.value) + "px";
+        } else if (name == "outlineStyle") {
+            value = node->style.outline_width.value > 0
+                && (node->style.outline_rgba & 0xFFU) != 0U ? "solid" : "none";
         } else if (name == "overflow") {
-            value = node->style.clip ? "hidden" : "visible";
+            const auto [x, y] = computed_overflow(node->style);
+            value = x == y ? serialize_overflow_mode(x)
+                : serialize_overflow_mode(x) + " " + serialize_overflow_mode(y);
+        } else if (name == "overflowX") {
+            value = serialize_overflow_mode(computed_overflow(node->style).first);
+        } else if (name == "overflowY") {
+            value = serialize_overflow_mode(computed_overflow(node->style).second);
         } else if (name == "color") {
-            auto color = node->style.foreground_rgba;
+            auto color = node->color_animation_active
+                ? node->painted_foreground_rgba
+                : (node->style.foreground_rgba & 0xFFU) != 0U
+                    ? (node->color_animation_initialized
+                        ? node->painted_foreground_rgba : node->style.foreground_rgba)
+                    : 0U;
             for (auto* ancestor = node->parent; (color & 0xFFU) == 0U && ancestor != nullptr;
-                ancestor = ancestor->parent) {
-                color = ancestor->style.foreground_rgba;
+                 ancestor = ancestor->parent) {
+                color = ancestor->color_animation_active
+                    ? ancestor->painted_foreground_rgba
+                    : (ancestor->style.foreground_rgba & 0xFFU) != 0U
+                        ? (ancestor->color_animation_initialized
+                            ? ancestor->painted_foreground_rgba
+                            : ancestor->style.foreground_rgba)
+                        : 0U;
             }
             if ((color & 0xFFU) == 0U) color = 0x000000FFU;
             value = serialize_color(color);
         } else if (name == "fontSize") {
-            value = std::to_string(node->style.font_size) + "px";
+            value = serialize_css_number(node->style.font_size >= 0
+                ? node->style.font_size : inherited_font_size(*node)) + "px";
         } else if (name == "fontFamily") {
-            value = node->style.font_family;
+            value = resolved_font_family(*node);
         } else if (name == "fontWeight") {
-            value = std::to_string(node->style.font_weight);
+            value = std::to_string(resolved_font_weight(*node));
+        } else if (name == "letterSpacing") {
+            value = serialize_css_number(resolved_letter_spacing(*node)) + "px";
+        } else if (name == "wordSpacing") {
+            value = serialize_css_number(resolved_word_spacing(*node)) + "px";
         } else if (name == "lineHeight") {
-            value = std::to_string(node->style.line_height) + "px";
+            const auto authored = node->inline_style_declarations.find("line-height");
+            if ((node->style.important_property_mask & inline_line_height) == 0U
+                && authored != node->inline_style_declarations.end()
+                && authored->second == "normal") {
+                value = "normal";
+                info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
+                return;
+            }
+            auto line_height = node->style.line_height;
+            for (auto* ancestor = node->parent;
+                line_height < 0 && ancestor != nullptr;
+                ancestor = ancestor->parent) {
+                line_height = ancestor->style.line_height;
+            }
+            if (line_height < 0) {
+                const auto font_size = node->style.font_size >= 0
+                    ? node->style.font_size : inherited_font_size(*node);
+                line_height = font_size * 1.2F;
+            }
+            value = serialize_css_number(line_height) + "px";
         } else if (name == "textAlign") {
             value = node->style.text_align;
         } else if (name == "whiteSpace") {
             value = node->style.white_space;
         } else if (name == "visibility") {
-            value = node->style.visibility_hidden ? "hidden" : "visible";
+            auto* current = node;
+            while (current != nullptr && !current->style.visibility_specified) {
+                current = current->parent;
+            }
+            value = current != nullptr && current->style.visibility_hidden
+                ? "hidden" : "visible";
         } else if (name == "pointerEvents") {
             const auto* current = node;
             while (current != nullptr && !current->style.pointer_events_specified) {
                 current = current->parent;
             }
             value = current != nullptr && current->style.pointer_events_none ? "none" : "auto";
+        } else if (name == "cursor") {
+            value = resolved_cursor(*node);
         }
         info.GetReturnValue().Set(js_string(info.GetIsolate(), value.c_str()));
     }
@@ -9009,17 +21151,44 @@ struct v8_dom_runtime::implementation final {
         binding_callback_timer binding_timer(self->profile(binding_category::style));
         auto* node = unwrap_node(info.Holder());
         if (node == nullptr) return;
-        const auto name = to_utf8(info.GetIsolate(), property);
+        const auto raw_name = to_utf8(info.GetIsolate(), property);
+        const auto name = css_property_idl_name(raw_name);
+        if (raw_name.find('-') != std::string::npos) {
+            self->record_feature(
+                "css",
+                "CSSStyleDeclaration.named-property:" + raw_name,
+                "supported",
+                {},
+                "cssom-binding");
+        }
         const auto property_mask = inline_style_mask(name);
         const auto has_important_rule =
             (node->style.important_property_mask & property_mask) != 0U;
         const auto value = to_utf8(info.GetIsolate(), raw_value);
+        self->inventory_css_value_functions(value, "cssom-style");
         if (value.empty()) {
             clear_inline_style(*node, name);
+            sync_style_attribute(*node);
             self->recascade_connected_subtree(*node);
             return;
         }
-        if (name == "width") {
+        if (!valid_cssom_declaration_value(name, value)) return;
+        const auto canonical_name = canonical_css_property_name(name);
+        node->inline_style_declarations[canonical_name] = value;
+        node->inline_important_declarations.erase(canonical_name);
+        if (apply_grid_placement_declaration(node->style, name, value)) {
+            // Placement CSSOM is stored as computed tokens; layout consumes the
+            // existing numeric grid-column projection when applicable.
+        } else if (apply_inset_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |=
+                inline_left | inline_top | inline_right | inline_bottom;
+        } else if (apply_margin_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |= inline_margin;
+        } else if (apply_padding_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |= inline_padding;
+        } else if (apply_border_declaration(node->style, name, value)) {
+            node->style.inline_property_mask |= inline_border;
+        } else if (name == "width") {
             node->style.width = native_document::parse_length(value);
             node->style.inline_property_mask |= inline_width;
         } else if (name == "height") {
@@ -9027,16 +21196,16 @@ struct v8_dom_runtime::implementation final {
             node->style.inline_property_mask |= inline_height;
         } else if (name == "minWidth") {
             node->style.min_width = native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_min_width;
         } else if (name == "minHeight") {
             node->style.min_height = native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_min_height;
         } else if (name == "maxWidth") {
             node->style.max_width = value == "none" ? css_length{} : native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_max_width;
         } else if (name == "maxHeight") {
             node->style.max_height = value == "none" ? css_length{} : native_document::parse_length(value);
-            node->style.inline_property_mask |= inline_min_max_size;
+            node->style.inline_property_mask |= inline_max_height;
         } else if (name == "left") {
             node->style.left = native_document::parse_length(value);
             node->style.inline_property_mask |= inline_left;
@@ -9051,12 +21220,7 @@ struct v8_dom_runtime::implementation final {
             node->style.inline_property_mask |= inline_bottom;
         }
         else if (name == "display") {
-            node->style.display = value == "flex" ? display_mode::flex
-                : value == "inline-flex" ? display_mode::inline_flex
-                : value == "grid" ? display_mode::grid
-                : value == "inline-grid" ? display_mode::inline_grid
-                : value == "inline" || value == "inline-block" ? display_mode::inline_block
-                : value == "none" ? display_mode::none : display_mode::block;
+            node->style.display = parse_display_mode(value);
             node->style.inline_property_mask |= inline_display;
         } else if (name == "position") {
             node->style.position = value == "absolute" ? position_mode::absolute
@@ -9064,6 +21228,17 @@ struct v8_dom_runtime::implementation final {
                 : value == "relative" ? position_mode::relative
                 : position_mode::normal;
             node->style.inline_property_mask |= inline_position;
+        } else if (name == "cssFloat") {
+            node->style.floating = value == "left" ? float_mode::left
+                : value == "right" ? float_mode::right
+                : float_mode::none;
+            node->style.inline_property_mask |= inline_float;
+        } else if (name == "zIndex") {
+            node->style.z_index_auto = value == "auto" || value == "initial"
+                || value == "unset";
+            node->style.z_index = node->style.z_index_auto
+                ? 0 : std::atoi(value.c_str());
+            node->style.inline_property_mask |= inline_z_index;
         } else if (name == "flexDirection") {
             node->style.direction = value == "row" || value == "row-reverse"
                 ? flex_direction::row : flex_direction::column;
@@ -9078,6 +21253,9 @@ struct v8_dom_runtime::implementation final {
                 static_cast<float>(raw_value->NumberValue(
                     info.GetIsolate()->GetCurrentContext()).FromMaybe(1)));
             node->style.inline_property_mask |= inline_flex_shrink;
+        } else if (name == "flexBasis") {
+            node->style.flex_basis = native_document::parse_length(value);
+            node->style.inline_property_mask |= inline_flex_basis;
         } else if (name == "flexWrap") {
             node->style.flex_wrap = value == "wrap" || value == "wrap-reverse";
             node->style.inline_property_mask |= inline_flex_wrap;
@@ -9085,6 +21263,7 @@ struct v8_dom_runtime::implementation final {
             node->style.align_items = value == "center" ? align_mode::center
                 : value == "flex-start" || value == "start" ? align_mode::start
                 : value == "flex-end" || value == "end" ? align_mode::end
+                : value == "baseline" || value == "first baseline" ? align_mode::baseline
                 : align_mode::stretch;
             node->style.inline_property_mask |= inline_align_items;
         } else if (name == "alignSelf") {
@@ -9092,14 +21271,32 @@ struct v8_dom_runtime::implementation final {
             node->style.align_self = value == "center" ? align_mode::center
                 : value == "flex-start" || value == "start" ? align_mode::start
                 : value == "flex-end" || value == "end" ? align_mode::end
+                : value == "baseline" || value == "first baseline" ? align_mode::baseline
                 : align_mode::stretch;
             node->style.inline_property_mask |= inline_align_self;
         } else if (name == "justifyContent") {
             node->style.justify_content = value == "center" ? justify_mode::center
                 : value == "flex-end" || value == "end" ? justify_mode::end
                 : value == "space-between" ? justify_mode::space_between
+                : value == "space-around" ? justify_mode::space_around
+                : value == "space-evenly" ? justify_mode::space_evenly
                 : justify_mode::start;
             node->style.inline_property_mask |= inline_justify_content;
+        } else if (name == "gap" || name == "rowGap" || name == "columnGap") {
+            std::istringstream stream(value);
+            std::string first;
+            std::string second;
+            stream >> first >> second;
+            if (name == "gap") {
+                node->style.row_gap = native_document::parse_length(first);
+                node->style.column_gap = native_document::parse_length(
+                    second.empty() ? first : second);
+            } else if (name == "rowGap") {
+                node->style.row_gap = native_document::parse_length(first);
+            } else {
+                node->style.column_gap = native_document::parse_length(first);
+            }
+            node->style.inline_property_mask |= inline_gap;
         } else if (name == "boxSizing") {
             node->style.border_box = value == "border-box";
             node->style.inline_property_mask |= inline_box_sizing;
@@ -9110,8 +21307,12 @@ struct v8_dom_runtime::implementation final {
                 node->style.border_top_left_radius,
                 node->style.border_top_right_radius,
                 node->style.border_bottom_right_radius,
-                node->style.border_bottom_left_radius);
+            node->style.border_bottom_left_radius);
             node->style.inline_property_mask |= inline_border_radius;
+        } else if (name == "boxShadow") {
+            auto complete = true;
+            apply_box_shadow_value(node->style, value, complete);
+            node->style.inline_property_mask |= inline_box_shadow;
         } else if (name == "transform") {
             native_document::parse_transform_translate(
                 value,
@@ -9123,13 +21324,38 @@ struct v8_dom_runtime::implementation final {
             node->style.transform_specified = true;
             node->style.inline_property_mask |= inline_transform;
         } else if (name == "transformOrigin") {
-            std::istringstream stream(value);
-            std::string x;
-            std::string y;
-            stream >> x >> y;
-            node->style.transform_origin_x = native_document::parse_length(x);
-            node->style.transform_origin_y = native_document::parse_length(y.empty() ? x : y);
-            node->style.inline_property_mask |= inline_transform;
+            native_document::parse_transform_origin(
+                value,
+                node->style.transform_origin_x,
+                node->style.transform_origin_y);
+            node->style.transform_origin_specified = true;
+            node->style.inline_property_mask |= inline_transform_origin;
+        } else if (name == "transition") {
+            apply_transition_shorthand(node->style, value);
+        } else if (name == "transitionProperty") {
+            node->style.transition_property_value = value;
+            configure_style_transitions(node->style);
+        } else if (name == "transitionDuration") {
+            node->style.transition_duration_value = value;
+            configure_style_transitions(node->style);
+        } else if (name == "transitionDelay") {
+            node->style.transition_delay_value = value;
+            configure_style_transitions(node->style);
+        } else if (name == "transitionTimingFunction") {
+            node->style.transition_timing_function_value = value;
+            configure_style_transitions(node->style);
+        } else if (name == "animation") {
+            apply_animation_shorthand(node->style, value);
+        } else if (name == "animationName") {
+            node->style.animation_name_value = value;
+        } else if (name == "animationDuration") {
+            node->style.animation_duration_value = value;
+        } else if (name == "animationDelay") {
+            node->style.animation_delay_value = value;
+        } else if (name == "animationTimingFunction") {
+            node->style.animation_timing_function_value = value;
+        } else if (name == "animationIterationCount") {
+            node->style.animation_iteration_count_value = value;
         } else if (name == "opacity") {
             node->style.opacity = raw_value->IsNullOrUndefined()
                 ? 1.0F
@@ -9139,8 +21365,13 @@ struct v8_dom_runtime::implementation final {
             node->style.background_rgba = native_document::parse_color(value);
             node->style.inline_property_mask |= inline_background;
         } else if (name == "overflow") {
-            node->style.clip = value == "hidden" || value == "clip"
-                || value == "auto" || value == "scroll";
+            std::istringstream stream(value);
+            std::string x;
+            std::string y;
+            stream >> x >> y;
+            node->style.overflow_x = parse_overflow_mode(x);
+            node->style.overflow_y = parse_overflow_mode(y.empty() ? x : y);
+            refresh_overflow_state(node->style);
             node->style.inline_property_mask |= inline_overflow;
         } else if (name == "visibility") {
             node->style.visibility_hidden = value == "hidden" || value == "collapse";
@@ -9150,26 +21381,64 @@ struct v8_dom_runtime::implementation final {
             node->style.pointer_events_none = value == "none";
             node->style.pointer_events_specified = value != "inherit" && value != "unset";
             node->style.inline_property_mask |= inline_pointer_events;
+        } else if (name == "cursor") {
+            node->style.cursor = value;
+            node->style.inline_property_mask |= inline_cursor;
         } else if (name == "color") {
             node->style.foreground_rgba = native_document::parse_color(value);
             node->style.inline_property_mask |= inline_color;
+        } else if (name == "font") {
+            if (value == "inherit" || value == "unset") {
+                node->style.font_size = -1;
+                node->style.line_height = -1;
+                node->style.font_weight = 0;
+                node->style.font_family.clear();
+                node->style.inline_property_mask |= inline_font_size | inline_line_height
+                    | inline_font_weight | inline_font_family;
+            } else if (const auto font = parse_font_shorthand(*node, value); font.has_value()) {
+                node->style.font_size = font->font_size;
+                node->style.line_height = font->line_height;
+                node->style.font_weight = font->font_weight;
+                node->style.font_family = font->font_family;
+                node->style.inline_property_mask |= inline_font_size | inline_line_height
+                    | inline_font_weight | inline_font_family;
+            }
         } else if (name == "fontSize") {
-            node->style.font_size = std::max(0.0F, native_document::parse_length(value).value);
+            node->style.font_size = resolved_declared_font_size(*node, value);
             node->style.inline_property_mask |= inline_font_size;
         } else if (name == "fontFamily") {
-            node->style.font_family = value;
+            node->style.font_family = value == "inherit" || value == "unset"
+                ? std::string{} : value;
             node->style.inline_property_mask |= inline_font_family;
         } else if (name == "fontWeight") {
-            node->style.font_weight = value == "bold" ? 700
+            node->style.font_weight = value == "inherit" || value == "unset" ? 0
+                : value == "bold" ? 700
                 : value == "normal" ? 400
                 : std::max(1, static_cast<int>(std::lround(
                     native_document::parse_length(value).value)));
             node->style.inline_property_mask |= inline_font_weight;
+        } else if (name == "letterSpacing" || name == "wordSpacing") {
+            const auto length = native_document::parse_length(value);
+            const auto font_size = node->style.font_size >= 0
+                ? node->style.font_size : inherited_font_size(*node);
+            const auto spacing = value == "normal" ? 0
+                : length.unit == length_unit::em ? length.value * font_size
+                : length.unit == length_unit::rem ? length.value * 14.0F
+                : length.value;
+            const auto specified = value != "inherit" && value != "unset";
+            if (name == "letterSpacing") {
+                node->style.letter_spacing = spacing;
+                node->style.letter_spacing_specified = specified;
+                node->style.inline_property_mask |= inline_letter_spacing;
+            } else {
+                node->style.word_spacing = spacing;
+                node->style.word_spacing_specified = specified;
+                node->style.inline_property_mask |= inline_word_spacing;
+            }
         } else if (name == "lineHeight") {
-            const auto parsed = std::max(0.0F, native_document::parse_length(value).value);
-            node->style.line_height = parsed > 0 && parsed <= 4
-                ? parsed * (node->style.font_size >= 0 ? node->style.font_size : 14.0F)
-                : parsed;
+            const auto font_size = node->style.font_size >= 0
+                ? node->style.font_size : inherited_font_size(*node);
+            node->style.line_height = resolved_declared_line_height(*node, value, font_size);
             node->style.inline_property_mask |= inline_line_height;
         } else if (name == "textAlign") {
             node->style.text_align = value;
@@ -9178,8 +21447,14 @@ struct v8_dom_runtime::implementation final {
             node->style.white_space = value;
             node->style.inline_property_mask |= inline_white_space;
         }
+        sync_style_attribute(*node);
         if (has_important_rule) self->apply_css_rules(*node);
-        else self->document.mark_dirty();
+        else {
+            self->configure_style_keyframe_animation(*node);
+            self->document.update_style_animations(*node);
+            self->detect_css_compositions(*node);
+            self->document.mark_dirty();
+        }
     }
 
     static void get_computed_style(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -9193,6 +21468,13 @@ struct v8_dom_runtime::implementation final {
 
     static void request_animation_frame(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        current(info.GetIsolate())->record_feature(
+            "web-api",
+            "Window.requestAnimationFrame",
+            info.Length() >= 1 && info[0]->IsFunction() ? "supported" : "invalid-authoring",
+            info.Length() >= 1 && info[0]->IsFunction()
+                ? std::string{} : "a callback function is required",
+            "web-api-binding");
         if (info.Length() < 1 || !info[0]->IsFunction()) return;
         auto* self = current(info.GetIsolate());
         if (self->profile_startup) ++self->startup_raf_scheduled;
@@ -9202,12 +21484,16 @@ struct v8_dom_runtime::implementation final {
             id,
             true,
             false,
-            std::chrono::steady_clock::now()
-                + std::chrono::duration_cast<std::chrono::steady_clock::duration>(frame_period),
+            // requestAnimationFrame is released only by the host compositor's
+            // HTMLML_INPUT_FRAME signal. A wall-clock deadline lets a nested
+            // callback escape between host frames with an unrelated timestamp,
+            // making CSS transition evidence nondeterministic.
+            std::chrono::steady_clock::time_point::max(),
             frame_period,
             v8::Global<v8::Context>(info.GetIsolate(), info.GetIsolate()->GetCurrentContext()),
             v8::Global<v8::Function>(info.GetIsolate(), info[0].As<v8::Function>()),
-            {}});
+            {},
+            -1});
         info.GetReturnValue().Set(v8::Integer::NewFromUnsigned(info.GetIsolate(), id));
     }
 
@@ -9215,6 +21501,12 @@ struct v8_dom_runtime::implementation final {
     {
         if (info.Length() < 1 || !info[0]->IsFunction()) return;
         auto* self = current(info.GetIsolate());
+        self->record_feature(
+            "web-api",
+            repeating ? "Window.setInterval" : "Window.setTimeout",
+            "supported",
+            {},
+            "web-api-binding");
         const auto id = self->next_timer_id++;
         auto delay = info.Length() > 1
             ? info[1]->NumberValue(info.GetIsolate()->GetCurrentContext()).FromMaybe(0)
@@ -9242,7 +21534,8 @@ struct v8_dom_runtime::implementation final {
             interval,
             v8::Global<v8::Context>(info.GetIsolate(), info.GetIsolate()->GetCurrentContext()),
             v8::Global<v8::Function>(info.GetIsolate(), info[0].As<v8::Function>()),
-            std::move(arguments)});
+            std::move(arguments),
+            -1});
         info.GetReturnValue().Set(v8::Integer::NewFromUnsigned(info.GetIsolate(), id));
     }
 
@@ -9258,6 +21551,8 @@ struct v8_dom_runtime::implementation final {
 
     static void clear_timeout(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Window.clearTimer", "supported", {}, "web-api-binding");
         if (info.Length() < 1) return;
         auto* self = current(info.GetIsolate());
         const auto id = info[0]->Uint32Value(info.GetIsolate()->GetCurrentContext()).FromMaybe(0);
@@ -9267,6 +21562,8 @@ struct v8_dom_runtime::implementation final {
 
     static void performance_now(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        current(info.GetIsolate())->record_feature(
+            "web-api", "Performance.now", "supported", {}, "web-api-binding");
         const auto now = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), now));
@@ -9274,6 +21571,12 @@ struct v8_dom_runtime::implementation final {
 
     static void performance_get_entries_by_name(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        current(info.GetIsolate())->record_feature(
+            "web-api",
+            "Performance.getEntriesByName",
+            "unsupported",
+            "performance entries are not retained",
+            "web-api-binding");
         // The probe does not retain a Performance Timeline yet. Returning an
         // empty sequence is the browser-correct result when no matching entry
         // has been recorded and lets consumers feature-test marks safely.
@@ -9282,6 +21585,12 @@ struct v8_dom_runtime::implementation final {
 
     static void performance_entry(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        current(info.GetIsolate())->record_feature(
+            "web-api",
+            "Performance.mark/measure",
+            "partially-supported",
+            "entry-shaped return values without Performance Timeline retention",
+            "web-api-binding");
         auto result = v8::Object::New(info.GetIsolate());
         auto local_context = info.GetIsolate()->GetCurrentContext();
         result->Set(
@@ -9328,8 +21637,22 @@ struct v8_dom_runtime::implementation final {
 
     static void add_event_listener(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
-        if (info.Length() < 2 || !info[1]->IsFunction()) return;
         auto* self = current(info.GetIsolate());
+        feature_decision decision(
+            *self,
+            "dom",
+            "method:EventTarget.addEventListener",
+            "dom-binding");
+        if (info.Length() < 2) {
+            decision.classification = "invalid-authoring";
+            decision.semantic_slice = "an event type and listener are required";
+            return;
+        }
+        if (!info[1]->IsFunction()) {
+            decision.classification = "unsupported";
+            decision.semantic_slice = "EventListener objects with handleEvent are not implemented";
+            return;
+        }
         const auto type = to_utf8(info.GetIsolate(), info[0]);
         bool use_capture = false;
         bool use_once = false;
@@ -9349,15 +21672,39 @@ struct v8_dom_runtime::implementation final {
                         js_string(info.GetIsolate(), "once")).ToLocal(&once)) {
                     use_once = once->BooleanValue(info.GetIsolate());
                 }
+                v8::Local<v8::Value> passive;
+                const auto passive_requested = info[2].As<v8::Object>()->Get(
+                        info.GetIsolate()->GetCurrentContext(),
+                        js_string(info.GetIsolate(), "passive")).ToLocal(&passive)
+                    && passive->BooleanValue(info.GetIsolate());
+                v8::Local<v8::Value> signal;
+                const auto signal_requested = info[2].As<v8::Object>()->Get(
+                        info.GetIsolate()->GetCurrentContext(),
+                        js_string(info.GetIsolate(), "signal")).ToLocal(&signal)
+                    && !signal->IsNullOrUndefined();
+                if (passive_requested || signal_requested) {
+                    decision.classification = "partially-supported";
+                    decision.semantic_slice = "capture and once; passive enforcement and AbortSignal removal are not implemented";
+                }
             }
         }
+        self->record_feature(
+            "event",
+            "type:" + type,
+            "unobserved-code-path",
+            "listener registered but native dispatch has not been observed",
+            "event-listener-registration");
         if (self->in_frame_context() || type != "resize") {
-            uint32_t target_node_id = 0;
-            for (const auto& [key, wrapper] : self->node_wrappers) {
-                auto local_wrapper = wrapper.Get(info.GetIsolate());
-                if (!local_wrapper.IsEmpty() && local_wrapper->StrictEquals(info.This())) {
-                    target_node_id = static_cast<uint32_t>(key);
-                    break;
+            uint32_t target_node_id = self->is_document_object(info.This())
+                ? std::numeric_limits<uint32_t>::max()
+                : 0U;
+            if (target_node_id == 0U) {
+                for (const auto& [key, wrapper] : self->node_wrappers) {
+                    auto local_wrapper = wrapper.Get(info.GetIsolate());
+                    if (!local_wrapper.IsEmpty() && local_wrapper->StrictEquals(info.This())) {
+                        target_node_id = static_cast<uint32_t>(key);
+                        break;
+                    }
                 }
             }
             self->frame_event_listeners[type].emplace_back(
@@ -9381,8 +21728,15 @@ struct v8_dom_runtime::implementation final {
 
     static void remove_event_listener(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
-        if (info.Length() < 2 || !info[1]->IsFunction()) return;
         auto* self = current(info.GetIsolate());
+        self->record_feature(
+            "dom",
+            "method:EventTarget.removeEventListener",
+            info.Length() >= 2 && info[1]->IsFunction() ? "supported" : "invalid-authoring",
+            info.Length() >= 2 && info[1]->IsFunction()
+                ? std::string{} : "an event type and function listener are required",
+            "dom-binding");
+        if (info.Length() < 2 || !info[1]->IsFunction()) return;
         const auto type = to_utf8(info.GetIsolate(), info[0]);
         const auto requested = info[1].As<v8::Function>();
         bool requested_capture = false;
@@ -9399,12 +21753,16 @@ struct v8_dom_runtime::implementation final {
             }
         }
         if (self->in_frame_context() || type != "resize") {
-            uint32_t target_node_id = 0;
-            for (const auto& [key, wrapper] : self->node_wrappers) {
-                auto local_wrapper = wrapper.Get(info.GetIsolate());
-                if (!local_wrapper.IsEmpty() && local_wrapper->StrictEquals(info.This())) {
-                    target_node_id = static_cast<uint32_t>(key);
-                    break;
+            uint32_t target_node_id = self->is_document_object(info.This())
+                ? std::numeric_limits<uint32_t>::max()
+                : 0U;
+            if (target_node_id == 0U) {
+                for (const auto& [key, wrapper] : self->node_wrappers) {
+                    auto local_wrapper = wrapper.Get(info.GetIsolate());
+                    if (!local_wrapper.IsEmpty() && local_wrapper->StrictEquals(info.This())) {
+                        target_node_id = static_cast<uint32_t>(key);
+                        break;
+                    }
                 }
             }
             auto listeners = self->frame_event_listeners.find(type);
@@ -9466,11 +21824,13 @@ struct v8_dom_runtime::implementation final {
                 : v8::False(info.GetIsolate()));
     }
 
-    static void event_constructor(const v8::FunctionCallbackInfo<v8::Value>& info)
+    static void initialize_constructed_event(
+        const v8::FunctionCallbackInfo<v8::Value>& info,
+        v8::Local<v8::Object> event,
+        bool mouse_event)
     {
         auto isolate = info.GetIsolate();
         auto local_context = isolate->GetCurrentContext();
-        auto event = info.IsConstructCall() ? info.This() : v8::Object::New(isolate);
         event->Set(
             local_context,
             js_string(isolate, "type"),
@@ -9478,8 +21838,33 @@ struct v8_dom_runtime::implementation final {
         event->Set(local_context, js_string(isolate, "bubbles"), v8::False(isolate)).Check();
         event->Set(local_context, js_string(isolate, "cancelable"), v8::False(isolate)).Check();
         event->Set(local_context, js_string(isolate, "composed"), v8::False(isolate)).Check();
+        event->Set(
+            local_context,
+            js_string(isolate, "__htmlMlComposedPath"),
+            v8::Array::New(isolate)).Check();
         event->Set(local_context, js_string(isolate, "defaultPrevented"), v8::False(isolate)).Check();
         event->Set(local_context, js_string(isolate, "eventPhase"), v8::Integer::New(isolate, 0)).Check();
+        if (mouse_event) {
+            const auto set_number = [&](const char* name, double value) {
+                event->Set(
+                    local_context,
+                    js_string(isolate, name),
+                    v8::Number::New(isolate, value)).Check();
+            };
+            for (const auto* name : {
+                    "detail", "screenX", "screenY", "clientX", "clientY",
+                    "button", "buttons", "movementX", "movementY"}) {
+                set_number(name, 0);
+            }
+            for (const auto* name : {"ctrlKey", "shiftKey", "altKey", "metaKey"}) {
+                event->Set(local_context, js_string(isolate, name), v8::False(isolate)).Check();
+            }
+            event->Set(local_context, js_string(isolate, "view"), v8::Null(isolate)).Check();
+            event->Set(
+                local_context,
+                js_string(isolate, "relatedTarget"),
+                v8::Null(isolate)).Check();
+        }
         if (info.Length() > 1 && info[1]->IsObject()) {
             auto options = info[1].As<v8::Object>();
             const auto copy_option = [&](const char* name) {
@@ -9493,20 +21878,102 @@ struct v8_dom_runtime::implementation final {
             copy_option("bubbles");
             copy_option("cancelable");
             copy_option("composed");
+            if (mouse_event) {
+                copy_option("view");
+                copy_option("screenX");
+                copy_option("screenY");
+                copy_option("clientX");
+                copy_option("clientY");
+                copy_option("ctrlKey");
+                copy_option("shiftKey");
+                copy_option("altKey");
+                copy_option("metaKey");
+                copy_option("button");
+                copy_option("buttons");
+                copy_option("relatedTarget");
+                copy_option("movementX");
+                copy_option("movementY");
+            }
         }
-        event->Set(
-            local_context,
-            js_string(isolate, "preventDefault"),
-            v8::Function::New(local_context, event_prevent_default).ToLocalChecked()).Check();
-        event->Set(
-            local_context,
-            js_string(isolate, "stopPropagation"),
-            v8::Function::New(local_context, event_stop_propagation).ToLocalChecked()).Check();
-        event->Set(
-            local_context,
-            js_string(isolate, "stopImmediatePropagation"),
-            v8::Function::New(local_context, event_stop_immediate_propagation).ToLocalChecked()).Check();
+    }
+
+    static void event_constructor(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto event = info.IsConstructCall() ? info.This() : v8::Object::New(info.GetIsolate());
+        initialize_constructed_event(info, event, false);
         info.GetReturnValue().Set(event);
+    }
+
+    static void mouse_event_constructor(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto event = info.IsConstructCall() ? info.This() : v8::Object::New(info.GetIsolate());
+        initialize_constructed_event(info, event, true);
+        info.GetReturnValue().Set(event);
+    }
+
+    static void css_supports(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        info.GetReturnValue().Set(v8::False(info.GetIsolate()));
+    }
+
+    static void css_escape(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* isolate = info.GetIsolate();
+        auto local_context = isolate->GetCurrentContext();
+        if (info.Length() == 0) {
+            isolate->ThrowException(v8::Exception::TypeError(
+                js_string(isolate, "CSS.escape requires one argument")));
+            return;
+        }
+        auto input = info[0]->ToString(local_context).ToLocalChecked();
+        const auto length = input->Length();
+        std::vector<uint16_t> units(static_cast<size_t>(length));
+        input->WriteV2(
+            isolate,
+            0,
+            static_cast<uint32_t>(length),
+            units.data());
+        std::u16string output;
+        const auto append_hex_escape = [&output](uint16_t unit) {
+            static constexpr char16_t digits[] = u"0123456789abcdef";
+            char16_t reversed[4];
+            size_t count = 0;
+            auto value = static_cast<uint32_t>(unit);
+            do {
+                reversed[count++] = digits[value & 0xfU];
+                value >>= 4U;
+            } while (value != 0U);
+            output.push_back(u'\\');
+            while (count > 0U) output.push_back(reversed[--count]);
+            output.push_back(u' ');
+        };
+        for (int index = 0; index < length; ++index) {
+            const auto unit = units[static_cast<size_t>(index)];
+            const auto first = units.empty() ? 0U : units.front();
+            if (unit == 0U) {
+                output.push_back(u'\ufffd');
+            } else if ((unit >= 1U && unit <= 0x1fU) || unit == 0x7fU
+                || (index == 0 && unit >= u'0' && unit <= u'9')
+                || (index == 1 && first == u'-' && unit >= u'0' && unit <= u'9')) {
+                append_hex_escape(unit);
+            } else if (index == 0 && unit == u'-' && length == 1) {
+                output.push_back(u'\\');
+                output.push_back(unit);
+            } else if (unit >= 0x80U || unit == u'-' || unit == u'_'
+                || (unit >= u'0' && unit <= u'9')
+                || (unit >= u'A' && unit <= u'Z')
+                || (unit >= u'a' && unit <= u'z')) {
+                output.push_back(unit);
+            } else {
+                output.push_back(u'\\');
+                output.push_back(unit);
+            }
+        }
+        info.GetReturnValue().Set(v8::String::NewFromTwoByte(
+            isolate,
+            reinterpret_cast<const uint16_t*>(output.data()),
+            v8::NewStringType::kNormal,
+            static_cast<int>(output.size())).ToLocalChecked());
     }
 
     static resize_observer_state* resize_observer(
@@ -9556,6 +22023,12 @@ struct v8_dom_runtime::implementation final {
     static void resize_observer_constructor(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
+        self->record_feature(
+            "web-api",
+            "ResizeObserver.constructor",
+            "partially-supported",
+            "element content-box size delivery without the complete box-option surface",
+            "web-api-binding");
         auto local_context = info.GetIsolate()->GetCurrentContext();
         auto object = info.IsConstructCall() ? info.This() : v8::Object::New(info.GetIsolate());
         if (info.Length() < 1 || !info[0]->IsFunction()) {
@@ -9588,6 +22061,15 @@ struct v8_dom_runtime::implementation final {
 
     static void observer_constructor(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        auto feature = info.Data()->IsString()
+            ? to_utf8(info.GetIsolate(), info.Data())
+            : std::string("Observer.constructor");
+        current(info.GetIsolate())->record_feature(
+            "web-api",
+            std::move(feature),
+            "unsupported",
+            "observe and disconnect are inert",
+            "web-api-binding");
         auto isolate = info.GetIsolate();
         auto local_context = isolate->GetCurrentContext();
         auto observer = info.IsConstructCall() ? info.This() : v8::Object::New(isolate);
@@ -9614,16 +22096,73 @@ struct v8_dom_runtime::implementation final {
 
     static void match_media(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
+        auto* self = current(info.GetIsolate());
         auto isolate = info.GetIsolate();
         auto local_context = isolate->GetCurrentContext();
         auto result = v8::Object::New(isolate);
-        result->Set(local_context, js_string(isolate, "matches"), v8::False(isolate)).Check();
+        const auto query = info.Length() > 0 ? to_utf8(isolate, info[0]) : std::string{};
+        const auto query_supported = self->inventory_media_query(query);
+        self->record_feature(
+            "web-api",
+            "Window.matchMedia",
+            query_supported ? "partially-supported" : "unsupported",
+            query_supported
+                ? "snapshot matches without MediaQueryList change-event delivery"
+                : "query contains an unsupported media type or condition",
+            "web-api-binding");
+        result->Set(
+            local_context,
+            js_string(isolate, "matches"),
+            v8::Boolean::New(isolate, self->media_query_matches(query))).Check();
         result->Set(local_context, js_string(isolate, "media"), info.Length() > 0 ? info[0] : v8::Local<v8::Value>(js_string(isolate, ""))).Check();
         result->Set(local_context, js_string(isolate, "addEventListener"), v8::Function::New(local_context, console_log).ToLocalChecked()).Check();
         result->Set(local_context, js_string(isolate, "removeEventListener"), v8::Function::New(local_context, console_log).ToLocalChecked()).Check();
         result->Set(local_context, js_string(isolate, "addListener"), v8::Function::New(local_context, console_log).ToLocalChecked()).Check();
         result->Set(local_context, js_string(isolate, "removeListener"), v8::Function::New(local_context, console_log).ToLocalChecked()).Check();
         info.GetReturnValue().Set(result);
+    }
+
+    bool dispatch_transition_events()
+    {
+        auto events = document.take_transition_events();
+        if (events.empty()) return true;
+        v8::Isolate::Scope isolate_scope(isolate);
+        v8::HandleScope handle_scope(isolate);
+        auto local_context = frame_context.IsEmpty()
+            ? context.Get(isolate)
+            : frame_context.Get(isolate);
+        v8::Context::Scope context_scope(local_context);
+        v8::TryCatch try_catch(isolate);
+        for (const auto& transition : events) {
+            auto* node = document.find_by_native_id(transition.node_id);
+            if (node == nullptr) continue;
+            auto target = wrap_node(*node);
+            auto event = v8::Object::New(isolate);
+            event->Set(local_context, js_string(isolate, "type"),
+                js_string(isolate, transition.type.c_str())).Check();
+            event->Set(local_context, js_string(isolate, "bubbles"), v8::True(isolate)).Check();
+            event->Set(local_context, js_string(isolate, "cancelable"), v8::False(isolate)).Check();
+            event->Set(local_context, js_string(isolate, "propertyName"),
+                js_string(isolate, transition.property_name.c_str())).Check();
+            event->Set(local_context, js_string(isolate, "elapsedTime"),
+                v8::Number::New(isolate, transition.elapsed_time_seconds)).Check();
+            event->Set(local_context, js_string(isolate, "pseudoElement"),
+                js_string(isolate, "")).Check();
+            v8::Local<v8::Value> dispatcher;
+            if (!target->Get(local_context, js_string(isolate, "dispatchEvent"))
+                    .ToLocal(&dispatcher)
+                || !dispatcher->IsFunction()) continue;
+            v8::Local<v8::Value> arguments[] = {event};
+            if (dispatcher.As<v8::Function>()->Call(
+                    local_context, target, 1, arguments).IsEmpty()) {
+                last_error = "CSS transition-event dispatch failed: "
+                    + describe_exception(try_catch, local_context);
+                ++frame_script_error_count;
+                return false;
+            }
+        }
+        isolate->PerformMicrotaskCheckpoint();
+        return true;
     }
 
     static void empty_array(const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -9644,20 +22183,30 @@ struct v8_dom_runtime::implementation final {
     static void dispatch_event(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
+        self->record_feature(
+            "dom",
+            "method:EventTarget.dispatchEvent",
+            info.Length() >= 1 && info[0]->IsObject() ? "supported" : "invalid-authoring",
+            info.Length() >= 1 && info[0]->IsObject()
+                ? std::string{} : "an Event object is required",
+            "dom-binding");
         if (info.Length() < 1 || !info[0]->IsObject()) return;
         auto local_context = info.GetIsolate()->GetCurrentContext();
         auto event = info[0].As<v8::Object>();
         v8::Local<v8::Value> type_value;
         if (!event->Get(local_context, js_string(info.GetIsolate(), "type")).ToLocal(&type_value)) return;
         const auto type = to_utf8(info.GetIsolate(), type_value);
+        self->record_feature(
+            "event",
+            "type:" + type,
+            "supported",
+            {},
+            "event-dispatch");
         auto receiver = info.This()->IsObject()
             ? info.This().As<v8::Object>()
             : v8::Local<v8::Object> {};
         const auto receiver_is_document = !receiver.IsEmpty()
-            && receiver->InternalFieldCount() > 0
-            && receiver->GetAlignedPointerFromInternalField(
-                0,
-                v8::kEmbedderDataTypeTagDefault) == self;
+            && self->is_document_object(receiver);
         auto* target = receiver.IsEmpty() || receiver_is_document
             ? nullptr
             : unwrap_node(receiver);
@@ -9747,16 +22296,47 @@ struct v8_dom_runtime::implementation final {
         };
 
         auto global = local_context->Global();
+        auto document_target = global;
+        v8::Local<v8::Value> document_value;
+        if (global->Get(
+                local_context,
+                js_string(info.GetIsolate(), "document")).ToLocal(&document_value)
+            && document_value->IsObject()) {
+            document_target = document_value.As<v8::Object>();
+        }
         if (target == nullptr) {
-            if (!invoke_listeners(0U, global, true, 2)
+            const auto direct_target_id = receiver_is_document
+                ? std::numeric_limits<uint32_t>::max()
+                : 0U;
+            const auto direct_target = receiver_is_document ? document_target : global;
+            if (!invoke_listeners(direct_target_id, direct_target, true, 2)
                 || (!immediate_propagation_stopped()
-                    && !invoke_listeners(0U, global, false, 2))) return;
+                    && !invoke_listeners(direct_target_id, direct_target, false, 2))) return;
+            if (!receiver_is_document && !immediate_propagation_stopped()) {
+                v8::Local<v8::Value> handler;
+                if (global->Get(
+                        local_context,
+                        js_string(info.GetIsolate(), property_name.c_str())).ToLocal(&handler)
+                    && handler->IsFunction()) {
+                    set_phase(global, 2);
+                    if (handler.As<v8::Function>()->Call(
+                            local_context,
+                            global,
+                            1,
+                            arguments).IsEmpty()) return;
+                }
+            }
         } else {
             std::vector<dom_node*> ancestry;
             for (auto* node = target; node != nullptr; node = node->parent) {
                 ancestry.push_back(node);
             }
             if (!invoke_listeners(0U, global, true, 1)) return;
+            if (!invoke_listeners(
+                    std::numeric_limits<uint32_t>::max(),
+                    document_target,
+                    true,
+                    1)) return;
             for (size_t cursor = ancestry.size(); !propagation_stopped() && cursor-- > 1;) {
                 auto* node = ancestry[cursor];
                 if (!invoke_listeners(node->id, self->wrap_node(*node), true, 1)) return;
@@ -9775,22 +22355,50 @@ struct v8_dom_runtime::implementation final {
                         || (!immediate_propagation_stopped() && !invoke_property(*node, 3))) return;
                 }
                 if (!propagation_stopped()
+                    && !invoke_listeners(
+                        std::numeric_limits<uint32_t>::max(),
+                        document_target,
+                        false,
+                        3)) return;
+                if (!propagation_stopped()
                     && !invoke_listeners(0U, global, false, 3)) return;
             }
         }
         if (type == "innerWindowLoad") {
+            auto received = false;
             for (auto& [node_id, listener] : self->frame_load_listeners) {
                 static_cast<void>(node_id);
                 auto owner_context = self->context.Get(info.GetIsolate());
-                v8::Context::Scope owner_scope(owner_context);
-                auto detail = v8::Object::New(info.GetIsolate());
-                detail->Set(owner_context, js_string(info.GetIsolate(), "received"), v8::False(info.GetIsolate())).Check();
-                auto owner_event = v8::Object::New(info.GetIsolate());
-                owner_event->Set(owner_context, js_string(info.GetIsolate(), "detail"), detail).Check();
-                v8::Local<v8::Value> arguments[] = {owner_event};
-                auto callback = listener.Get(info.GetIsolate());
-                if (!callback.IsEmpty()) {
-                    callback->Call(owner_context, owner_context->Global(), 1, arguments).ToLocalChecked();
+                {
+                    v8::Context::Scope owner_scope(owner_context);
+                    auto detail = v8::Object::New(info.GetIsolate());
+                    detail->Set(owner_context, js_string(info.GetIsolate(), "received"), v8::False(info.GetIsolate())).Check();
+                    auto owner_event = v8::Object::New(info.GetIsolate());
+                    owner_event->Set(owner_context, js_string(info.GetIsolate(), "detail"), detail).Check();
+                    v8::Local<v8::Value> arguments[] = {owner_event};
+                    auto callback = listener.Get(info.GetIsolate());
+                    if (!callback.IsEmpty()) {
+                        callback->Call(owner_context, owner_context->Global(), 1, arguments).ToLocalChecked();
+                    }
+                    v8::Local<v8::Value> received_value;
+                    if (detail->Get(
+                            owner_context,
+                            js_string(info.GetIsolate(), "received")).ToLocal(&received_value)) {
+                        received = received || received_value->BooleanValue(info.GetIsolate());
+                    }
+                }
+            }
+            if (received) {
+                v8::Context::Scope source_scope(local_context);
+                v8::Local<v8::Value> detail_value;
+                if (event->Get(
+                        local_context,
+                        js_string(info.GetIsolate(), "detail")).ToLocal(&detail_value)
+                    && detail_value->IsObject()) {
+                    detail_value.As<v8::Object>()->Set(
+                        local_context,
+                        js_string(info.GetIsolate(), "received"),
+                        v8::True(info.GetIsolate())).Check();
                 }
             }
         }
@@ -9851,12 +22459,27 @@ struct v8_dom_runtime::implementation final {
         info.GetReturnValue().Set(js_string(info.GetIsolate(), url.c_str()));
     }
 
+    static void resolve_url(const v8::FunctionCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        const auto value = info.Length() > 0
+            ? to_utf8(info.GetIsolate(), info[0])
+            : std::string{};
+        auto base = info.Length() > 1
+            ? to_utf8(info.GetIsolate(), info[1])
+            : std::string{};
+        if (base.empty()) base = self->document_base_address;
+        const auto resolved = resolve_resource_url(value, base);
+        info.GetReturnValue().Set(js_string(info.GetIsolate(), resolved.c_str()));
+    }
+
     static void get_inner_width(v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info)
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_geometry));
-        const auto [width, height] = self->viewport_provider();
+        const auto [width, height, device_scale_factor] = self->viewport_provider();
         static_cast<void>(height);
+        static_cast<void>(device_scale_factor);
         info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), width));
     }
 
@@ -9864,20 +22487,80 @@ struct v8_dom_runtime::implementation final {
     {
         auto* self = current(info.GetIsolate());
         binding_callback_timer binding_timer(self->profile(binding_category::dom_geometry));
-        const auto [width, height] = self->viewport_provider();
+        const auto [width, height, device_scale_factor] = self->viewport_provider();
         static_cast<void>(width);
+        static_cast<void>(device_scale_factor);
         info.GetReturnValue().Set(v8::Number::New(info.GetIsolate(), height));
+    }
+
+    static void get_device_pixel_ratio(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        binding_callback_timer binding_timer(self->profile(binding_category::dom_geometry));
+        const auto [width, height, device_scale_factor] = self->viewport_provider();
+        static_cast<void>(width);
+        static_cast<void>(height);
+        info.GetReturnValue().Set(v8::Number::New(
+            info.GetIsolate(),
+            std::isfinite(device_scale_factor) && device_scale_factor > 0.0
+                ? device_scale_factor
+                : 1.0));
+    }
+
+    static void get_screen_width(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        binding_callback_timer binding_timer(self->profile(binding_category::dom_geometry));
+        const auto [width, height, device_scale_factor] = self->viewport_provider();
+        static_cast<void>(height);
+        static_cast<void>(device_scale_factor);
+        info.GetReturnValue().Set(v8::Number::New(
+            info.GetIsolate(),
+            std::max(0.0F, width)));
+    }
+
+    static void get_screen_height(
+        v8::Local<v8::Name>,
+        const v8::PropertyCallbackInfo<v8::Value>& info)
+    {
+        auto* self = current(info.GetIsolate());
+        binding_callback_timer binding_timer(self->profile(binding_category::dom_geometry));
+        const auto [width, height, device_scale_factor] = self->viewport_provider();
+        static_cast<void>(width);
+        static_cast<void>(device_scale_factor);
+        info.GetReturnValue().Set(v8::Number::New(
+            info.GetIsolate(),
+            std::max(0.0F, height)));
     }
 
     static void console_log(const v8::FunctionCallbackInfo<v8::Value>& info)
     {
         if (!info.Data()->IsInt32()) return;
         auto* self = current(info.GetIsolate());
+        auto* isolate = info.GetIsolate();
+        auto local_context = isolate->GetCurrentContext();
         const auto level_index = std::clamp(info.Data().As<v8::Int32>()->Value(), 0, 2);
         constexpr std::array<std::string_view, 3> levels{"log", "warn", "error"};
         std::ostringstream message;
         for (int index = 0; index < info.Length(); ++index) {
-            auto rendered = to_utf8(info.GetIsolate(), info[index]);
+            auto rendered = to_utf8(isolate, info[index]);
+            if (info[index]->IsObject()) {
+                v8::TryCatch try_catch(isolate);
+                v8::Local<v8::Value> stack;
+                if (info[index].As<v8::Object>()
+                        ->Get(local_context, js_string(isolate, "stack"))
+                        .ToLocal(&stack)
+                    && stack->IsString()) {
+                    const auto stack_text = to_utf8(isolate, stack);
+                    if (!stack_text.empty() && stack_text != rendered) {
+                        rendered += "\n" + stack_text;
+                    }
+                }
+            }
             message << (index == 0 ? "" : " | ") << rendered;
         }
         const auto payload = std::string(levels[static_cast<size_t>(level_index)])
@@ -9928,7 +22611,10 @@ struct v8_dom_runtime::implementation final {
     }
 
     native_document& document;
-    std::function<std::pair<float, float>()> viewport_provider;
+    std::function<v8_dom_runtime::viewport_metrics()> viewport_provider;
+    resource_loader load_resource_callback;
+    static constexpr size_t maximum_resource_prefetches = 16U;
+    std::unordered_map<std::string, std::future<prefetched_resource>> prefetched_resources;
     v8::ArrayBuffer::Allocator* allocator{nullptr};
     v8::Isolate* isolate{nullptr};
     v8::CpuProfiler* cpu_profiler{nullptr};
@@ -9937,18 +22623,25 @@ struct v8_dom_runtime::implementation final {
     v8::Global<v8::ObjectTemplate> style_template;
     v8::Global<v8::ObjectTemplate> frame_document_template;
     v8::Global<v8::ObjectTemplate> frame_window_template;
+    v8::Global<v8::Object> dom_implementation_object;
     v8::Global<v8::Object> document_object;
     v8::Global<v8::ObjectTemplate> document_template;
     v8::Global<v8::Context> frame_context;
     std::unordered_map<uint64_t, v8::Global<v8::Object>> node_wrappers;
+    std::unordered_map<uint64_t, v8::Global<v8::Object>> class_list_wrappers;
     std::unordered_map<uint64_t, v8::Global<v8::Object>> style_wrappers;
     std::unordered_map<uint64_t, v8::Global<v8::Object>> computed_style_wrappers;
+    std::unordered_set<uint64_t> detached_document_roots;
+    std::vector<std::pair<std::string, std::string>> document_cookies;
     std::unordered_map<uint64_t, v8::Global<v8::Object>> canvas_contexts;
     std::unordered_map<uint64_t, std::unique_ptr<canvas_state>> canvas_states;
     std::unordered_map<uint32_t, v8::Global<v8::Object>> frame_documents;
+    std::unordered_map<uint32_t, dom_node*> provisional_frame_bodies;
     std::unordered_map<uint32_t, v8::Global<v8::Object>> frame_windows;
     std::unordered_map<uint32_t, v8::Global<v8::Object>> actual_frame_windows;
     std::unordered_map<uint32_t, v8::Global<v8::Object>> actual_frame_documents;
+    session_storage_state outer_session_storage;
+    std::unordered_map<uint32_t, std::unique_ptr<session_storage_state>> frame_session_storage;
     std::unordered_map<uint32_t, v8::Global<v8::Function>> frame_load_listeners;
     std::unordered_map<std::string, std::vector<v8::Global<v8::Function>>> frame_event_listeners;
     std::unordered_map<std::string, std::vector<v8::Global<v8::Context>>>
@@ -9986,22 +22679,56 @@ struct v8_dom_runtime::implementation final {
     uint32_t next_object_url_id{1};
     std::unordered_map<std::string, std::string> object_urls;
     std::vector<dom_node*> pending_frame_hydrations;
+    static constexpr size_t detached_dom_gc_threshold = 512U;
+    std::vector<uint32_t> detached_dom_roots;
+    size_t detached_nodes_since_gc{0U};
+    uint64_t released_detached_dom_nodes{0U};
+    bool detached_dom_gc_requested{false};
     std::string last_error;
     std::vector<pending_promise_rejection> pending_promise_rejections;
     std::filesystem::path resource_root;
+    std::string document_base_address;
+    std::string frame_base_address;
     std::vector<css_rule> css_rules;
+    uint32_t active_stylesheet_owner_id{0};
+    std::unordered_map<std::string, css_opacity_keyframes> opacity_keyframes;
     std::unordered_map<std::string, std::vector<size_t>> css_rules_by_class;
     std::unordered_map<std::string, std::vector<size_t>> css_rules_by_id;
     std::unordered_map<std::string, std::vector<size_t>> css_rules_by_tag;
+    std::unordered_map<std::string, std::vector<size_t>> css_rules_by_attribute;
+    std::vector<size_t> css_focus_rules;
     std::vector<size_t> unindexed_css_rules;
+    std::unordered_set<std::string> css_attribute_dependencies;
+    std::vector<hover_selector_dependency> hover_selector_dependencies;
     std::unordered_map<std::string, std::string> css_variables;
+    std::unordered_set<std::string> important_css_variables;
+    mutable std::mutex feature_observation_mutex;
+    std::unordered_map<std::string, feature_observation> feature_observations;
+    std::unordered_map<std::string, std::unordered_set<uint32_t>>
+        composition_observed_nodes;
+    // Only the runtime worker writes observations. Cached node pointers remain
+    // stable across unordered_map rehashes, so repeat decisions can increment
+    // atomically without taking the report snapshot mutex on every hot API call.
+    std::unordered_map<std::string, feature_observation*> feature_observation_writer_cache;
     uint64_t frame_script_execution_count{0};
     uint64_t frame_script_error_count{0};
     static constexpr size_t maximum_compilation_cache_entries = 256U;
     static constexpr size_t maximum_compilation_cache_source_bytes = 256U * 1024U * 1024U;
+    static constexpr size_t minimum_hot_cache_source_bytes = 4U * 1024U;
     static constexpr uint64_t maximum_persistent_cache_entry_bytes = 64U * 1024U * 1024U;
     static constexpr size_t maximum_persistent_cache_entries = 1024U;
     static constexpr uint64_t maximum_persistent_cache_bytes = 512U * 1024U * 1024U;
+    static constexpr uint64_t maximum_resource_cache_entry_bytes = 64U * 1024U * 1024U;
+    static constexpr uint32_t maximum_resource_entity_tag_bytes = 4096U;
+    static constexpr size_t maximum_resource_cache_entries = 2048U;
+    static constexpr uint64_t maximum_resource_cache_bytes = 512U * 1024U * 1024U;
+    static constexpr size_t maximum_process_resource_cache_entries = 512U;
+    static constexpr size_t maximum_process_resource_cache_bytes = 64U * 1024U * 1024U;
+    inline static std::mutex process_resource_cache_mutex;
+    inline static std::unordered_map<std::string, process_resource_cache_entry>
+        process_resource_cache;
+    inline static size_t process_resource_cache_bytes{0U};
+    inline static uint64_t process_resource_cache_access{0U};
     std::string compilation_cache_directory;
     std::unordered_map<std::string, compilation_cache_entry> compilation_cache;
     std::deque<std::string> compilation_cache_order;
@@ -10014,12 +22741,29 @@ struct v8_dom_runtime::implementation final {
     uint64_t compilation_cache_bytes_read_count{0};
     uint64_t compilation_cache_bytes_written_count{0};
     uint64_t compilation_time_nanosecond_count{0};
+    uint64_t resource_cache_request_count{0};
+    uint64_t resource_cache_hit_count{0};
+    uint64_t resource_cache_miss_count{0};
+    uint64_t resource_cache_rejection_count{0};
+    uint64_t resource_cache_bytes_read_count{0};
+    uint64_t resource_cache_bytes_written_count{0};
+    uint64_t resource_cache_memory_hit_count{0};
+    uint64_t css_profile_candidate_checks{0};
+    uint64_t css_profile_matched_rules{0};
+    uint64_t css_profile_declaration_applications{0};
+    uint64_t css_profile_reset_nanoseconds{0};
+    uint64_t css_profile_matching_nanoseconds{0};
+    uint64_t css_profile_declarations_nanoseconds{0};
+    uint64_t css_profile_finalize_nanoseconds{0};
+    size_t last_traced_unindexed_css_count{0};
+    uint32_t resource_writes_since_prune{0};
     uint32_t persistent_writes_since_prune{0};
     uint64_t input_event_dispatch_count{0};
     uint64_t input_callback_invocation_count{0};
     dom_node* pointer_capture_target{nullptr};
     dom_node* pointer_down_target{nullptr};
     dom_node* hover_target{nullptr};
+    uint32_t current_cursor_kind_value{HTMLML_CURSOR_DEFAULT};
     dom_node* current_related_target{nullptr};
     double pointer_down_x{0};
     double pointer_down_y{0};
@@ -10030,6 +22774,9 @@ struct v8_dom_runtime::implementation final {
     bool has_pointer_position{false};
     uint64_t current_input_sequence{0};
     dom_node* active_element{nullptr};
+    bool focus_visible{false};
+    double last_animation_frame_timestamp_ms{0};
+    double caret_blink_epoch_ms{0};
     std::string frame_last_error_value;
     const std::string empty_string;
     uint64_t last_resize_outer_listeners_ns{0};
@@ -10038,6 +22785,7 @@ struct v8_dom_runtime::implementation final {
     uint64_t last_resize_observers_ns{0};
     bool profile_bindings{false};
     bool profile_startup{false};
+    bool profile_css{false};
     std::array<binding_callback_stats, binding_category_count> binding_totals{};
     std::array<binding_callback_stats, binding_category_count> last_resize_binding_profile{};
     std::string last_resize_cpu_profile;
@@ -10058,17 +22806,22 @@ struct v8_dom_runtime::implementation final {
     uint64_t startup_timer_executed{0};
     double startup_max_timer_delay_ms{0};
     binding_callback_stats startup_task_callbacks{};
+    std::unordered_map<std::string, binding_callback_stats> startup_script_profiles;
+    std::unordered_map<std::string, binding_callback_stats> startup_task_profiles;
+    std::chrono::steady_clock::time_point startup_profile_started{};
     std::chrono::steady_clock::time_point startup_frame_started{};
 };
 
 v8_dom_runtime::v8_dom_runtime(
     native_document& document,
-    std::function<std::pair<float, float>()> viewport_provider,
-    std::string compilation_cache_directory)
+    std::function<viewport_metrics()> viewport_provider,
+    std::string compilation_cache_directory,
+    resource_loader load_resource)
     : impl_(std::make_unique<implementation>(
         document,
         std::move(viewport_provider),
-        std::move(compilation_cache_directory)))
+        std::move(compilation_cache_directory),
+        std::move(load_resource)))
 {
 }
 
@@ -10082,6 +22835,11 @@ bool v8_dom_runtime::initialize()
 bool v8_dom_runtime::execute(const std::string& source, const std::string& document_name)
 {
     return impl_->execute(source, document_name);
+}
+
+bool v8_dom_runtime::load_url(const std::string& url)
+{
+    return impl_->load_url(url);
 }
 
 void v8_dom_runtime::set_resource_root(std::string resource_root)
@@ -10139,6 +22897,40 @@ bool v8_dom_runtime::dispatch_input(const htmlml_input_event& event)
         && impl_->promote_pending_promise_error();
 }
 
+bool v8_dom_runtime::dispatch_transition_events()
+{
+    return impl_->dispatch_transition_events()
+        && impl_->promote_pending_promise_error();
+}
+
+uint32_t v8_dom_runtime::current_cursor_kind() const noexcept
+{
+    return impl_->current_cursor_kind();
+}
+
+void v8_dom_runtime::signal_animation_frame(double timestamp_ms)
+{
+    const auto now = std::chrono::steady_clock::now();
+    const auto timestamp = std::isfinite(timestamp_ms) && timestamp_ms >= 0
+        ? timestamp_ms
+        : std::chrono::duration<double, std::milli>(now.time_since_epoch()).count();
+    impl_->last_animation_frame_timestamp_ms = timestamp;
+    if (impl_->is_text_control(impl_->active_element)
+        && impl_->active_element->input_focused) {
+        const auto elapsed = std::max(0.0, timestamp - impl_->caret_blink_epoch_ms);
+        const auto visible = std::fmod(elapsed, 1000.0) < 500.0;
+        if (impl_->active_element->caret_visible != visible) {
+            impl_->active_element->caret_visible = visible;
+            impl_->document.mark_dirty();
+        }
+    }
+    for (auto& timer : impl_->timers) {
+        if (!timer.animation_frame) continue;
+        timer.deadline = now;
+        timer.animation_timestamp_ms = timestamp;
+    }
+}
+
 bool v8_dom_runtime::pump_task()
 {
     v8::Isolate::Scope isolate_scope(impl_->isolate);
@@ -10181,12 +22973,33 @@ std::string v8_dom_runtime::diagnostics()
         if (index != start) description << ',';
         description << impl_->loaded_resource_names[index];
     }
-    description << ']';
+    description << "] | resource-memory-hits="
+        << impl_->resource_cache_memory_hit_count
+        << ", detached-dom={pending-roots=" << impl_->detached_dom_roots.size()
+        << ",pending-nodes=" << impl_->detached_nodes_since_gc
+        << ",released=" << impl_->released_detached_dom_nodes << '}';
     if (impl_->profile_startup) {
         const auto format = [](const binding_callback_stats& value) {
             std::ostringstream result;
             result << value.calls << '/' << std::fixed << std::setprecision(3)
                 << value.nanoseconds / 1'000'000.0 << "ms";
+            return std::move(result).str();
+        };
+        const auto format_top = [&format](const auto& profiles) {
+            std::vector<std::pair<std::string, binding_callback_stats>> ordered(
+                profiles.begin(),
+                profiles.end());
+            std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right) {
+                return left.second.nanoseconds > right.second.nanoseconds;
+            });
+            std::ostringstream result;
+            result << '[';
+            const auto count = std::min<size_t>(ordered.size(), 8U);
+            for (size_t index = 0; index < count; ++index) {
+                if (index != 0U) result << ',';
+                result << ordered[index].first << ':' << format(ordered[index].second);
+            }
+            result << ']';
             return std::move(result).str();
         };
         description << ", startup-profile={hydrate="
@@ -10209,11 +23022,23 @@ std::string v8_dom_runtime::diagnostics()
             << impl_->startup_timer_scheduled
             << ",max-timer=" << std::fixed << std::setprecision(1)
             << impl_->startup_max_timer_delay_ms << "ms"
-            << ",task-callbacks=" << format(impl_->startup_task_callbacks);
-        if (impl_->startup_frame_started != std::chrono::steady_clock::time_point{}) {
-            description << ",wall=" << std::fixed << std::setprecision(1)
+            << ",task-callbacks=" << format(impl_->startup_task_callbacks)
+            << ",script-top=" << format_top(impl_->startup_script_profiles)
+            << ",task-top=" << format_top(impl_->startup_task_profiles);
+        const auto profile_now = std::chrono::steady_clock::now();
+        if (impl_->startup_profile_started != std::chrono::steady_clock::time_point{}) {
+            description << ",total=" << std::fixed << std::setprecision(1)
                 << std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - impl_->startup_frame_started).count()
+                    profile_now - impl_->startup_profile_started).count()
+                << "ms";
+        }
+        if (impl_->startup_frame_started != std::chrono::steady_clock::time_point{}) {
+            description << ",frame-start=" << std::fixed << std::setprecision(1)
+                << std::chrono::duration<double, std::milli>(
+                    impl_->startup_frame_started - impl_->startup_profile_started).count()
+                << "ms,frame-wall=" << std::fixed << std::setprecision(1)
+                << std::chrono::duration<double, std::milli>(
+                    profile_now - impl_->startup_frame_started).count()
                 << "ms";
         }
         description << '}';
@@ -10346,6 +23171,16 @@ std::string v8_dom_runtime::event_diagnostics() const
     return result.str();
 }
 
+std::string v8_dom_runtime::feature_use_json() const
+{
+    return impl_->feature_use_json();
+}
+
+std::string v8_dom_runtime::event_listener_inventory_json() const
+{
+    return impl_->event_listener_inventory_json();
+}
+
 const std::string& v8_dom_runtime::last_error() const noexcept
 {
     return impl_->last_error;
@@ -10399,6 +23234,36 @@ uint64_t v8_dom_runtime::compilation_cache_bytes_written() const noexcept
 uint64_t v8_dom_runtime::compilation_time_nanoseconds() const noexcept
 {
     return impl_->compilation_time_nanosecond_count;
+}
+
+uint64_t v8_dom_runtime::resource_cache_requests() const noexcept
+{
+    return impl_->resource_cache_request_count;
+}
+
+uint64_t v8_dom_runtime::resource_cache_hits() const noexcept
+{
+    return impl_->resource_cache_hit_count;
+}
+
+uint64_t v8_dom_runtime::resource_cache_misses() const noexcept
+{
+    return impl_->resource_cache_miss_count;
+}
+
+uint64_t v8_dom_runtime::resource_cache_rejections() const noexcept
+{
+    return impl_->resource_cache_rejection_count;
+}
+
+uint64_t v8_dom_runtime::resource_cache_bytes_read() const noexcept
+{
+    return impl_->resource_cache_bytes_read_count;
+}
+
+uint64_t v8_dom_runtime::resource_cache_bytes_written() const noexcept
+{
+    return impl_->resource_cache_bytes_written_count;
 }
 
 uint64_t v8_dom_runtime::input_events_dispatched() const noexcept

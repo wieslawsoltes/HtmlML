@@ -39,7 +39,10 @@ public sealed class V8ExternalEventListener : IExternalDomEventListener, IExtern
 
     public void Invoke(object currentTarget, object domEvent)
     {
-        _eventApplyCallback.InvokeAsFunction(_callback, currentTarget, domEvent);
+        var sourceEvent = domEvent is IExternalSyntheticEventSource { SourceEvent: ScriptObject scriptEvent }
+            ? scriptEvent
+            : null;
+        _eventApplyCallback.InvokeAsFunction(_callback, currentTarget, domEvent, sourceEvent);
         InvokeCount++;
     }
 
@@ -93,6 +96,7 @@ public sealed class V8ExternalEventListenerAdapter :
 {
     private readonly ScriptObject _eventApplyCallback;
     private readonly ScriptObject _eventBatchApplyCallback;
+    private readonly ScriptObject _eventCompleteCallback;
     private readonly ScriptObject _applyCallback;
     private readonly string _scopeName;
     private readonly Dictionary<ScriptObject, V8ExternalEventListener> _listeners = new();
@@ -100,11 +104,13 @@ public sealed class V8ExternalEventListenerAdapter :
     public V8ExternalEventListenerAdapter(
         ScriptObject eventApplyCallback,
         ScriptObject eventBatchApplyCallback,
+        ScriptObject eventCompleteCallback,
         ScriptObject applyCallback,
         string scopeName)
     {
         _eventApplyCallback = eventApplyCallback;
         _eventBatchApplyCallback = eventBatchApplyCallback;
+        _eventCompleteCallback = eventCompleteCallback;
         _applyCallback = applyCallback;
         _scopeName = scopeName;
     }
@@ -163,7 +169,8 @@ public sealed class V8ExternalEventListenerAdapter :
             Convert.ToString(scriptEvent.GetProperty("type")) ?? string.Empty,
             ReadBoolean(scriptEvent, "bubbles"),
             ReadBoolean(scriptEvent, "cancelable"),
-            scriptEvent.GetProperty("detail"));
+            scriptEvent.GetProperty("detail"),
+            scriptEvent);
         return true;
     }
 
@@ -173,6 +180,15 @@ public sealed class V8ExternalEventListenerAdapter :
         {
             scriptEvent.SetProperty("defaultPrevented", defaultPrevented);
         }
+    }
+
+    public void CompleteDispatch(object eventValue)
+    {
+        if (eventValue is not ScriptObject scriptEvent)
+        {
+            return;
+        }
+        _eventCompleteCallback.InvokeAsFunction(scriptEvent);
     }
 
     public void InvokeBatch(
@@ -191,7 +207,10 @@ public sealed class V8ExternalEventListenerAdapter :
             callbacks[index] = listener.Callback;
         }
 
-        _eventBatchApplyCallback.InvokeAsFunction(callbacks, currentTarget, domEvent, control);
+        var sourceEvent = domEvent is IExternalSyntheticEventSource { SourceEvent: ScriptObject scriptEvent }
+            ? scriptEvent
+            : null;
+        _eventBatchApplyCallback.InvokeAsFunction(callbacks, currentTarget, domEvent, sourceEvent, control);
     }
 
     private static bool ReadBoolean(ScriptObject options, string name)

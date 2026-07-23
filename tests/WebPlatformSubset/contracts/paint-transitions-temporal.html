@@ -1,0 +1,166 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Opacity and color transitions publish temporal paint and lifecycle events</title>
+<style>
+  #target {
+    position: fixed;
+    left: 20px;
+    top: 20px;
+    width: 120px;
+    height: 40px;
+    opacity: .2;
+    color: rgb(10, 20, 30);
+    background: currentColor;
+    transition-property: opacity, color;
+    transition-duration: 120ms, 160ms;
+    transition-delay: 16ms, 0ms;
+    transition-timing-function: linear, linear;
+  }
+  #target.active {
+    opacity: 1;
+    color: rgb(110, 120, 130);
+  }
+  #target.reversed {
+    opacity: .2;
+    color: rgb(10, 20, 30);
+  }
+</style>
+<body>
+<div id="target">temporal paint</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function channels(value) {
+    const values = String(value).match(/[\d.]+/g) || [];
+    return values.slice(0, 3).map(Number);
+  }
+
+  function finish(error, diagnostics) {
+    state.diagnostics = diagnostics || [];
+    state.results.push({
+      name: "opacity and color transitions expose temporal paint, reversal, and lifecycle events",
+      status: error ? "FAIL" : "PASS",
+      message: error ? String(error && error.message || error) : null,
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = error
+      ? { status: 1, message: state.results[0].message, stack: state.results[0].stack }
+      : { status: 0, message: null, stack: null };
+    state.complete = true;
+  }
+
+  try {
+    const target = document.getElementById("target");
+    const initialStyle = getComputedStyle(target);
+    const metadata = [
+      initialStyle.transitionProperty,
+      initialStyle.transitionDuration,
+      initialStyle.transitionDelay,
+      initialStyle.transitionTimingFunction
+    ];
+    const expectedMetadata = [
+      "opacity, color", "120ms, 160ms", "16ms, 0ms", "linear, linear"
+    ];
+    if (JSON.stringify(metadata) !== JSON.stringify(expectedMetadata)) {
+      throw new Error("computed transition longhands differ: " + JSON.stringify(metadata));
+    }
+
+    const events = [];
+    for (const type of ["transitionrun", "transitionstart", "transitionend", "transitioncancel"]) {
+      target.addEventListener(type, event => {
+        events.push({ type, property: event.propertyName, elapsed: event.elapsedTime });
+      });
+    }
+
+    requestAnimationFrame(startTimestamp => {
+      target.classList.add("active");
+      const forward = [];
+      const reverse = [];
+      let reverseTimestamp = null;
+
+      const sample = timestamp => {
+        try {
+          const style = getComputedStyle(target);
+          const value = {
+            elapsed: timestamp - startTimestamp,
+            opacity: Number(style.opacity),
+            color: channels(style.color)
+          };
+          if (reverseTimestamp === null) forward.push(value);
+          else reverse.push({ ...value, reverseElapsed: timestamp - reverseTimestamp });
+
+          if (reverseTimestamp === null && timestamp - startTimestamp >= 80) {
+            const last = forward[forward.length - 1];
+            if (!(last.opacity > .21 && last.opacity < .99
+                && last.color[0] > 10 && last.color[0] < 110)) {
+              throw new Error("forward transition had no painted intermediate at reversal: "
+                + JSON.stringify(forward));
+            }
+            target.classList.add("reversed");
+            reverseTimestamp = timestamp;
+          }
+
+          if (reverseTimestamp === null || timestamp - reverseTimestamp < 190) {
+            requestAnimationFrame(sample);
+            return;
+          }
+
+          const forwardIntermediate = forward.filter(item =>
+            item.opacity > .21 && item.opacity < .99
+            && item.color[0] > 10 && item.color[0] < 110);
+          if (forwardIntermediate.length < 2) {
+            throw new Error("fewer than two forward intermediate paint frames: "
+              + JSON.stringify(forward));
+          }
+          const reverseIntermediate = reverse.filter(item =>
+            item.opacity > .21 && item.opacity < forward[forward.length - 1].opacity
+            && item.color[0] > 10 && item.color[0] < forward[forward.length - 1].color[0]);
+          if (reverseIntermediate.length < 2) {
+            throw new Error("fewer than two reverse intermediate paint frames: "
+              + JSON.stringify(reverse));
+          }
+          for (let index = 1; index < forward.length; index++) {
+            if (forward[index].opacity + .001 < forward[index - 1].opacity
+                || forward[index].color[0] < forward[index - 1].color[0]) {
+              throw new Error("forward paint was not monotonic: " + JSON.stringify(forward));
+            }
+          }
+          for (let index = 1; index < reverse.length; index++) {
+            if (reverse[index].opacity > reverse[index - 1].opacity + .001
+                || reverse[index].color[0] > reverse[index - 1].color[0]) {
+              throw new Error("reverse paint was not monotonic: " + JSON.stringify(reverse));
+            }
+          }
+          const final = reverse[reverse.length - 1];
+          if (Math.abs(final.opacity - .2) > .002
+              || JSON.stringify(final.color) !== JSON.stringify([10, 20, 30])) {
+            throw new Error("reverse final paint differs: " + JSON.stringify(final));
+          }
+
+          const eventKeys = events.map(event => event.type + ":" + event.property);
+          for (const property of ["opacity", "color"]) {
+            for (const type of ["transitionrun", "transitionstart", "transitioncancel", "transitionend"]) {
+              if (!eventKeys.includes(type + ":" + property)) {
+                throw new Error("missing " + type + " for " + property + ": "
+                  + JSON.stringify(events));
+              }
+            }
+          }
+          finish(null, [JSON.stringify({ metadata, forward, reverse, events })]);
+        } catch (error) {
+          finish(error, [JSON.stringify({ forward, reverse, events })]);
+        }
+      };
+      requestAnimationFrame(sample);
+    });
+  } catch (error) {
+    finish(error, []);
+  }
+</script>
+</body>

@@ -144,6 +144,22 @@ public sealed class CssSelectorMatcherTests
         Assert.True(CssSelectorMatcher.Matches(focusVisibleSelector, keyboardFocused));
     }
 
+    [Fact]
+    public void ScopePseudoUsesTheExplicitElementQueryRoot()
+    {
+        var root = new Node("div");
+        var outer = root.Add(new Node("div").WithClass("collapse"));
+        var wrapper = outer.Add(new Node("div"));
+        var nested = wrapper.Add(new Node("div").WithClass("collapse"));
+        Assert.True(CssSelectorSyntaxParser.TryParse(
+            ":scope .collapse .collapse",
+            out var selector));
+        var options = new CssSelectorMatchOptions(ScopeNode: root);
+
+        Assert.True(CssSelectorMatcher.Matches(selector, nested, options));
+        Assert.False(CssSelectorMatcher.Matches(selector, outer, options));
+    }
+
     private sealed class Node(string tagName) : ICssSelectorNode
     {
         private readonly Dictionary<string, string> _attributes = new(StringComparer.OrdinalIgnoreCase);

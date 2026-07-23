@@ -15,6 +15,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Xml.Linq;
 using Avalonia;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
@@ -65,8 +66,11 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     private bool _readyStateScheduled;
     private readonly List<Action> _readyStateCompletionCallbacks = new();
     private string _readyState = "loading";
+    private StringBuilder? _documentWriteBuffer;
     private readonly DomHeadElement _head;
     private readonly DomDocumentElement _documentElement;
+    private DomDocumentImplementation? _implementation;
+    private readonly Dictionary<string, string> _cookies = new(StringComparer.Ordinal);
     private readonly CssStyleEngine _styleEngine;
     private readonly CssFontFaceRegistry _fontFaces;
     private readonly List<DomMutationObserver> _mutationObservers = new();
@@ -407,6 +411,21 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         return null;
     }
 
+    public virtual object? resolveNamedProperty(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+        foreach (var element in EnumerateDocumentElements())
+        {
+            if ((string.Equals(element.id, name, StringComparison.Ordinal)
+                 || string.Equals(element.name, name, StringComparison.Ordinal))
+                && element.localName is "embed" or "form" or "iframe" or "img" or "object")
+            {
+                return element;
+            }
+        }
+        return null;
+    }
+
     private void EnsureElementIdIndex()
     {
         if (_elementsById is not null)
@@ -517,6 +536,9 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         RecordSelectorMiss("document", selector);
         return null;
     }
+
+    public bool __htmlMlIsValidSelector(string selector)
+        => CssSelectorSyntaxParser.IsSupportedDomSelectorList(selector);
 
     public virtual object[] querySelectorAll(string selector)
     {
@@ -669,6 +691,12 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         return node;
     }
 
+    public virtual DomAttribute createAttribute(string name)
+        => new(name ?? string.Empty, string.Empty, this);
+
+    public virtual DomComment createComment(string data)
+        => new(data ?? string.Empty, this);
+
     public virtual object? createDocumentFragment()
     {
         var container = createElement("div") as AvaloniaDomElement;
@@ -681,14 +709,138 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     }
 
     /// <summary>
+    /// Starts the bounded HTML document replacement lifecycle used by a
+    /// same-origin iframe's initial about:blank document.
+    /// </summary>
+    public virtual AvaloniaDomDocument open(params object?[] arguments)
+    {
+        _documentWriteBuffer = new StringBuilder();
+        _readyStateScheduled = false;
+        _readyStateCompletionCallbacks.Clear();
+        SetReadyState("loading");
+
+        foreach (var child in _head.childNodes)
+        {
+            _head.removeChild(child);
+        }
+
+        if (body is AvaloniaDomElement bodyElement)
+        {
+            bodyElement.innerHTML = string.Empty;
+        }
+
+        return this;
+    }
+
+    public virtual void write(params object?[] text)
+    {
+        _documentWriteBuffer ??= new StringBuilder();
+        foreach (var value in text)
+        {
+            _documentWriteBuffer.Append(Convert.ToString(value, CultureInfo.InvariantCulture));
+        }
+    }
+
+    public virtual void writeln(params object?[] text)
+    {
+        write(text);
+        _documentWriteBuffer!.Append('\n');
+    }
+
+    public virtual void close()
+    {
+        if (_documentWriteBuffer is null)
+        {
+            return;
+        }
+
+        var markup = _documentWriteBuffer.ToString();
+        _documentWriteBuffer = null;
+        var parser = new AngleSharp.Html.Parser.HtmlParser();
+        var parsed = parser.ParseDocument(markup);
+        if (body is AvaloniaDomElement bodyElement)
+        {
+            foreach (var attribute in bodyElement.attributes)
+            {
+                bodyElement.removeAttribute(attribute.name);
+            }
+            if (parsed.Body is not null)
+            {
+                foreach (var attribute in parsed.Body.Attributes)
+                {
+                    bodyElement.setAttribute(attribute.Name, attribute.Value);
+                }
+                bodyElement.innerHTML = parsed.Body.InnerHtml;
+            }
+        }
+
+        if (parsed.Head is not null && body is AvaloniaDomElement nodeFactory)
+        {
+            foreach (var source in parsed.Head.ChildNodes)
+            {
+                var child = nodeFactory.CreateDomNodeFromAngleSharp(source);
+                if (child is not null)
+                {
+                    _head.appendChild(child);
+                }
+            }
+        }
+
+        RestoreViewportLayoutContract();
+
+        // Document content is observable immediately after close(); lifecycle
+        // events complete on the next host task, after the caller unwinds.
+        ScheduleReadyStateCompletion();
+    }
+
+    /// <summary>
     /// Parses markup for an external engine's DOMParser facade.
     /// </summary>
     public object ParseMarkupDocument(string markup, string mimeType)
     {
-        var container = createElement("div") as AvaloniaDomElement
-                        ?? throw new InvalidOperationException("Unable to create a detached parser container.");
-        container.innerHTML = markup ?? string.Empty;
-        return new DomParsedDocument(container.firstElementChild);
+        if (string.Equals(mimeType, "text/html", StringComparison.OrdinalIgnoreCase))
+        {
+            var html = createElement("html") as AvaloniaDomElement
+                       ?? throw new InvalidOperationException("Unable to create a detached parser root.");
+            var body = createElement("body") as AvaloniaDomElement
+                       ?? throw new InvalidOperationException("Unable to create a detached parser body.");
+            html.appendChild(body);
+            body.innerHTML = markup ?? string.Empty;
+            return new DomParsedDocument(this, html, body);
+        }
+        var parsed = XDocument.Parse(markup ?? string.Empty, LoadOptions.PreserveWhitespace);
+        var documentElement = parsed.Root is null ? null : CreateXmlElement(parsed.Root);
+        return new DomParsedDocument(this, documentElement, xmlMode: true);
+    }
+
+    internal AvaloniaDomElement CreateXmlElement(string qualifiedName, string? namespaceUri = null)
+    {
+        var element = createElement(qualifiedName) as AvaloniaDomElement
+                      ?? throw new InvalidOperationException($"Unable to create XML element '{qualifiedName}'.");
+        element.SetXmlMode(namespaceUri);
+        return element;
+    }
+
+    private AvaloniaDomElement CreateXmlElement(XElement source)
+    {
+        var element = CreateXmlElement(source.Name.LocalName, source.Name.NamespaceName);
+        foreach (var attribute in source.Attributes())
+        {
+            element.setAttribute(attribute.Name.LocalName, attribute.Value);
+        }
+        foreach (var child in source.Nodes())
+        {
+            switch (child)
+            {
+                case XElement childElement:
+                    element.appendChild(CreateXmlElement(childElement));
+                    break;
+                case XText text:
+                    element.appendChild((AvaloniaDomElement)createTextNode(text.Value)!);
+                    break;
+            }
+        }
+        return element;
     }
 
     public virtual object? body
@@ -720,6 +872,7 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
 
             var wrapper = WrapControl(root);
             wrapper.SetNodeNameOverride("BODY");
+            wrapper.SetDomParent(_documentElement);
             return wrapper;
         }
     }
@@ -730,11 +883,11 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
 
     public virtual object[] childNodes => new object[] { documentElement };
 
-    public virtual object[] children => body is null ? Array.Empty<object>() : new object[] { body };
+    public virtual object[] children => new object[] { documentElement };
 
     public virtual object? firstChild => documentElement;
 
-    public virtual object? lastChild => body ?? documentElement;
+    public virtual object? lastChild => documentElement;
 
     public virtual bool hasChildNodes => true;
 
@@ -771,11 +924,14 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     public DomHeadElement head => _head;
 
     public DomDocumentElement documentElement => _documentElement;
+
+    public DomDocumentElement scrollingElement => _documentElement;
+
     public object? currentScript => Host.CurrentScript;
 
     public object? defaultView => ExternalWindowContext;
 
-    public DomDocumentImplementation implementation => new(this);
+    public DomDocumentImplementation implementation => _implementation ??= new(this);
 
     public virtual string? title
     {
@@ -815,6 +971,28 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     internal void SetBrowsingContextLocation(AvaloniaBrowserHost.LocationJs location)
         => _browsingContextLocation = location;
 
+    public string cookie
+    {
+        get => string.Join("; ", _cookies.Select(static pair => $"{pair.Key}={pair.Value}"));
+        set
+        {
+            var assignment = value?.Split(';', 2)[0] ?? string.Empty;
+            var separator = assignment.IndexOf('=');
+            if (separator <= 0)
+            {
+                return;
+            }
+
+            var name = assignment[..separator].Trim();
+            if (name.Length == 0)
+            {
+                return;
+            }
+
+            _cookies[name] = assignment[(separator + 1)..].Trim();
+        }
+    }
+
     public virtual CssComputedStyle getComputedStyle(object? element)
     {
         if (ReferenceEquals(element, documentElement))
@@ -839,6 +1017,31 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     }
 
     internal IEnumerable<object> HeadChildren => _head.childNodes;
+
+    internal IEnumerable<AvaloniaDomElement> StylesheetNodes
+    {
+        get
+        {
+            foreach (var node in HeadChildren.OfType<AvaloniaDomElement>())
+            {
+                yield return node;
+            }
+
+            if (body is not AvaloniaDomElement bodyElement)
+            {
+                yield break;
+            }
+
+            foreach (var control in TraverseDocument(bodyElement.Control))
+            {
+                var element = WrapControl(control);
+                if (IsStylesheetElement(element))
+                {
+                    yield return element;
+                }
+            }
+        }
+    }
 
     internal IReadOnlyList<HtmlMlResourceTimelineEntry> ResourceTimeline => _resourceTimeline;
 
@@ -881,6 +1084,11 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     {
         _forceElementPresentationApply = true;
         _styleEngine.Invalidate();
+        // Avalonia may not resolve a newly registered collection while an
+        // invisible top-level is being measured from the same dispatcher
+        // drain that installed it. Keep the document dirty and let the next
+        // explicit geometry/style boundary flush it. Visible hosts retain the
+        // normal automatic reflow.
         ScheduleLayoutUpdate();
         InvalidateLayoutFromStyleMutation();
     }
@@ -1091,14 +1299,12 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
 
     internal long ChildListMutationAllocatedBytes => _childListMutationAllocatedBytes;
 
-    internal int StylesheetNodeCount => HeadChildren
-        .OfType<AvaloniaDomElement>()
+    internal int StylesheetNodeCount => StylesheetNodes
         .Count(element => string.Equals(element.tagName, "STYLE", StringComparison.OrdinalIgnoreCase)
                           || (string.Equals(element.tagName, "LINK", StringComparison.OrdinalIgnoreCase)
                               && string.Equals(element.getAttribute("rel"), "stylesheet", StringComparison.OrdinalIgnoreCase)));
 
-    internal string[] StylesheetSources => HeadChildren
-        .OfType<AvaloniaDomElement>()
+    internal string[] StylesheetSources => StylesheetNodes
         .Where(element => string.Equals(element.tagName, "STYLE", StringComparison.OrdinalIgnoreCase)
                           || (string.Equals(element.tagName, "LINK", StringComparison.OrdinalIgnoreCase)
                               && string.Equals(element.getAttribute("rel"), "stylesheet", StringComparison.OrdinalIgnoreCase)))
@@ -1117,6 +1323,10 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
 
     internal void FlushPendingLayout()
     {
+        if (Host.IsDisposed)
+        {
+            return;
+        }
         if (s_isFlushingLayout)
         {
             return;
@@ -1170,10 +1380,6 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         try
         {
             EnsureStylesCurrent();
-            if (!Host.Services.Viewport.HostMetrics.IsVisible)
-            {
-                return;
-            }
             if (Host.TopLevel.Content is not Control content)
             {
                 return;
@@ -1516,9 +1722,22 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     internal void NotifyTextChanged(AvaloniaDomElement target)
     {
         var inHead = _head.Contains(target);
-        _styleEngine.Invalidate(target.parentElement ?? target, stylesheetsChanged: inHead);
-        if (inHead) ScheduleStylesheetUpdate();
+        var stylesheetsChanged = inHead || FindStylesheetAncestor(target) is not null;
+        _styleEngine.Invalidate(target.parentElement ?? target, stylesheetsChanged: stylesheetsChanged);
+        if (stylesheetsChanged) ScheduleStylesheetUpdate();
         else ScheduleLayoutUpdate();
+    }
+
+    private AvaloniaDomElement? FindStylesheetAncestor(AvaloniaDomElement target)
+    {
+        for (var current = target; current is not null; current = current.parentElement)
+        {
+            if (IsStylesheetElement(current))
+            {
+                return IsConnectedStyleElement(current) ? current : null;
+            }
+        }
+        return null;
     }
 
     private void ScheduleStylesheetUpdate()
@@ -1710,11 +1929,15 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         _mutationObservers.Remove(observer);
     }
 
-    public virtual object[] forms => GetCollection(IsFormControl);
+    public virtual object[] forms
+        => GetElementCollection(static element => element.localName == "form");
 
-    public virtual object[] images => GetCollection(ctrl => ctrl is Image);
+    public virtual object[] images
+        => GetElementCollection(static element => element.localName == "img");
 
-    public virtual object[] links => GetCollection(IsLinkControl);
+    public virtual object[] links
+        => GetElementCollection(static element =>
+            element.localName is "a" or "area" && element.hasAttribute("href"));
 
     private static string DocumentNormalizeEventName(string? type)
         => string.IsNullOrWhiteSpace(type) ? string.Empty : type.Trim().ToLowerInvariant();
@@ -1835,7 +2058,7 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         }
 
         var classes = className.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-        return QueryAll(ctrl => ctrl is StyledElement se && classes.All(c => se.Classes.Contains(c)));
+        return GetElementCollection(element => classes.All(element.classList.contains));
     }
 
     public virtual object[] getElementsByTagName(string tagName)
@@ -1851,7 +2074,10 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
             return new[] { special };
         }
 
-        return QueryAll(ctrl => string.Equals(ctrl.GetType().Name, tagName.Trim(), StringComparison.OrdinalIgnoreCase));
+        var normalized = tagName.Trim();
+        return GetElementCollection(element =>
+            normalized == "*"
+            || string.Equals(element.localName, normalized, StringComparison.OrdinalIgnoreCase));
     }
 
     protected internal virtual AvaloniaDomElement WrapControl(Control control)
@@ -2443,6 +2669,27 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
 
     private object[] GetCollection(Func<Control, bool> predicate) => QueryAll(predicate);
 
+    private object[] GetElementCollection(Func<AvaloniaDomElement, bool> predicate)
+    {
+        var root = GetDocumentRoot();
+        if (root is null)
+        {
+            return Array.Empty<object>();
+        }
+
+        var list = new List<object>();
+        foreach (var control in TraverseDocument(root))
+        {
+            var element = WrapControl(control);
+            if (predicate(element))
+            {
+                list.Add(element);
+            }
+        }
+
+        return list.ToArray();
+    }
+
     private object[] QueryAll(Func<Control, bool> predicate)
     {
         var root = GetDocumentRoot();
@@ -2764,6 +3011,10 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         }
 
         var inHead = _head.Contains(target);
+        var stylesheetsChanged = inHead
+                                 || (IsStylesheetElement(target)
+                                     && IsConnectedStyleElement(target)
+                                     && attributeName is "media" or "type" or "disabled" or "href" or "rel");
         if (s_traceCssInvalidations)
         {
             Console.WriteLine(
@@ -2780,9 +3031,9 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         }
         else
         {
-            _styleEngine.Invalidate(target, stylesheetsChanged: inHead);
+            _styleEngine.Invalidate(target, stylesheetsChanged: stylesheetsChanged);
         }
-        if (inHead) ScheduleStylesheetUpdate();
+        if (stylesheetsChanged) ScheduleStylesheetUpdate();
         else ScheduleLayoutUpdate();
 
         if (!HasActiveMutationObservers())
@@ -2874,6 +3125,9 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         }
 
         var inHead = _head.Contains(target);
+        var stylesheetsChanged = inHead
+                                 || addedNodes?.Any(SubtreeContainsStylesheetElement) == true
+                                 || removedNodes?.Any(SubtreeContainsStylesheetElement) == true;
         if (s_traceCssInvalidations)
         {
             Console.WriteLine(
@@ -2883,7 +3137,7 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
                 $"previous={(previousSibling is null ? "none" : previousSibling.localName)} " +
                 $"next={(nextSibling is null ? "none" : nextSibling.localName)} inHead={inHead}");
         }
-        if (inHead)
+        if (stylesheetsChanged)
         {
             _styleEngine.Invalidate(target, stylesheetsChanged: true);
         }
@@ -2896,7 +3150,7 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
                 previousSibling,
                 nextSibling);
         }
-        if (inHead) ScheduleStylesheetUpdate();
+        if (stylesheetsChanged) ScheduleStylesheetUpdate();
         else ScheduleLayoutUpdate();
 
         if (!HasActiveMutationObservers())
@@ -2952,6 +3206,10 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         {
             return false;
         }
+        if (SubtreeContainsStylesheetElement(addedChild))
+        {
+            return true;
+        }
         if (!_styleEngine.PendingDirtyRootCovers(target))
         {
             return true;
@@ -2970,6 +3228,27 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         foreach (var child in element.GetChildElements())
         {
             if (SubtreeContainsId(child))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsStylesheetElement(AvaloniaDomElement element)
+        => string.Equals(element.tagName, "STYLE", StringComparison.OrdinalIgnoreCase)
+           || (string.Equals(element.tagName, "LINK", StringComparison.OrdinalIgnoreCase)
+               && string.Equals(element.getAttribute("rel"), "stylesheet", StringComparison.OrdinalIgnoreCase));
+
+    private static bool SubtreeContainsStylesheetElement(AvaloniaDomElement element)
+    {
+        if (IsStylesheetElement(element))
+        {
+            return true;
+        }
+        foreach (var child in element.GetChildElements())
+        {
+            if (SubtreeContainsStylesheetElement(child))
             {
                 return true;
             }
@@ -3295,10 +3574,25 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
             return true;
         }
 
-        synthetic.target = this;
-        DispatchDocumentEvent(synthetic);
-        synthetic.SyncDefaultPrevented();
+        try
+        {
+            synthetic.target = this;
+            DispatchDocumentEvent(synthetic);
+            synthetic.SyncDefaultPrevented();
+        }
+        finally
+        {
+            CompleteExternalSyntheticEventDispatch(eventValue);
+        }
         return !synthetic.defaultPrevented;
+    }
+
+    internal void CompleteExternalSyntheticEventDispatch(object eventValue)
+    {
+        if (ExternalEventListenerAdapter is IExternalSyntheticEventAdapter adapter)
+        {
+            adapter.CompleteDispatch(eventValue);
+        }
     }
 
     internal void DispatchPointerEvent(AvaloniaDomElement target, string type, PointerEventArgs args, bool bubbles, bool cancelable)
@@ -3394,6 +3688,87 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         {
             _programmaticClickTargets.Remove(target);
         }
+    }
+
+    internal void DispatchProgrammaticClick(DomDocumentElement target)
+    {
+        var evt = new DomEvent(
+            "click",
+            bubbles: true,
+            cancelable: true,
+            initiallyHandled: false,
+            Host.GetTimestamp(),
+            isTrusted: false)
+        {
+            target = target
+        };
+
+        ExecuteInBrowsingContext(() =>
+        {
+            var composedPath = new List<object> { target, this };
+            if (ExternalWindowContext is not null)
+            {
+                composedPath.Add(ExternalWindowContext);
+            }
+            evt.SetComposedPath(composedPath);
+
+            const string type = "click";
+            var documentListeners = GetDocumentListeners(type, create: false);
+            var rootListeners = target.GetListeners(type);
+
+            if (documentListeners is { Count: > 0 })
+            {
+                InvokeListenersCore(
+                    this,
+                    type,
+                    evt,
+                    capture: true,
+                    DomEventPhase.CapturingPhase,
+                    documentListeners,
+                    listener => RemoveDocumentListener(type, listener));
+            }
+
+            if (!evt.PropagationStopped && rootListeners is { Count: > 0 })
+            {
+                InvokeListenersCore(
+                    target,
+                    type,
+                    evt,
+                    capture: true,
+                    DomEventPhase.AtTarget,
+                    rootListeners,
+                    listener => target.RemoveListener(type, listener));
+                if (!evt.ImmediatePropagationStopped)
+                {
+                    InvokeListenersCore(
+                        target,
+                        type,
+                        evt,
+                        capture: false,
+                        DomEventPhase.AtTarget,
+                        rootListeners,
+                        listener => target.RemoveListener(type, listener));
+                }
+            }
+
+            if (!evt.PropagationStopped && evt.bubbles && documentListeners is { Count: > 0 })
+            {
+                InvokeListenersCore(
+                    this,
+                    type,
+                    evt,
+                    capture: false,
+                    DomEventPhase.BubblingPhase,
+                    documentListeners,
+                    listener => RemoveDocumentListener(type, listener));
+            }
+
+            evt.ResetCurrentTarget();
+            if (evt.bubbles && !evt.PropagationStopped)
+            {
+                DispatchWindowDomEvent(type, evt);
+            }
+        });
     }
 
     private void PerformClickDefaultAction(AvaloniaDomElement target)
@@ -3958,6 +4333,15 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
     internal void DispatchSyntheticEvent(AvaloniaDomElement target, DomSyntheticEvent evt)
         => DispatchDomEventInternal(target, evt);
 
+    internal void DispatchTransitionEvent(
+        AvaloniaDomElement target,
+        string type,
+        string propertyName,
+        double elapsedTime)
+        => DispatchDomEventInternal(
+            target,
+            new DomTransitionEvent(type, propertyName, elapsedTime, Host.GetTimestamp()));
+
     internal DomSyntheticEvent? CreateSyntheticEvent(object value)
     {
         if (value is DomSyntheticEvent syntheticEvent)
@@ -3997,7 +4381,8 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
             data.Cancelable,
             Host.GetTimestamp(),
             data.Detail,
-            new DefaultPreventedAccessor(defaultPrevented => adapter.SetDefaultPrevented(value, defaultPrevented)));
+            new DefaultPreventedAccessor(defaultPrevented => adapter.SetDefaultPrevented(value, defaultPrevented)),
+            data.SourceEvent);
     }
 
     private void DispatchDomEventInternal(AvaloniaDomElement target, DomEvent domEvent)
@@ -4010,8 +4395,13 @@ public class AvaloniaDomDocument : DomDocumentCore<AvaloniaDomElement>, IHtmlMlJ
         }
 
         var path = BuildEventPath(target);
-        domEvent.SetComposedPath(path.AsEnumerable().Reverse().Select(entry =>
-            entry.IsDocument ? (object)entry.Document! : entry.Element!));
+        var composedPath = path.AsEnumerable().Reverse().Select(entry =>
+            entry.IsDocument ? (object)entry.Document! : entry.Element!).ToList();
+        if (ExternalWindowContext is not null)
+        {
+            composedPath.Add(ExternalWindowContext);
+        }
+        domEvent.SetComposedPath(composedPath);
         if (!HasListeners(normalizedType, path))
         {
             return;
@@ -4972,7 +5362,8 @@ public class AvaloniaDomElement :
 
     private sealed record ClrEventBridge(EventInfo EventInfo, Delegate Handler, string EventName);
 
-    private readonly Dictionary<string, string?> _styleValues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string?> _styleValues = new(CssPropertyNameComparer.Instance);
+    private readonly HashSet<string> _importantStyleProperties = new(CssPropertyNameComparer.Instance);
     private long _svgSceneRevision;
     private readonly Dictionary<string, NativePresentationValue> _nativePresentationValues = new(StringComparer.OrdinalIgnoreCase);
     private CssComputedValues _computedStyleValues = CssComputedValues.Empty;
@@ -5007,15 +5398,26 @@ public class AvaloniaDomElement :
     private bool _percentageTransformResizeAttached;
     private string? _cssTransformValue;
     private CssRotateTransition? _cssRotateTransition;
+    private CssMatrixTransition? _cssMatrixTransition;
     private HtmlMlFrameRequest _cssTransformFrameRequest;
+    private CssScalarTransition? _cssOpacityTransition;
+    private CssColorTransition? _cssColorTransition;
+    private HtmlMlFrameRequest _cssPaintFrameRequest;
+    private double? _cssPresentedOpacity;
+    private Color? _cssPresentedColor;
     private bool _hasComputedPresentation;
     private bool _paintSuppressedUntilStyleCommit;
     private string? _nodeNameOverride;
     private string? _tagNameCache;
     private string? _namespaceUri;
+    private bool _xmlMode;
+    private readonly Dictionary<string, string?> _xmlAttributes = new(StringComparer.Ordinal);
     private string _selectionDirection = "none";
     private bool _checked;
     private bool _selected;
+    private bool _selectionExplicitlyEmpty;
+    private bool _hasExplicitValueState;
+    private string _explicitValueState = string.Empty;
     private readonly record struct NativePresentationValue(AvaloniaProperty Property, bool WasSet, object? Value);
     private AvaloniaDomDocument? _contentDocument;
     private object? _externalContentWindow;
@@ -5131,11 +5533,14 @@ public class AvaloniaDomElement :
         {
             var name = _nodeNameOverride ?? Control.GetType().Name;
             if (string.IsNullOrEmpty(name)) return string.Empty;
-            return IsSvgNamespace ? name.ToLowerInvariant() : name.ToUpperInvariant();
+            return _xmlMode ? name : IsSvgNamespace ? name.ToLowerInvariant() : name.ToUpperInvariant();
         }
     }
 
-    public string localName => (_nodeNameOverride ?? Control.GetType().Name).ToLowerInvariant();
+    public string localName
+        => _xmlMode
+            ? _nodeNameOverride ?? Control.GetType().Name
+            : (_nodeNameOverride ?? Control.GetType().Name).ToLowerInvariant();
 
     public string? namespaceURI => _namespaceUri;
 
@@ -5170,6 +5575,28 @@ public class AvaloniaDomElement :
     {
         get => _attributes.TryGetValue("href", out var value) ? value : null;
         set => setAttribute("href", value);
+    }
+
+    public virtual string hash
+    {
+        get
+        {
+            var value = getAttribute("href") ?? string.Empty;
+            var fragment = value.IndexOf('#');
+            return fragment >= 0 ? value[fragment..] : string.Empty;
+        }
+        set
+        {
+            var hrefValue = getAttribute("href") ?? string.Empty;
+            var fragment = hrefValue.IndexOf('#');
+            var prefix = fragment >= 0 ? hrefValue[..fragment] : hrefValue;
+            var next = value ?? string.Empty;
+            if (next.Length > 0 && next[0] != '#')
+            {
+                next = "#" + next;
+            }
+            setAttribute("href", prefix + next);
+        }
     }
 
     public virtual string download
@@ -5208,7 +5635,17 @@ public class AvaloniaDomElement :
 
     public virtual string? type
     {
-        get => _attributes.TryGetValue("type", out var value) ? value : null;
+        get
+        {
+            if (_attributes.TryGetValue("type", out var value)) return value;
+            if (string.Equals(localName, "select", StringComparison.OrdinalIgnoreCase))
+            {
+                return HasAttributePresence("multiple") ? "select-multiple" : "select-one";
+            }
+            return string.Equals(localName, "input", StringComparison.OrdinalIgnoreCase)
+                ? "text"
+                : null;
+        }
         set => setAttribute("type", value);
     }
 
@@ -5270,13 +5707,40 @@ public class AvaloniaDomElement :
                        && (string.Equals(inputType, "checkbox", StringComparison.OrdinalIgnoreCase)
                            || string.Equals(inputType, "radio", StringComparison.OrdinalIgnoreCase));
             }
-            return string.Equals(localName, "option", StringComparison.OrdinalIgnoreCase) && _selected;
+            return string.Equals(localName, "option", StringComparison.OrdinalIgnoreCase) && selected;
         }
     }
 
     public virtual bool selected
     {
-        get => _selected;
+        get
+        {
+            if (_selected || !string.Equals(localName, "option", StringComparison.OrdinalIgnoreCase))
+            {
+                return _selected;
+            }
+
+            var select = parentElement;
+            while (select is not null
+                   && !string.Equals(select.localName, "select", StringComparison.OrdinalIgnoreCase))
+            {
+                select = select.parentElement;
+            }
+            if (select is null)
+            {
+                return false;
+            }
+
+            if (select._selectionExplicitlyEmpty)
+            {
+                return false;
+            }
+
+            var options = select.options;
+            return options.Length > 0
+                   && ReferenceEquals(options[0], this)
+                   && !options.Any(option => option._selected);
+        }
         set
         {
             if (_selected == value)
@@ -5293,8 +5757,9 @@ public class AvaloniaDomElement :
                 {
                     select = select.parentElement;
                 }
-                if (select is not null)
+                if (select is not null && !select.multiple)
                 {
+                    select._selectionExplicitlyEmpty = false;
                     foreach (var option in select.querySelectorAll("option").OfType<AvaloniaDomElement>())
                     {
                         if (!ReferenceEquals(option, this) && option._selected)
@@ -5307,6 +5772,12 @@ public class AvaloniaDomElement :
             }
             OwnerDocument.NotifyDynamicStateChanged(this);
         }
+    }
+
+    public virtual bool multiple
+    {
+        get => HasAttributePresence("multiple");
+        set => setAttribute("multiple", value ? string.Empty : null);
     }
 
     public virtual void click() => OwnerDocument.DispatchProgrammaticClick(this);
@@ -5512,6 +5983,9 @@ public class AvaloniaDomElement :
 
     internal IReadOnlyDictionary<string, string?> StyleValues => _styleValues;
 
+    internal bool IsInlineStyleImportant(string propertyName)
+        => _importantStyleProperties.Contains(propertyName);
+
     internal bool TryGetSvgPresentationAttribute(string name, out string value)
     {
         if (IsSvgNamespace
@@ -5603,10 +6077,11 @@ public class AvaloniaDomElement :
         LineHeight = 1 << 16,
         SvgPaint = 1 << 17,
         Outline = 1 << 18,
+        WordSpacing = 1 << 19,
         FontSizeOrDisplay = FontSize | Display,
         ComputedAll = Opacity | Background | Color | FontFamily | FontSize | FontStyle |
                       FontWeight | TextAlignment | Padding | WhiteSpace | Display | Border |
-                      TextTransform | LetterSpacing | LineHeight | SvgPaint | Outline,
+                      TextTransform | LetterSpacing | WordSpacing | LineHeight | SvgPaint | Outline,
         All = Canvas | Cursor | ComputedAll
     }
 
@@ -5681,6 +6156,8 @@ public class AvaloniaDomElement :
             changes |= CssPresentationChanges.TextTransform;
         if (PropertyStateChanged("letter-spacing", previousValues, currentValues, previousDeclarations, currentDeclarations))
             changes |= CssPresentationChanges.LetterSpacing;
+        if (PropertyStateChanged("word-spacing", previousValues, currentValues, previousDeclarations, currentDeclarations))
+            changes |= CssPresentationChanges.WordSpacing;
         if (PropertyStateChanged("line-height", previousValues, currentValues, previousDeclarations, currentDeclarations))
             changes |= CssPresentationChanges.LineHeight;
         if (PropertyStateChanged("display", previousValues, currentValues, previousDeclarations, currentDeclarations))
@@ -5940,6 +6417,7 @@ public class AvaloniaDomElement :
             | CssPresentationChanges.WhiteSpace
             | CssPresentationChanges.TextTransform
             | CssPresentationChanges.LetterSpacing
+            | CssPresentationChanges.WordSpacing
             | CssPresentationChanges.LineHeight);
         var visibilityHidden = parent._computedStyleValues.TryGetValue("visibility", out var visibility)
                                && string.Equals(visibility, "hidden", StringComparison.OrdinalIgnoreCase);
@@ -5977,12 +6455,18 @@ public class AvaloniaDomElement :
             {
                 // CSS visibility keeps the element in layout but suppresses its
                 // entire painted subtree, regardless of the declared opacity.
+                CancelCssOpacityTransition(dispatchCancel: true);
                 Control.Opacity = 0;
             }
             else if (values.TryGetValue("opacity", out var opacityValue)
                      && double.TryParse(opacityValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var opacity))
             {
-                Control.Opacity = Math.Clamp(opacity, 0, 1);
+                var targetOpacity = Math.Clamp(opacity, 0, 1);
+                if (!TryStartCssOpacityTransition(targetOpacity, values))
+                {
+                    Control.Opacity = targetOpacity;
+                    _cssPresentedOpacity = targetOpacity;
+                }
             }
         }
 
@@ -5992,7 +6476,13 @@ public class AvaloniaDomElement :
         }
         if ((changes & CssPresentationChanges.Color) != 0)
         {
-            ApplyComputedControlProperty(values, "color", "Foreground");
+            if (!TryStartCssColorTransition(values.GetValueOrDefault("color"), values))
+            {
+                ApplyComputedControlProperty(values, "color", "Foreground");
+                _cssPresentedColor = TryParseCssColor(values.GetValueOrDefault("color"), out var color)
+                    ? color
+                    : null;
+            }
         }
         if ((changes & CssPresentationChanges.FontFamily) != 0)
         {
@@ -6107,31 +6597,47 @@ public class AvaloniaDomElement :
                 : 0;
         }
 
-        if ((changes & CssPresentationChanges.LineHeight) != 0
-            && Control is TextBlock lineText)
+        if ((changes & CssPresentationChanges.WordSpacing) != 0
+            && Control is DomTextBlockControl spacedText)
+        {
+            spacedText.WordSpacing = values.TryGetValue("word-spacing", out var spacing)
+                                     && !string.Equals(spacing.Trim(), "normal", StringComparison.OrdinalIgnoreCase)
+                                     && TryParseCssPixels(spacing, out var parsedSpacing)
+                ? parsedSpacing
+                : 0;
+        }
+
+        if ((changes & CssPresentationChanges.LineHeight) != 0)
         {
             if (values.TryGetValue("line-height", out var lineHeight)
                 && !string.Equals(lineHeight.Trim(), "normal", StringComparison.OrdinalIgnoreCase)
                 && TryParseCssPixels(lineHeight, out var parsedLineHeight))
             {
-                // CSS permits a zero line box and still paints glyphs outside
-                // it. Avalonia rejects a literal zero TextBlock.LineHeight, so
-                // retain automatic glyph metrics while CssLayoutPanel keeps
-                // the authored zero-height line box.
-                if (parsedLineHeight > 0)
+                if (Control is TextBlock lineText)
                 {
-                    lineText.LineHeight = parsedLineHeight;
+                    // CSS permits a zero line box and still paints glyphs
+                    // outside it. Avalonia rejects a literal zero
+                    // TextBlock.LineHeight, so retain automatic glyph metrics
+                    // while CssLayoutPanel keeps the authored zero-height line
+                    // box.
+                    if (parsedLineHeight > 0)
+                    {
+                        lineText.LineHeight = parsedLineHeight;
+                    }
+                    else
+                    {
+                        lineText.ClearValue(TextBlock.LineHeightProperty);
+                    }
                 }
-                else
-                {
-                    lineText.ClearValue(TextBlock.LineHeightProperty);
-                }
-                CssLayout.SetLineHeight(lineText, Math.Max(0, parsedLineHeight));
+                CssLayout.SetLineHeight(Control, Math.Max(0, parsedLineHeight));
             }
             else
             {
-                lineText.ClearValue(TextBlock.LineHeightProperty);
-                CssLayout.SetLineHeight(lineText, null);
+                if (Control is TextBlock lineText)
+                {
+                    lineText.ClearValue(TextBlock.LineHeightProperty);
+                }
+                CssLayout.SetLineHeight(Control, null);
             }
         }
 
@@ -6416,6 +6922,47 @@ public class AvaloniaDomElement :
     public virtual int compareDocumentPosition(object? other)
         => AvaloniaDomDocument.CompareDocumentPosition(this, other);
 
+    public virtual bool isSameNode(object? other)
+        => ReferenceEquals(this, AvaloniaDomDocument.UnwrapDomNode(other));
+
+    public virtual bool isEqualNode(object? other)
+    {
+        other = AvaloniaDomDocument.UnwrapDomNode(other);
+        if (ReferenceEquals(this, other)) return true;
+        if (other is not AvaloniaDomElement element
+            || nodeType != element.nodeType
+            || !string.Equals(nodeName, element.nodeName, StringComparison.Ordinal)
+            || !string.Equals(namespaceURI, element.namespaceURI, StringComparison.Ordinal)
+            || !string.Equals(textContent, element.textContent, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var ownAttributes = attributes;
+        var otherAttributes = element.attributes;
+        if (ownAttributes.Length != otherAttributes.Length) return false;
+        foreach (var attribute in ownAttributes)
+        {
+            if (!element.hasAttribute(attribute.name)
+                || !string.Equals(
+                    attribute.value,
+                    element.getAttribute(attribute.name),
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        var ownChildren = GetChildElements().ToArray();
+        var otherChildren = element.GetChildElements().ToArray();
+        if (ownChildren.Length != otherChildren.Length) return false;
+        for (var index = 0; index < ownChildren.Length; index++)
+        {
+            if (!ownChildren[index].isEqualNode(otherChildren[index])) return false;
+        }
+        return true;
+    }
+
     public object? contentWindow
         => string.Equals(_nodeNameOverride, "IFRAME", StringComparison.OrdinalIgnoreCase)
            && parentElement is not null
@@ -6437,6 +6984,11 @@ public class AvaloniaDomElement :
 
     internal IExternalVirtualBrowsingContext? GetExternalContentWindowRuntime()
         => _externalContentWindowRuntime;
+
+    public object? __htmlMlExternalContentDocument
+        => _externalContentWindowRuntime is IExternalVirtualBrowsingContextDocumentView view
+            ? view.Document
+            : null;
 
     internal void DetachExternalContentWindow(IExternalVirtualBrowsingContext runtime)
     {
@@ -6575,6 +7127,11 @@ public class AvaloniaDomElement :
     public object[] children
         => GetChildElements().Where(child => child.nodeType == 1).Cast<object>().ToArray();
 
+    public DomAttribute[] attributes
+        => (_xmlMode ? _xmlAttributes.Keys.AsEnumerable() : _attributeNames.AsEnumerable())
+            .Select(name => new DomAttribute(name, getAttribute(name) ?? string.Empty, OwnerDocument))
+            .ToArray();
+
     public int childElementCount => GetChildElements().Count(child => child.nodeType == 1);
 
     public bool hasChildNodes => GetChildElements().Any();
@@ -6627,7 +7184,7 @@ public class AvaloniaDomElement :
 
         foreach (var control in AvaloniaDomDocument.Traverse(Control).Skip(1))
         {
-            if (MatchesElementSelector(control, selector))
+            if (MatchesElementSelector(control, selector, this))
             {
                 return OwnerDocument.WrapControl(control);
             }
@@ -6647,7 +7204,7 @@ public class AvaloniaDomElement :
         var list = new List<object>();
         foreach (var control in AvaloniaDomDocument.Traverse(Control).Skip(1))
         {
-            if (MatchesElementSelector(control, selector))
+            if (MatchesElementSelector(control, selector, this))
             {
                 list.Add(OwnerDocument.WrapControl(control));
             }
@@ -6657,6 +7214,12 @@ public class AvaloniaDomElement :
     }
 
     public virtual bool matches(string selector)
+        => MatchesSelector(selector, this);
+
+    public bool __htmlMlIsValidSelector(string selector)
+        => CssSelectorSyntaxParser.IsSupportedDomSelectorList(selector);
+
+    internal bool MatchesSelector(string selector, AvaloniaDomElement scopeElement)
     {
         if (string.IsNullOrWhiteSpace(selector))
         {
@@ -6666,7 +7229,7 @@ public class AvaloniaDomElement :
         foreach (var selectorPart in CssSelectorParser.SplitSelectorList(selector))
         {
             if (CssSelectorParser.TryParse(selectorPart, out var parsed) &&
-                parsed.Matches(this, OwnerDocument))
+                parsed.Matches(this, OwnerDocument, scopeElement))
             {
                 return true;
             }
@@ -6998,6 +7561,19 @@ public class AvaloniaDomElement :
         {
             var current = GetScrollOffset();
             SetScrollOffset(current.X, value);
+            var updated = GetScrollOffset();
+            if (!AreClose(current.Y, updated.Y))
+            {
+                OwnerDocument.DispatchSyntheticEvent(
+                    this,
+                    new DomSyntheticEvent(
+                        "scroll",
+                        bubbles: false,
+                        cancelable: false,
+                        Host.GetTimestamp(),
+                        detail: null,
+                        accessor: null));
+            }
         }
     }
 
@@ -7008,24 +7584,86 @@ public class AvaloniaDomElement :
         {
             var current = GetScrollOffset();
             SetScrollOffset(value, current.Y);
+            var updated = GetScrollOffset();
+            if (!AreClose(current.X, updated.X))
+            {
+                OwnerDocument.DispatchSyntheticEvent(
+                    this,
+                    new DomSyntheticEvent(
+                        "scroll",
+                        bubbles: false,
+                        cancelable: false,
+                        Host.GetTimestamp(),
+                        detail: null,
+                        accessor: null));
+            }
         }
     }
 
     public virtual string? value
     {
-        get => Control switch
+        get
         {
-            TextBox textBox => textBox.Text ?? string.Empty,
-            TextBlock textBlock => textBlock.Text ?? string.Empty,
-            ContentControl { Content: string text } => text,
-            _ => null
-        };
+            if (localName is "progress" or "meter")
+            {
+                return getAttribute("value") ?? "0";
+            }
+            if (string.Equals(localName, "option", StringComparison.OrdinalIgnoreCase))
+            {
+                return getAttribute("value") ?? NormalizeOptionText(textContent);
+            }
+            if (string.Equals(localName, "select", StringComparison.OrdinalIgnoreCase))
+            {
+                var index = selectedIndex;
+                return index >= 0 && index < options.Length ? options[index].value : string.Empty;
+            }
+            if (string.Equals(localName, "input", StringComparison.OrdinalIgnoreCase)
+                && (string.Equals(type, "checkbox", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(type, "radio", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (_hasExplicitValueState) return _explicitValueState;
+                return getAttribute("value") ?? "on";
+            }
+            return Control switch
+            {
+                TextBox textBox => textBox.Text ?? string.Empty,
+                TextBlock textBlock => textBlock.Text ?? string.Empty,
+                ContentControl { Content: string text } => text,
+                _ => _hasExplicitValueState ? _explicitValueState : getAttribute("value")
+            };
+        }
         set
         {
+            var stringValue = value ?? string.Empty;
+            if (localName is "progress" or "meter")
+            {
+                setAttribute("value", stringValue);
+                return;
+            }
+            if (string.Equals(localName, "select", StringComparison.OrdinalIgnoreCase))
+            {
+                var expected = stringValue;
+                var matched = false;
+                foreach (var option in options)
+                {
+                    var selected = string.Equals(option.value ?? string.Empty, expected, StringComparison.Ordinal);
+                    option.selected = selected;
+                    matched |= selected;
+                }
+                if (!matched) selectedIndex = -1;
+                return;
+            }
+            if (string.Equals(localName, "option", StringComparison.OrdinalIgnoreCase))
+            {
+                setAttribute("value", stringValue);
+                return;
+            }
+            _hasExplicitValueState = true;
+            _explicitValueState = stringValue;
             switch (Control)
             {
                 case TextBox textBox:
-                    var nextValue = value ?? string.Empty;
+                    var nextValue = stringValue;
                     if (string.Equals(textBox.Text ?? string.Empty, nextValue, StringComparison.Ordinal))
                     {
                         break;
@@ -7044,14 +7682,94 @@ public class AvaloniaDomElement :
                     _selectionDirection = "none";
                     break;
                 case TextBlock textBlock:
-                    textBlock.Text = value ?? string.Empty;
+                    textBlock.Text = stringValue;
                     break;
                 case ContentControl contentControl when contentControl.Content is null || contentControl.Content is string:
-                    contentControl.Content = value ?? string.Empty;
+                    contentControl.Content = stringValue;
                     break;
             }
         }
     }
+
+    public virtual AvaloniaDomElement[] options
+        => string.Equals(localName, "select", StringComparison.OrdinalIgnoreCase)
+            ? querySelectorAll("option").OfType<AvaloniaDomElement>().ToArray()
+            : [];
+
+    public virtual AvaloniaDomElement[] elements
+        => string.Equals(localName, "form", StringComparison.OrdinalIgnoreCase)
+            ? querySelectorAll("*")
+                .OfType<AvaloniaDomElement>()
+                .Where(element => element.localName is
+                    "button" or "fieldset" or "input" or "object" or
+                    "output" or "select" or "textarea")
+                .ToArray()
+            : [];
+
+    public virtual int selectedIndex
+    {
+        get
+        {
+            if (!string.Equals(localName, "select", StringComparison.OrdinalIgnoreCase)) return -1;
+            if (_selectionExplicitlyEmpty) return -1;
+            var values = options;
+            for (var index = 0; index < values.Length; index++)
+            {
+                if (values[index].selected) return index;
+            }
+            return values.Length > 0 ? 0 : -1;
+        }
+        set
+        {
+            if (!string.Equals(localName, "select", StringComparison.OrdinalIgnoreCase)) return;
+            var values = options;
+            _selectionExplicitlyEmpty = value < 0 || value >= values.Length;
+            for (var index = 0; index < values.Length; index++)
+            {
+                values[index].selected = index == value;
+            }
+        }
+    }
+
+    public virtual void reset()
+    {
+        if (!string.Equals(localName, "form", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        foreach (var element in querySelectorAll("*").OfType<AvaloniaDomElement>())
+        {
+            if (string.Equals(element.localName, "select", StringComparison.OrdinalIgnoreCase))
+            {
+                element._selectionExplicitlyEmpty = false;
+                foreach (var option in element.options)
+                {
+                    option._selected = option.HasAttributePresence("selected");
+                    OwnerDocument.NotifyDynamicStateChanged(option);
+                }
+                continue;
+            }
+
+            if (string.Equals(element.localName, "input", StringComparison.OrdinalIgnoreCase))
+            {
+                element.value = element.defaultValue;
+                var inputType = element.type?.Trim();
+                if (string.Equals(inputType, "checkbox", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(inputType, "radio", StringComparison.OrdinalIgnoreCase))
+                {
+                    element.@checked = element.HasAttributePresence("checked");
+                }
+            }
+            else if (string.Equals(element.localName, "textarea", StringComparison.OrdinalIgnoreCase))
+            {
+                element.value = element.defaultValue;
+            }
+        }
+    }
+
+    private static string NormalizeOptionText(string? value)
+        => Regex.Replace(value ?? string.Empty, "[\\u0009\\u000A\\u000C\\u000D\\u0020]+", " ").Trim(' ');
 
     public virtual string? placeholder
     {
@@ -7153,6 +7871,64 @@ public class AvaloniaDomElement :
             : HasDefaultZeroTabIndex() ? 0 : -1;
         set => setAttribute("tabindex", value.ToString(CultureInfo.InvariantCulture));
     }
+
+    public virtual int maxLength
+    {
+        get => int.TryParse(
+            getAttribute("maxlength"),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var length) ? length : -1;
+        set => setAttribute("maxlength", value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    public virtual string defaultValue
+    {
+        get => getAttribute("value") ?? string.Empty;
+        set => setAttribute("value", value ?? string.Empty);
+    }
+
+    public virtual bool readOnly
+    {
+        get => HasAttributePresence("readonly");
+        set => setAttribute("readonly", value ? string.Empty : null);
+    }
+
+    public virtual int rowSpan
+    {
+        get => ParsePositiveIntegerAttribute("rowspan", 1);
+        set => setAttribute("rowspan", value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    public virtual int colSpan
+    {
+        get => ParsePositiveIntegerAttribute("colspan", 1);
+        set => setAttribute("colspan", value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    public virtual string cellSpacing
+    {
+        get => getAttribute("cellspacing") ?? string.Empty;
+        set => setAttribute("cellspacing", value ?? string.Empty);
+    }
+
+    public virtual string cellPadding
+    {
+        get => getAttribute("cellpadding") ?? string.Empty;
+        set => setAttribute("cellpadding", value ?? string.Empty);
+    }
+
+    public virtual string enctype
+    {
+        get => getAttribute("enctype") ?? "application/x-www-form-urlencoded";
+        set => setAttribute("enctype", value ?? string.Empty);
+    }
+
+    private int ParsePositiveIntegerAttribute(string name, int fallback)
+        => int.TryParse(getAttribute(name), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+           && parsed > 0
+            ? parsed
+            : fallback;
 
     public virtual bool isFocused => Control.IsFocused;
 
@@ -7328,6 +8104,7 @@ public class AvaloniaDomElement :
 
     private Size GetScrollSize()
     {
+        OwnerDocument.FlushPendingLayout();
         if (Control is CssLayoutPanel panel)
         {
             var extent = panel.ScrollExtent;
@@ -7408,6 +8185,7 @@ public class AvaloniaDomElement :
         var size = GetGenericLayoutSize(Control);
         var viewport = OwnerDocument.GetDocumentViewport();
         var local = viewport?.TranslatePoint(point, Control);
+        var containsOwnBorderBox = false;
         if (local is { } transformed)
         {
             // TranslatePoint applies the inverse of the complete visual
@@ -7415,17 +8193,60 @@ public class AvaloniaDomElement :
             // therefore precise for scale, rotation, transform-origin, and
             // transformed ancestors rather than accepting the empty corners
             // of an axis-aligned transformed bounding rectangle.
-            return transformed.X >= 0
-                   && transformed.X < size.Width
-                   && transformed.Y >= 0
-                   && transformed.Y < size.Height;
+            containsOwnBorderBox = transformed.X >= 0
+                                   && transformed.X < size.Width
+                                   && transformed.Y >= 0
+                                   && transformed.Y < size.Height;
         }
+        else
+        {
+            var bounds = GetElementBounds();
+            containsOwnBorderBox = point.X >= bounds.Left
+                                   && point.X < bounds.Right
+                                   && point.Y >= bounds.Top
+                                   && point.Y < bounds.Bottom;
+        }
+        return containsOwnBorderBox && IsInsideAncestorOverflowClips(point, viewport);
+    }
 
-        var bounds = GetElementBounds();
-        return point.X >= bounds.Left
-               && point.X < bounds.Right
-               && point.Y >= bounds.Top
-               && point.Y < bounds.Bottom;
+    private bool IsInsideAncestorOverflowClips(Point point, Control? viewport)
+    {
+        var escapesIntermediateClips =
+            CssLayout.GetPosition(Control) == CssPosition.Fixed;
+        for (var ancestor = parentElement; ancestor is not null; ancestor = ancestor.parentElement)
+        {
+            if (ancestor.Control is CssLayoutPanel panel
+                && (!escapesIntermediateClips || CssLayout.GetDocumentViewportRoot(panel))
+                && (panel.OverflowX != "visible" || panel.OverflowY != "visible"))
+            {
+                var size = GetGenericLayoutSize(ancestor.Control);
+                var local = viewport?.TranslatePoint(point, ancestor.Control);
+                var x = local?.X;
+                var y = local?.Y;
+                if (x is null || y is null)
+                {
+                    var bounds = ancestor.GetElementBounds();
+                    x = point.X - bounds.Left;
+                    y = point.Y - bounds.Top;
+                }
+                if (panel.OverflowX != "visible"
+                    && (x < 0 || x >= size.Width))
+                {
+                    return false;
+                }
+                if (panel.OverflowY != "visible"
+                    && (y < 0 || y >= size.Height))
+                {
+                    return false;
+                }
+            }
+
+            if (CssLayout.GetPosition(ancestor.Control) == CssPosition.Fixed)
+            {
+                escapesIntermediateClips = true;
+            }
+        }
+        return true;
     }
 
     private Size GetLayoutSize()
@@ -7589,13 +8410,8 @@ public class AvaloniaDomElement :
 
     private void SetScrollOffset(double left, double top)
     {
-        if (!OwnerDocument.HostViewportMetrics.IsVisible)
-        {
-            _scrollLeft = 0;
-            _scrollTop = 0;
-            return;
-        }
-
+        OwnerDocument.EnsureStylesCurrent();
+        OwnerDocument.FlushPendingLayout();
         var desired = new Vector(left, top);
         _scrollLeft = left;
         _scrollTop = top;
@@ -7611,12 +8427,6 @@ public class AvaloniaDomElement :
 
         if (Control is ScrollViewer viewer)
         {
-            if (!OwnerDocument.HostViewportMetrics.IsVisible || viewer.GetVisualRoot() is null)
-            {
-                _scrollLeft = 0;
-                _scrollTop = 0;
-                return;
-            }
             var viewerViewport = viewer.Viewport;
             var viewerExtent = viewer.Extent;
             var viewerMaxX = Math.Max(0, viewerExtent.Width - viewerViewport.Width);
@@ -7784,12 +8594,28 @@ public class AvaloniaDomElement :
         var translated = Control.TranslatePoint(new Point(0, 0), parent);
         if (translated.HasValue)
         {
-            return translated.Value;
+            return RestoreScrolledLayoutOffset(translated.Value, parent);
         }
 
         var deltaX = Control.Bounds.Left - parent.Bounds.Left;
         var deltaY = Control.Bounds.Top - parent.Bounds.Top;
-        return new Point(deltaX, deltaY);
+        return RestoreScrolledLayoutOffset(new Point(deltaX, deltaY), parent);
+    }
+
+    private Point RestoreScrolledLayoutOffset(Point point, Control offsetParent)
+    {
+        for (var current = Control.GetVisualParent() as Control; current is not null;
+             current = current.GetVisualParent() as Control)
+        {
+            point += current switch
+            {
+                CssLayoutPanel panel => panel.ScrollOffset,
+                ScrollViewer viewer => viewer.Offset,
+                _ => default
+            };
+            if (ReferenceEquals(current, offsetParent)) break;
+        }
+        return point;
     }
 
     private Control? FindOffsetParentControl()
@@ -7957,17 +8783,27 @@ public class AvaloniaDomElement :
         _tagNameCache = null;
     }
 
+    internal void SetXmlMode(string? namespaceUri)
+    {
+        _xmlMode = true;
+        _namespaceUri = string.IsNullOrEmpty(namespaceUri) ? null : namespaceUri;
+        _tagNameCache = null;
+    }
+
     internal bool HasExplicitDomTag
         => _nodeNameOverride is not null
            && !string.Equals(_nodeNameOverride, "BODY", StringComparison.OrdinalIgnoreCase);
 
-    private bool MatchesElementSelector(Control control, string selector)
+    private bool MatchesElementSelector(
+        Control control,
+        string selector,
+        AvaloniaDomElement scopeElement)
     {
         var element = OwnerDocument.WrapControl(control);
         // Native layout controls are implementation details, not descendants
         // in the authored DOM tree, and must never leak through selectors such
         // as `:not(...)` or `*`.
-        return element.HasExplicitDomTag && element.matches(selector);
+        return element.HasExplicitDomTag && element.MatchesSelector(selector, scopeElement);
     }
 
     private bool IsCanvasControl()
@@ -8483,8 +9319,15 @@ public class AvaloniaDomElement :
             return true;
         }
 
-        OwnerDocument.DispatchSyntheticEvent(this, synthetic);
-        synthetic.SyncDefaultPrevented();
+        try
+        {
+            OwnerDocument.DispatchSyntheticEvent(this, synthetic);
+            synthetic.SyncDefaultPrevented();
+        }
+        finally
+        {
+            OwnerDocument.CompleteExternalSyntheticEventDispatch(eventValue);
+        }
         return !synthetic.defaultPrevented;
     }
 
@@ -8529,10 +9372,32 @@ public class AvaloniaDomElement :
     public virtual AvaloniaDomElement? appendChild(AvaloniaDomElement child)
         => InsertChild(child, reference: null, placeBefore: false);
 
+    public virtual object? appendChild(object child)
+    {
+        if (child is DomDocumentFragment fragment)
+        {
+            foreach (var fragmentChild in fragment.childNodes.OfType<AvaloniaDomElement>().ToArray())
+            {
+                appendChild(fragmentChild);
+            }
+            return fragment;
+        }
+        return child is AvaloniaDomElement element ? appendChild(element) : null;
+    }
+
     public virtual void append(params object?[] nodes)
     {
         foreach (var node in nodes)
         {
+            if (node is DomDocumentFragment fragment)
+            {
+                foreach (var fragmentChild in fragment.childNodes.OfType<AvaloniaDomElement>().ToArray())
+                {
+                    appendChild(fragmentChild);
+                }
+                continue;
+            }
+
             var child = ConvertAppendNode(node);
             if (child is not null)
             {
@@ -8551,6 +9416,65 @@ public class AvaloniaDomElement :
             {
                 insertBefore(child, reference);
             }
+        }
+    }
+
+    public virtual void before(params object?[] nodes)
+    {
+        var parent = parentElement;
+        if (parent is null)
+        {
+            return;
+        }
+
+        foreach (var node in nodes)
+        {
+            var child = ConvertAppendNode(node);
+            if (child is not null)
+            {
+                parent.insertBefore(child, this);
+            }
+        }
+    }
+
+    public virtual void after(params object?[] nodes)
+    {
+        var parent = parentElement;
+        if (parent is null)
+        {
+            return;
+        }
+
+        var reference = nextSibling as AvaloniaDomElement;
+        foreach (var node in nodes)
+        {
+            var child = ConvertAppendNode(node);
+            if (child is not null)
+            {
+                parent.insertBefore(child, reference);
+            }
+        }
+    }
+
+    public virtual void replaceChildren(params object?[] nodes)
+    {
+        var replacements = nodes
+            .Select(ConvertAppendNode)
+            .Where(node => node is not null)
+            .Cast<AvaloniaDomElement>()
+            .ToArray();
+        foreach (var replacement in replacements)
+        {
+            ThrowIfHierarchyCycle(replacement);
+        }
+
+        foreach (var child in GetChildElements().ToArray())
+        {
+            removeChild(child);
+        }
+        foreach (var replacement in replacements)
+        {
+            appendChild(replacement);
         }
     }
 
@@ -8683,9 +9607,10 @@ public class AvaloniaDomElement :
 
     public virtual AvaloniaDomElement? removeChild(AvaloniaDomElement child)
     {
-        if (child is null)
+        if (child is null || !IsDirectChild(child))
         {
-            return null;
+            throw new InvalidOperationException(
+                "removeChild requires a child of this node.");
         }
 
         var (previousSibling, nextSibling) = child.GetSiblingSnapshot(Control, child.Control);
@@ -8699,7 +9624,8 @@ public class AvaloniaDomElement :
                 return child;
             }
 
-            return null;
+            throw new InvalidOperationException(
+                "removeChild requires a child of this node.");
         }
 
         if (Control is ContentControl cc)
@@ -8712,7 +9638,8 @@ public class AvaloniaDomElement :
                 return child;
             }
 
-            return null;
+            throw new InvalidOperationException(
+                "removeChild requires a child of this node.");
         }
 
         if (Control is Decorator decorator)
@@ -8725,17 +9652,20 @@ public class AvaloniaDomElement :
                 return child;
             }
 
-            return null;
+            throw new InvalidOperationException(
+                "removeChild requires a child of this node.");
         }
 
-        return null;
+        throw new InvalidOperationException(
+            "removeChild requires a child of this node.");
     }
 
     public virtual AvaloniaDomElement? replaceChild(AvaloniaDomElement newChild, AvaloniaDomElement oldChild)
     {
-        if (newChild is null || oldChild is null)
+        if (newChild is null || oldChild is null || !IsDirectChild(oldChild))
         {
-            return null;
+            throw new InvalidOperationException(
+                "replaceChild requires a child of this node.");
         }
 
         if (ReferenceEquals(newChild.Control, oldChild.Control))
@@ -8743,15 +9673,12 @@ public class AvaloniaDomElement :
             return oldChild;
         }
 
+        ThrowIfHierarchyCycle(newChild);
+
         if (TryGetControlsCollection(Control, out var list))
         {
-            var index = list.IndexOf(oldChild.Control);
-            if (index < 0)
-            {
-                return null;
-            }
-
             DetachFromCurrentParentWithNotification(newChild);
+            var index = list.IndexOf(oldChild.Control);
             var (previousSibling, nextSibling) = oldChild.GetSiblingSnapshot(Control, oldChild.Control);
             list.RemoveAt(index);
             list.Insert(index, newChild.Control);
@@ -8765,7 +9692,8 @@ public class AvaloniaDomElement :
         {
             if (!ReferenceEquals(cc.Content, oldChild.Control))
             {
-                return null;
+                throw new InvalidOperationException(
+                    "replaceChild requires a child of this node.");
             }
 
             DetachFromCurrentParentWithNotification(newChild);
@@ -8780,7 +9708,8 @@ public class AvaloniaDomElement :
         {
             if (!ReferenceEquals(decorator.Child, oldChild.Control))
             {
-                return null;
+                throw new InvalidOperationException(
+                    "replaceChild requires a child of this node.");
             }
 
             DetachFromCurrentParentWithNotification(newChild);
@@ -8791,7 +9720,8 @@ public class AvaloniaDomElement :
             return oldChild;
         }
 
-        return null;
+        throw new InvalidOperationException(
+            "replaceChild requires a child of this node.");
     }
 
     public virtual string? getAttribute(string name)
@@ -8799,6 +9729,11 @@ public class AvaloniaDomElement :
         if (string.IsNullOrWhiteSpace(name))
         {
             return null;
+        }
+
+        if (_xmlMode)
+        {
+            return _xmlAttributes.TryGetValue(name, out var xmlValue) ? xmlValue : null;
         }
 
         name = name.ToLowerInvariant();
@@ -8817,8 +9752,7 @@ public class AvaloniaDomElement :
             return value;
         }
 
-        var prop = Control.GetType().GetProperty(name, BindingFlags.IgnoreCase | BindingFlags.Instance | BindingFlags.Public);
-        return prop?.GetValue(Control)?.ToString();
+        return null;
     }
 
     public virtual bool hasAttribute(string name)
@@ -8841,6 +9775,15 @@ public class AvaloniaDomElement :
             return;
         }
 
+        if (_xmlMode)
+        {
+            var oldXmlValue = getAttribute(name);
+            if (value is null) _xmlAttributes.Remove(name);
+            else _xmlAttributes[name] = value;
+            RaiseAttributeMutation(name, oldXmlValue, value);
+            return;
+        }
+
         var normalized = name.ToLowerInvariant();
         string? oldValue = null;
         try
@@ -8860,6 +9803,14 @@ public class AvaloniaDomElement :
         else
         {
             _attributeNames.Add(normalized);
+        }
+
+        // Authored HTML attributes remain observable independently of any
+        // native-control property used to project their presentation or input
+        // behavior. Class and style have dedicated token/declaration stores.
+        if (normalized is not "class" and not "style")
+        {
+            SetGenericAttribute(normalized, value);
         }
 
         // SVG scene compilation and serialization read authored attributes,
@@ -8949,14 +9900,23 @@ public class AvaloniaDomElement :
                 SetGenericAttribute(normalized, value);
                 RaiseAttributeMutation(normalized, oldValue, value);
                 return;
+            case "value":
+                SetGenericAttribute(normalized, value);
+                if (Control is TextBox valueInput)
+                {
+                    valueInput.Text = value ?? string.Empty;
+                }
+                RaiseAttributeMutation(normalized, oldValue, value);
+                return;
             case "tabindex":
                 SetGenericAttribute(normalized, value);
                 ApplyTabIndexState();
                 RaiseAttributeMutation(normalized, oldValue, value);
                 return;
             case "class":
-                classList.SetFromString(value);
+                classList.SetFromAttribute(value);
                 RaiseAttributeMutation(normalized, oldValue, SafeGetAttribute(normalized));
+                ApplyCanvasPositioning();
                 return;
             case "title":
                 SetGenericAttribute(normalized, value);
@@ -9028,6 +9988,18 @@ public class AvaloniaDomElement :
         SetGenericAttribute(normalized, value);
         RaiseAttributeMutation(normalized, oldValue, SafeGetAttribute(normalized));
     }
+
+    public virtual void setAttributeNS(string? namespaceUri, string qualifiedName, string? value)
+        => setAttribute(qualifiedName, value);
+
+    public virtual string? getAttributeNS(string? namespaceUri, string qualifiedName)
+        => getAttribute(qualifiedName);
+
+    public virtual bool hasAttributeNS(string? namespaceUri, string qualifiedName)
+        => hasAttribute(qualifiedName);
+
+    public virtual void removeAttributeNS(string? namespaceUri, string qualifiedName)
+        => removeAttribute(qualifiedName);
 
     public virtual void classListAdd(string cls)
     {
@@ -9168,17 +10140,14 @@ public class AvaloniaDomElement :
             }
 
             var parser = new AngleSharp.Html.Parser.HtmlParser();
-            var doc = parser.ParseDocument($"<body>{value}</body>");
-            var body = doc.Body;
-            if (body != null)
+            var contextDocument = parser.ParseDocument(string.Empty);
+            var context = contextDocument.CreateElement(localName);
+            foreach (var node in parser.ParseFragment(value, context))
             {
-                foreach (var node in body.ChildNodes)
+                var child = CreateDomNodeFromAngleSharp(node);
+                if (child != null)
                 {
-                    var child = CreateDomNodeFromAngleSharp(node);
-                    if (child != null)
-                    {
-                        appendChild(child);
-                    }
+                    appendChild(child);
                 }
             }
         }
@@ -9205,6 +10174,10 @@ public class AvaloniaDomElement :
         if (TryGetControlsCollection(Control, out var list))
         {
             list.Clear();
+            if (removedChildren.Length > 0)
+            {
+                OwnerDocument.NotifyChildListMutation(this, null, removedChildren, null, null);
+            }
             foreach (var removedChild in removedChildren)
             {
                 removedChild.ReleaseBrowsingContextsForRemoval();
@@ -9215,6 +10188,10 @@ public class AvaloniaDomElement :
         if (Control is ContentControl cc)
         {
             cc.Content = null;
+            if (removedChildren.Length > 0)
+            {
+                OwnerDocument.NotifyChildListMutation(this, null, removedChildren, null, null);
+            }
             foreach (var removedChild in removedChildren)
             {
                 removedChild.ReleaseBrowsingContextsForRemoval();
@@ -9225,6 +10202,10 @@ public class AvaloniaDomElement :
         if (Control is Decorator decorator)
         {
             decorator.Child = null;
+            if (removedChildren.Length > 0)
+            {
+                OwnerDocument.NotifyChildListMutation(this, null, removedChildren, null, null);
+            }
             foreach (var removedChild in removedChildren)
             {
                 removedChild.ReleaseBrowsingContextsForRemoval();
@@ -9282,18 +10263,21 @@ public class AvaloniaDomElement :
         var tag = el.nodeName.ToLowerInvariant();
         sb.Append('<').Append(tag);
 
-        var id = el.getAttribute("id");
-        if (!string.IsNullOrEmpty(id))
+        foreach (var attributeName in el._attributeNames)
         {
-            sb.Append(" id=\"").Append(System.Net.WebUtility.HtmlEncode(id)).Append('"');
-        }
-
-        if (!string.IsNullOrEmpty(el.className))
-        {
-            sb.Append(" class=\"").Append(System.Net.WebUtility.HtmlEncode(el.className)).Append('"');
+            var attributeValue = el.getAttribute(attributeName);
+            if (attributeValue is null) continue;
+            sb.Append(' ').Append(attributeName).Append("=\"")
+                .Append(System.Net.WebUtility.HtmlEncode(attributeValue)).Append('"');
         }
 
         sb.Append('>');
+
+        if (tag is "area" or "base" or "br" or "col" or "embed" or "hr" or "img"
+            or "input" or "link" or "meta" or "param" or "source" or "track" or "wbr")
+        {
+            return;
+        }
 
         foreach (var child in el.GetChildElements())
         {
@@ -9679,6 +10663,23 @@ public class AvaloniaDomElement :
         OwnerDocument.NotifyAttributeChanged(this, attributeName, oldValue, newValue);
     }
 
+    internal void RaiseClassListMutation(string? oldValue, string newValue)
+    {
+        // DOMTokenList mutations operate on the reflected class attribute. A
+        // mutation on an element that did not previously have `class` creates
+        // the attribute; removing its last token leaves an empty attribute.
+        // Without recording presence here, selectors observed the native
+        // Classes collection while className/getAttribute and CSS invalidation
+        // still saw a missing attribute.
+        SetAttributePresence("class", present: true);
+        RaiseAttributeMutation("class", oldValue, newValue);
+        // Class changes must invalidate selector state before the immediate
+        // presentation refresh performs its synchronous style read.
+        ApplyCanvasPositioning();
+    }
+
+    internal bool HasClassAttribute => HasAttributePresence("class");
+
     private string? SafeGetAttribute(string attributeName)
     {
         try
@@ -9709,6 +10710,30 @@ public class AvaloniaDomElement :
         if (string.IsNullOrEmpty(normalized))
         {
             return;
+        }
+        if (!_suppressStyleMutation)
+        {
+            _importantStyleProperties.Remove(normalized);
+        }
+        if (value is not null)
+        {
+            if (!normalized.StartsWith("--", StringComparison.Ordinal)
+                && !CssPropertyCatalog.IsSupported(normalized))
+            {
+                return;
+            }
+            if (!CssPropertyCatalog.IsValidCssomValue(normalized, value))
+            {
+                return;
+            }
+            if (value.Length == 0)
+            {
+                value = null;
+            }
+        }
+        if (value is not null)
+        {
+            _attributeNames.Add("style");
         }
 
         var hadOldPropertyValue = _styleValues.TryGetValue(normalized, out var oldPropertyValue);
@@ -9891,17 +10916,28 @@ public class AvaloniaDomElement :
         {
             ClearAvaloniaProperty("Margin");
             RemoveThicknessStyleValues("margin");
+            SetMarginLayoutLengths(null, null, null, null);
             return true;
         }
 
-        if (!TryParseThickness(value, allowNegative: true, allowAuto: true, out var thickness))
+        var tokens = SplitCssTokens(value);
+        if (tokens.Count is < 1 or > 4
+            || !TryParseMarginLayoutLengths(tokens, out var top, out var right, out var bottom, out var left)
+            || !TryParseThickness(value, allowNegative: true, allowAuto: true, out var thickness))
         {
             return false;
         }
 
         thickness = NormalizeThickness(thickness);
         SetAvaloniaProperty("Margin", thickness);
-        UpdateThicknessStyleValues("margin", thickness);
+        _styleValues["margin"] = value;
+        _styleValues["margin-top"] = tokens[0];
+        _styleValues["margin-right"] = tokens.Count > 1 ? tokens[1] : tokens[0];
+        _styleValues["margin-bottom"] = tokens.Count > 2 ? tokens[2] : tokens[0];
+        _styleValues["margin-left"] = tokens.Count > 3
+            ? tokens[3]
+            : tokens.Count > 1 ? tokens[1] : tokens[0];
+        SetMarginLayoutLengths(top, right, bottom, left);
         return true;
     }
 
@@ -9914,10 +10950,17 @@ public class AvaloniaDomElement :
         if (string.IsNullOrEmpty(value))
         {
             margin = SetThicknessSide(margin, side, 0);
+            _styleValues.Remove($"margin-{SideToString(side)}");
+            SetMarginLayoutLength(side, null);
         }
         else
         {
             if (!TryParseLength(value, GetAxisForSide(side), allowNegative: true, allowAuto: true, out var component))
+            {
+                return false;
+            }
+
+            if (!CssLayout.TryParseLength(value, out var layoutLength))
             {
                 return false;
             }
@@ -9928,12 +10971,89 @@ public class AvaloniaDomElement :
             }
 
             margin = SetThicknessSide(margin, side, component);
+            _styleValues[$"margin-{SideToString(side)}"] = value;
+            SetMarginLayoutLength(side, layoutLength);
         }
 
         SetAvaloniaProperty("Margin", margin);
-        UpdateThicknessStyleValues("margin", margin);
+        RefreshMarginShorthandStyleValue(margin);
         return true;
     }
+
+    private static bool TryParseMarginLayoutLengths(
+        IReadOnlyList<string> tokens,
+        out CssLength? top,
+        out CssLength? right,
+        out CssLength? bottom,
+        out CssLength? left)
+    {
+        top = right = bottom = left = null;
+        if (!CssLayout.TryParseLength(tokens[0], out top))
+        {
+            return false;
+        }
+
+        if (!CssLayout.TryParseLength(tokens.Count > 1 ? tokens[1] : tokens[0], out right)
+            || !CssLayout.TryParseLength(tokens.Count > 2 ? tokens[2] : tokens[0], out bottom)
+            || !CssLayout.TryParseLength(
+                tokens.Count > 3 ? tokens[3] : tokens.Count > 1 ? tokens[1] : tokens[0],
+                out left))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void SetMarginLayoutLengths(
+        CssLength? top,
+        CssLength? right,
+        CssLength? bottom,
+        CssLength? left)
+    {
+        CssLayout.SetMarginTop(Control, top);
+        CssLayout.SetMarginRight(Control, right);
+        CssLayout.SetMarginBottom(Control, bottom);
+        CssLayout.SetMarginLeft(Control, left);
+        CssLayout.InvalidateParent(Control);
+    }
+
+    private void SetMarginLayoutLength(BoxSide side, CssLength? length)
+    {
+        switch (side)
+        {
+            case BoxSide.Top:
+                CssLayout.SetMarginTop(Control, length);
+                break;
+            case BoxSide.Right:
+                CssLayout.SetMarginRight(Control, length);
+                break;
+            case BoxSide.Bottom:
+                CssLayout.SetMarginBottom(Control, length);
+                break;
+            case BoxSide.Left:
+                CssLayout.SetMarginLeft(Control, length);
+                break;
+        }
+        CssLayout.InvalidateParent(Control);
+    }
+
+    private void RefreshMarginShorthandStyleValue(Thickness fallback)
+    {
+        var sides = new[]
+        {
+            MarginStyleValue(BoxSide.Top, fallback.Top),
+            MarginStyleValue(BoxSide.Right, fallback.Right),
+            MarginStyleValue(BoxSide.Bottom, fallback.Bottom),
+            MarginStyleValue(BoxSide.Left, fallback.Left)
+        };
+        _styleValues["margin"] = string.Join(" ", sides);
+    }
+
+    private string MarginStyleValue(BoxSide side, double fallback)
+        => _styleValues.TryGetValue($"margin-{SideToString(side)}", out var value)
+            ? value ?? FormatCssLength(fallback)
+            : FormatCssLength(fallback);
 
     private bool ApplyPaddingShorthand(string? value)
     {
@@ -9943,29 +11063,42 @@ public class AvaloniaDomElement :
         {
             ClearAvaloniaProperty("Padding");
             RemoveThicknessStyleValues("padding");
+            SetPaddingLayoutLengths(null, null, null, null);
             return true;
         }
 
-        if (!TryParseThickness(value, allowNegative: false, allowAuto: false, out var thickness))
+        var tokens = SplitCssTokens(value);
+        if (tokens.Count is < 1 or > 4
+            || !TryParsePaddingLayoutLengths(tokens, out var top, out var right, out var bottom, out var left)
+            || !TryParseThickness(value, allowNegative: false, allowAuto: false, out var thickness))
         {
             return false;
         }
 
         thickness = NormalizeThickness(thickness);
         SetAvaloniaProperty("Padding", thickness);
-        UpdateThicknessStyleValues("padding", thickness);
+        _styleValues["padding"] = value;
+        _styleValues["padding-top"] = tokens[0];
+        _styleValues["padding-right"] = tokens.Count > 1 ? tokens[1] : tokens[0];
+        _styleValues["padding-bottom"] = tokens.Count > 2 ? tokens[2] : tokens[0];
+        _styleValues["padding-left"] = tokens.Count > 3
+            ? tokens[3]
+            : tokens.Count > 1 ? tokens[1] : tokens[0];
+        SetPaddingLayoutLengths(top, right, bottom, left);
         return true;
     }
 
     private bool ApplyPaddingComponent(BoxSide side, string? value)
     {
-        var padding = GetThicknessProperty("Padding");
+        var padding = GetInlinePaddingThickness();
 
         value = value?.Trim();
 
         if (string.IsNullOrEmpty(value))
         {
             padding = SetThicknessSide(padding, side, 0);
+            _styleValues.Remove($"padding-{SideToString(side)}");
+            SetPaddingLayoutLength(side, null);
         }
         else
         {
@@ -9973,13 +11106,104 @@ public class AvaloniaDomElement :
             {
                 return false;
             }
+            if (!CssLayout.TryParseLength(value, out var layoutLength))
+            {
+                return false;
+            }
 
             padding = SetThicknessSide(padding, side, component);
+            _styleValues[$"padding-{SideToString(side)}"] = value;
+            SetPaddingLayoutLength(side, layoutLength);
         }
 
         SetAvaloniaProperty("Padding", padding);
-        UpdateThicknessStyleValues("padding", padding);
+        RefreshPaddingShorthandStyleValue();
         return true;
+    }
+
+    private static bool TryParsePaddingLayoutLengths(
+        IReadOnlyList<string> tokens,
+        out CssLength? top,
+        out CssLength? right,
+        out CssLength? bottom,
+        out CssLength? left)
+    {
+        top = right = bottom = left = null;
+        return CssLayout.TryParseLength(tokens[0], out top)
+               && CssLayout.TryParseLength(tokens.Count > 1 ? tokens[1] : tokens[0], out right)
+               && CssLayout.TryParseLength(tokens.Count > 2 ? tokens[2] : tokens[0], out bottom)
+               && CssLayout.TryParseLength(
+                   tokens.Count > 3 ? tokens[3] : tokens.Count > 1 ? tokens[1] : tokens[0],
+                   out left);
+    }
+
+    private void SetPaddingLayoutLengths(
+        CssLength? top,
+        CssLength? right,
+        CssLength? bottom,
+        CssLength? left)
+    {
+        CssLayout.SetPaddingTop(Control, top);
+        CssLayout.SetPaddingRight(Control, right);
+        CssLayout.SetPaddingBottom(Control, bottom);
+        CssLayout.SetPaddingLeft(Control, left);
+        CssLayout.InvalidateParent(Control);
+    }
+
+    private void SetPaddingLayoutLength(BoxSide side, CssLength? length)
+    {
+        switch (side)
+        {
+            case BoxSide.Top:
+                CssLayout.SetPaddingTop(Control, length);
+                break;
+            case BoxSide.Right:
+                CssLayout.SetPaddingRight(Control, length);
+                break;
+            case BoxSide.Bottom:
+                CssLayout.SetPaddingBottom(Control, length);
+                break;
+            case BoxSide.Left:
+                CssLayout.SetPaddingLeft(Control, length);
+                break;
+        }
+        CssLayout.InvalidateParent(Control);
+    }
+
+    private Thickness GetInlinePaddingThickness()
+    {
+        double Parse(string property, LengthAxis axis)
+            => _styleValues.TryGetValue(property, out var value)
+               && value is not null
+               && TryParseLength(value, axis, allowNegative: false, allowAuto: false, out var parsed)
+                ? parsed
+                : 0;
+
+        return new Thickness(
+            Parse("padding-left", LengthAxis.Horizontal),
+            Parse("padding-top", LengthAxis.Vertical),
+            Parse("padding-right", LengthAxis.Horizontal),
+            Parse("padding-bottom", LengthAxis.Vertical));
+    }
+
+    private void RefreshPaddingShorthandStyleValue()
+    {
+        if (!_styleValues.TryGetValue("padding-top", out var top)
+            || !_styleValues.TryGetValue("padding-right", out var right)
+            || !_styleValues.TryGetValue("padding-bottom", out var bottom)
+            || !_styleValues.TryGetValue("padding-left", out var left))
+        {
+            _styleValues.Remove("padding");
+            return;
+        }
+
+        _styleValues["padding"] = top == right && top == bottom && top == left
+            ? top
+            : top == bottom && right == left
+                ? $"{top} {right}"
+                : right == left
+                    ? $"{top} {right} {bottom}"
+                    : $"{top} {right} {bottom} {left}";
     }
 
     private bool ApplyBorderShorthand(string? value)
@@ -10034,6 +11258,7 @@ public class AvaloniaDomElement :
             ClearAvaloniaProperty("BorderThickness");
             RemoveThicknessStyleValues("border", "width");
             _styleValues.Remove("border-width");
+            _styleValues.Remove("border");
             return true;
         }
 
@@ -10045,6 +11270,7 @@ public class AvaloniaDomElement :
         thickness = NormalizeThickness(thickness);
         SetAvaloniaProperty("BorderThickness", thickness);
         UpdateThicknessStyleValues("border", thickness, "width");
+        _styleValues.Remove("border");
         return true;
     }
 
@@ -10056,6 +11282,7 @@ public class AvaloniaDomElement :
         {
             ClearAvaloniaProperty("BorderBrush");
             RemoveBorderColorStyleValues();
+            _styleValues.Remove("border");
             return true;
         }
 
@@ -10067,6 +11294,7 @@ public class AvaloniaDomElement :
         SetAvaloniaProperty("BorderBrush", brush);
         UpdateBorderColorStyleValues(value);
         RefreshAggregateBorderColor();
+        _styleValues.Remove("border");
         return true;
     }
 
@@ -10077,6 +11305,7 @@ public class AvaloniaDomElement :
         if (string.IsNullOrEmpty(value))
         {
             RemoveBorderStyleEntries();
+            _styleValues.Remove("border");
             return true;
         }
 
@@ -10085,6 +11314,7 @@ public class AvaloniaDomElement :
         _styleValues["border-right-style"] = value;
         _styleValues["border-bottom-style"] = value;
         _styleValues["border-left-style"] = value;
+        _styleValues.Remove("border");
         return true;
     }
 
@@ -10110,6 +11340,7 @@ public class AvaloniaDomElement :
 
         SetAvaloniaProperty("BorderThickness", thickness);
         UpdateThicknessStyleValues("border", thickness, "width");
+        _styleValues.Remove("border");
         return true;
     }
 
@@ -10122,6 +11353,7 @@ public class AvaloniaDomElement :
         {
             _styleValues.Remove(key);
             RefreshAggregateBorderColor();
+            _styleValues.Remove("border");
             return true;
         }
 
@@ -10133,6 +11365,7 @@ public class AvaloniaDomElement :
         SetAvaloniaProperty("BorderBrush", brush);
         _styleValues[key] = value;
         RefreshAggregateBorderColor();
+        _styleValues.Remove("border");
         return true;
     }
 
@@ -10151,6 +11384,7 @@ public class AvaloniaDomElement :
         }
 
         RefreshAggregateBorderStyle();
+        _styleValues.Remove("border");
         return true;
     }
 
@@ -10671,26 +11905,89 @@ public class AvaloniaDomElement :
         }
 
         _styleValues.Clear();
+        _importantStyleProperties.Clear();
 
         try
         {
             if (!string.IsNullOrWhiteSpace(value))
             {
+                void ApplyDeclaration(ReadOnlySpan<char> declaration)
+                {
+                    var colon = declaration.IndexOf(':');
+                    if (colon < 0)
+                    {
+                        return;
+                    }
+
+                    var property = CssStyleDeclaration.NormalizePropertyName(
+                        CssCustomPropertySyntax.TrimWhitespace(
+                            declaration[..colon].ToString()));
+                    if (string.IsNullOrEmpty(property))
+                    {
+                        return;
+                    }
+
+                    var custom = property.StartsWith("--", StringComparison.Ordinal);
+                    var propertyValue = custom
+                        ? CssCustomPropertySyntax.TrimWhitespace(
+                            declaration[(colon + 1)..].ToString())
+                        : declaration[(colon + 1)..].Trim().ToString();
+                    var important = propertyValue.EndsWith(
+                        "!important",
+                        StringComparison.OrdinalIgnoreCase);
+                    if (important)
+                    {
+                        propertyValue = custom
+                            ? CssCustomPropertySyntax.TrimWhitespace(propertyValue[..^10])
+                            : propertyValue[..^10].TrimEnd();
+                    }
+
+                    if (custom)
+                    {
+                        if (propertyValue.Length == 0)
+                        {
+                            propertyValue = " ";
+                        }
+                        if (_importantStyleProperties.Contains(property) && !important)
+                        {
+                            return;
+                        }
+                        SetStyleProperty(property, propertyValue);
+                        if (important)
+                        {
+                            _importantStyleProperties.Add(property);
+                        }
+                        else
+                        {
+                            _importantStyleProperties.Remove(property);
+                        }
+                        return;
+                    }
+
+                    if (propertyValue.Length == 0)
+                    {
+                        return;
+                    }
+                    if (_importantStyleProperties.Contains(property) && !important)
+                    {
+                        return;
+                    }
+                    SetStyleProperty(property, propertyValue);
+                    if (important)
+                    {
+                        _importantStyleProperties.Add(property);
+                    }
+                    else
+                    {
+                        _importantStyleProperties.Remove(property);
+                    }
+                }
+
                 if (s_disableInlineStyleSpanParser)
                 {
-                    foreach (var declaration in value.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                    foreach (var declarationText in value.Split(';'))
                     {
-                        var parts = declaration.Split(':', 2);
-                        if (parts.Length != 2)
-                        {
-                            continue;
-                        }
-
-                        var property = parts[0].Trim();
-                        if (!string.IsNullOrEmpty(property))
-                        {
-                            SetStyleProperty(property, parts[1].Trim());
-                        }
+                        ApplyDeclaration(declarationText.AsSpan());
                     }
                 }
                 else
@@ -10700,23 +11997,13 @@ public class AvaloniaDomElement :
                     {
                         var separator = remaining.IndexOf(';');
                         var declaration = separator >= 0 ? remaining[..separator] : remaining;
-                        remaining = separator >= 0 ? remaining[(separator + 1)..] : ReadOnlySpan<char>.Empty;
-
-                        var colon = declaration.IndexOf(':');
-                        if (colon < 0)
-                        {
-                            continue;
-                        }
-
-                        var property = declaration[..colon].Trim();
-                        if (!property.IsEmpty)
-                        {
-                            SetStyleProperty(
-                                property.ToString(),
-                                declaration[(colon + 1)..].Trim().ToString());
-                        }
+                        remaining = separator >= 0
+                            ? remaining[(separator + 1)..]
+                            : ReadOnlySpan<char>.Empty;
+                        ApplyDeclaration(declaration);
                     }
                 }
+
             }
         }
         finally
@@ -10818,15 +12105,21 @@ public class AvaloniaDomElement :
                 // tooltip) use this fast path without immediately rebuilding
                 // the stylesheet cascade. Preserve the previously computed
                 // opacity instead of making every visible element opaque.
-                var opacityValue = GetStyleValue("opacity");
-                var restoredOpacity = double.TryParse(
-                    opacityValue,
-                    NumberStyles.Float,
-                    CultureInfo.InvariantCulture,
-                    out var opacity)
-                        ? Math.Clamp(opacity, 0, 1)
-                        : 1;
-                SetControlValue(Control.Opacity, restoredOpacity, static (control, value) => control.Opacity = value, useLayoutChangeSet);
+                if (_cssOpacityTransition is null)
+                {
+                    var opacityValue = GetStyleValue("opacity");
+                    var restoredOpacity = _hasComputedPresentation
+                                          && _cssPresentedOpacity is { } presentedOpacity
+                        ? presentedOpacity
+                        : double.TryParse(
+                            opacityValue,
+                            NumberStyles.Float,
+                            CultureInfo.InvariantCulture,
+                            out var opacity)
+                            ? Math.Clamp(opacity, 0, 1)
+                            : 1;
+                    SetControlValue(Control.Opacity, restoredOpacity, static (control, value) => control.Opacity = value, useLayoutChangeSet);
+                }
             }
 
             ApplyCssZIndexProjection();
@@ -10878,10 +12171,350 @@ public class AvaloniaDomElement :
         }
     }
 
+    private bool TryStartCssOpacityTransition(
+        double target,
+        IReadOnlyDictionary<string, string> values)
+    {
+        if (!_hasComputedPresentation
+            || !TryParseCssTransitionForProperty("opacity", values, out var specification)
+            || specification.Duration <= TimeSpan.Zero)
+        {
+            CancelCssOpacityTransition(dispatchCancel: true);
+            return false;
+        }
+
+        var start = _cssOpacityTransition is { } active
+            ? SampleCssScalarTransition(active, Host.Services.Clock.Elapsed - active.StartedAt).Value
+            : _cssPresentedOpacity ?? Control.Opacity;
+        if (Math.Abs(start - target) < 0.000001)
+        {
+            return _cssOpacityTransition is not null;
+        }
+
+        CancelCssOpacityTransition(dispatchCancel: true);
+        var startSent = specification.Delay <= TimeSpan.Zero;
+        _cssOpacityTransition = new CssScalarTransition(
+            start,
+            target,
+            specification.Duration,
+            specification.Delay,
+            specification.Timing,
+            Host.Services.Clock.Elapsed,
+            startSent);
+        DispatchCssTransitionEvent("transitionrun", "opacity", 0);
+        if (startSent)
+        {
+            DispatchCssTransitionEvent(
+                "transitionstart",
+                "opacity",
+                Math.Min(-specification.Delay.TotalSeconds, specification.Duration.TotalSeconds));
+        }
+        AdvanceCssOpacityTransition(TimeSpan.Zero);
+        RequestCssPaintFrame();
+        return true;
+    }
+
+    private bool TryStartCssColorTransition(
+        string? targetValue,
+        IReadOnlyDictionary<string, string> values)
+    {
+        if (!TryParseCssColor(targetValue, out var target))
+        {
+            CancelCssColorTransition(dispatchCancel: true);
+            return false;
+        }
+        if (!_hasComputedPresentation
+            || !TryParseCssTransitionForProperty("color", values, out var specification)
+            || specification.Duration <= TimeSpan.Zero
+            || _cssPresentedColor is not { } presented)
+        {
+            CancelCssColorTransition(dispatchCancel: true);
+            _cssPresentedColor = target;
+            return false;
+        }
+
+        var start = _cssColorTransition is { } active
+            ? SampleCssColorTransition(active, Host.Services.Clock.Elapsed - active.StartedAt).Value
+            : presented;
+        if (start == target)
+        {
+            return _cssColorTransition is not null;
+        }
+
+        CancelCssColorTransition(dispatchCancel: true);
+        var startSent = specification.Delay <= TimeSpan.Zero;
+        _cssColorTransition = new CssColorTransition(
+            start,
+            target,
+            specification.Duration,
+            specification.Delay,
+            specification.Timing,
+            Host.Services.Clock.Elapsed,
+            startSent);
+        DispatchCssTransitionEvent("transitionrun", "color", 0);
+        if (startSent)
+        {
+            DispatchCssTransitionEvent(
+                "transitionstart",
+                "color",
+                Math.Min(-specification.Delay.TotalSeconds, specification.Duration.TotalSeconds));
+        }
+        AdvanceCssColorTransition(TimeSpan.Zero);
+        RequestCssPaintFrame();
+        return true;
+    }
+
+    private static bool TryParseCssTransitionForProperty(
+        string property,
+        IReadOnlyDictionary<string, string> values,
+        out CssTransformTransitionSpecification specification)
+    {
+        var properties = SplitCssTransitionList(
+            values.GetValueOrDefault("transition-property") ?? string.Empty).ToArray();
+        if (properties.Length > 0)
+        {
+            var durations = SplitCssTransitionList(
+                values.GetValueOrDefault("transition-duration") ?? "0s").ToArray();
+            var delays = SplitCssTransitionList(
+                values.GetValueOrDefault("transition-delay") ?? "0s").ToArray();
+            var timings = SplitCssTransitionList(
+                values.GetValueOrDefault("transition-timing-function") ?? "ease").ToArray();
+            if (durations.Length == 0) durations = ["0s"];
+            if (delays.Length == 0) delays = ["0s"];
+            if (timings.Length == 0) timings = ["ease"];
+            for (var index = 0; index < properties.Length; index++)
+            {
+                var candidate = properties[index].Trim();
+                if (!candidate.Equals(property, StringComparison.OrdinalIgnoreCase)
+                    && !candidate.Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (!TryParseCssTransitionTime(durations[index % durations.Length], out var duration))
+                {
+                    duration = TimeSpan.Zero;
+                }
+                if (!TryParseCssTransitionTime(delays[index % delays.Length], out var delay))
+                {
+                    delay = TimeSpan.Zero;
+                }
+                var timing = CssTransitionTiming.Ease;
+                if (timings.Length > 0)
+                {
+                    CssTransitionTiming.TryParse(timings[index % timings.Length], out timing);
+                }
+                specification = new CssTransformTransitionSpecification(duration, delay, timing);
+                return true;
+            }
+        }
+
+        var shorthand = values.GetValueOrDefault("transition");
+        if (!string.IsNullOrWhiteSpace(shorthand))
+        {
+            foreach (var item in SplitCssTransitionList(shorthand))
+            {
+                var candidate = "all";
+                var duration = TimeSpan.Zero;
+                var delay = TimeSpan.Zero;
+                var timing = CssTransitionTiming.Ease;
+                var sawTime = false;
+                foreach (var token in SplitCssTransitionTokens(item))
+                {
+                    if (TryParseCssTransitionTime(token, out var time))
+                    {
+                        if (!sawTime) duration = time;
+                        else delay = time;
+                        sawTime = true;
+                    }
+                    else if (CssTransitionTiming.TryParse(token, out var parsedTiming))
+                    {
+                        timing = parsedTiming;
+                    }
+                    else
+                    {
+                        candidate = token;
+                    }
+                }
+                if (candidate.Equals(property, StringComparison.OrdinalIgnoreCase)
+                    || candidate.Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    specification = new CssTransformTransitionSpecification(duration, delay, timing);
+                    return true;
+                }
+            }
+        }
+
+        specification = default;
+        return false;
+    }
+
+    private bool TryParseCssColor(string? value, out Color color)
+    {
+        color = default;
+        return !string.IsNullOrWhiteSpace(value)
+            && TryParseBrush(value, out var brush)
+            && brush is SolidColorBrush solid
+            && (color = solid.Color) == solid.Color;
+    }
+
+    private void RequestCssPaintFrame()
+    {
+        if ((_cssOpacityTransition is null && _cssColorTransition is null)
+            || !_cssPaintFrameRequest.IsEmpty)
+        {
+            return;
+        }
+        try
+        {
+            _cssPaintFrameRequest = Host.Services.Frames.RequestFrame(_ =>
+            {
+                _cssPaintFrameRequest = default;
+                if (!OwnerDocument.IsConnectedStyleElement(this))
+                {
+                    CancelCssOpacityTransition(dispatchCancel: true);
+                    CancelCssColorTransition(dispatchCancel: true);
+                    return;
+                }
+                if (_cssOpacityTransition is { } opacity)
+                {
+                    AdvanceCssOpacityTransition(Host.Services.Clock.Elapsed - opacity.StartedAt);
+                }
+                if (_cssColorTransition is { } color)
+                {
+                    AdvanceCssColorTransition(Host.Services.Clock.Elapsed - color.StartedAt);
+                }
+                RequestCssPaintFrame();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            CancelCssOpacityTransition(dispatchCancel: false);
+            CancelCssColorTransition(dispatchCancel: false);
+        }
+    }
+
+    private void AdvanceCssOpacityTransition(TimeSpan elapsed)
+    {
+        if (_cssOpacityTransition is not { } transition) return;
+        var sample = SampleCssScalarTransition(transition, elapsed);
+        if (!transition.StartSent && elapsed >= transition.Delay)
+        {
+            transition = transition with { StartSent = true };
+            _cssOpacityTransition = transition;
+            DispatchCssTransitionEvent("transitionstart", "opacity", 0);
+        }
+        Control.Opacity = sample.Value;
+        _cssPresentedOpacity = sample.Value;
+        OwnerDocument.InvalidateComputedStyleSnapshots();
+        if (sample.Progress < 1) return;
+        _cssOpacityTransition = null;
+        DispatchCssTransitionEvent(
+            "transitionend", "opacity", transition.Duration.TotalSeconds);
+    }
+
+    private void AdvanceCssColorTransition(TimeSpan elapsed)
+    {
+        if (_cssColorTransition is not { } transition) return;
+        var sample = SampleCssColorTransition(transition, elapsed);
+        if (!transition.StartSent && elapsed >= transition.Delay)
+        {
+            transition = transition with { StartSent = true };
+            _cssColorTransition = transition;
+            DispatchCssTransitionEvent("transitionstart", "color", 0);
+        }
+        _cssPresentedColor = sample.Value;
+        SetControlProperty("Foreground", CssColor(sample.Value));
+        OwnerDocument.InvalidateComputedStyleSnapshots();
+        if (sample.Progress < 1) return;
+        _cssColorTransition = null;
+        DispatchCssTransitionEvent(
+            "transitionend", "color", transition.Duration.TotalSeconds);
+    }
+
+    private static CssScalarTransitionSample SampleCssScalarTransition(
+        CssScalarTransition transition,
+        TimeSpan elapsed)
+    {
+        var progress = Math.Clamp(
+            (elapsed - transition.Delay).TotalMilliseconds
+                / transition.Duration.TotalMilliseconds,
+            0,
+            1);
+        var eased = transition.Timing.Evaluate(progress);
+        return new CssScalarTransitionSample(
+            transition.Start + (transition.Target - transition.Start) * eased,
+            progress);
+    }
+
+    private static CssColorTransitionSample SampleCssColorTransition(
+        CssColorTransition transition,
+        TimeSpan elapsed)
+    {
+        var progress = Math.Clamp(
+            (elapsed - transition.Delay).TotalMilliseconds
+                / transition.Duration.TotalMilliseconds,
+            0,
+            1);
+        var eased = transition.Timing.Evaluate(progress);
+        static byte Channel(byte start, byte target, double progress)
+            => (byte)Math.Clamp(Math.Round(start + (target - start) * progress), 0, 255);
+        return new CssColorTransitionSample(
+            Color.FromArgb(
+                Channel(transition.Start.A, transition.Target.A, eased),
+                Channel(transition.Start.R, transition.Target.R, eased),
+                Channel(transition.Start.G, transition.Target.G, eased),
+                Channel(transition.Start.B, transition.Target.B, eased)),
+            progress);
+    }
+
+    private void CancelCssOpacityTransition(bool dispatchCancel)
+    {
+        if (_cssOpacityTransition is { } transition && dispatchCancel)
+        {
+            var elapsed = Math.Clamp(
+                (Host.Services.Clock.Elapsed - transition.StartedAt - transition.Delay).TotalSeconds,
+                0,
+                transition.Duration.TotalSeconds);
+            DispatchCssTransitionEvent("transitioncancel", "opacity", elapsed);
+        }
+        _cssOpacityTransition = null;
+        CancelCssPaintFrameIfIdle();
+    }
+
+    private void CancelCssColorTransition(bool dispatchCancel)
+    {
+        if (_cssColorTransition is { } transition && dispatchCancel)
+        {
+            var elapsed = Math.Clamp(
+                (Host.Services.Clock.Elapsed - transition.StartedAt - transition.Delay).TotalSeconds,
+                0,
+                transition.Duration.TotalSeconds);
+            DispatchCssTransitionEvent("transitioncancel", "color", elapsed);
+        }
+        _cssColorTransition = null;
+        CancelCssPaintFrameIfIdle();
+    }
+
+    private void CancelCssPaintFrameIfIdle()
+    {
+        if (_cssOpacityTransition is not null || _cssColorTransition is not null
+            || _cssPaintFrameRequest.IsEmpty) return;
+        Host.Services.Frames.CancelFrame(_cssPaintFrameRequest);
+        _cssPaintFrameRequest = default;
+    }
+
+    private void DispatchCssTransitionEvent(string type, string property, double elapsed)
+        => OwnerDocument.DispatchTransitionEvent(this, type, property, Math.Max(0, elapsed));
+
+    private static string CssColor(Color color)
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"rgba({color.R}, {color.G}, {color.B}, {color.A / 255d})");
+
     private void ApplyCssTransform(string? value, bool useChangeSet = false)
     {
         var previousValue = _cssTransformValue;
-        if (_cssRotateTransition is not null
+        if ((_cssRotateTransition is not null || _cssMatrixTransition is not null)
             && string.Equals(value, _cssTransformValue, StringComparison.Ordinal))
         {
             // Layout reconciliation can reapply presentation while the
@@ -10895,8 +12528,12 @@ public class AvaloniaDomElement :
         {
             return;
         }
+        if (TryStartCssMatrixTransition(previousValue, value))
+        {
+            return;
+        }
 
-        CancelCssRotateTransition();
+        CancelCssTransformTransition();
         ApplyCssTransformImmediately(value, useChangeSet);
     }
 
@@ -11042,7 +12679,7 @@ public class AvaloniaDomElement :
             return false;
         }
 
-        CancelCssRotateTransition();
+        CancelCssTransformTransition();
         var transition = new CssRotateTransition(
             startDegrees,
             targetDegrees,
@@ -11056,6 +12693,11 @@ public class AvaloniaDomElement :
             CompositionVisual = TryStartCssRotateCompositionTransition(transition)
         };
         _cssRotateTransition = transition;
+        // Starting or retargeting a transition changes the resolved transform,
+        // but subsequent interpolation samples do not invalidate layout or the
+        // rest of the computed-style snapshot. The transform entry itself is a
+        // live value (see CssComputedStyle), matching the browser CSSOM object.
+        OwnerDocument.InvalidateComputedStyleSnapshots();
         AdvanceCssRotateTransition(TimeSpan.Zero, updateNativePresentation: transition.CompositionVisual is null);
         if (_cssRotateTransition is not null)
         {
@@ -11064,9 +12706,155 @@ public class AvaloniaDomElement :
         return true;
     }
 
+    private bool TryStartCssMatrixTransition(string? previousValue, string? targetValue)
+    {
+        if (string.IsNullOrWhiteSpace(previousValue)
+            || string.Equals(previousValue, targetValue, StringComparison.Ordinal)
+            || !TryParseCssTransformMatrix(previousValue, out var previousMatrix, out _)
+            || !TryParseCssTransformMatrix(targetValue, out var targetMatrix, out var usesPercentageTranslation)
+            || !TryParseTransformTransition(GetStyleValue("transition"), out var specification)
+            || specification.Duration <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        var startMatrix = _cssMatrixTransition is { } activeTransition
+            ? SampleCssMatrixTransition(
+                activeTransition,
+                Host.Services.Clock.Elapsed - activeTransition.StartedAt).Matrix
+            : Control.RenderTransform?.Value ?? previousMatrix;
+        if (MatricesNearlyEqual(startMatrix, targetMatrix))
+        {
+            return false;
+        }
+
+        CancelCssTransformTransition();
+        UpdatePercentageTransformResizeSubscription(usesPercentageTranslation);
+        _cssMatrixTransition = new CssMatrixTransition(
+            startMatrix,
+            targetMatrix,
+            specification.Duration,
+            specification.Delay,
+            specification.Timing,
+            Host.Services.Clock.Elapsed);
+        OwnerDocument.InvalidateComputedStyleSnapshots();
+        AdvanceCssMatrixTransition(TimeSpan.Zero);
+        if (_cssMatrixTransition is not null)
+        {
+            RequestCssTransformFrame();
+        }
+        return true;
+    }
+
+    private bool TryParseCssTransformMatrix(
+        string? value,
+        out Matrix matrix,
+        out bool usesPercentageTranslation)
+    {
+        matrix = Matrix.Identity;
+        usesPercentageTranslation = false;
+        if (string.IsNullOrWhiteSpace(value)
+            || string.Equals(value.Trim(), "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var referenceWidth = ResolveTransformReference(
+            Control.Bounds.Width, Control.DesiredSize.Width, Control.Width);
+        var referenceHeight = ResolveTransformReference(
+            Control.Bounds.Height, Control.DesiredSize.Height, Control.Height);
+        var authoredTransforms = new List<Transform>();
+        foreach (var function in ParseCssTransformFunctions(value))
+        {
+            var args = function.Arguments;
+            if (function.Name == "translatex"
+                && args.Length >= 1
+                && TryParseTranslateLength(args[0], referenceWidth, out var x, out var relativeX))
+            {
+                authoredTransforms.Add(new TranslateTransform(x, 0));
+                usesPercentageTranslation |= relativeX;
+            }
+            else if (function.Name == "translatey"
+                     && args.Length >= 1
+                     && TryParseTranslateLength(args[0], referenceHeight, out var y, out var relativeY))
+            {
+                authoredTransforms.Add(new TranslateTransform(0, y));
+                usesPercentageTranslation |= relativeY;
+            }
+            else if (function.Name is "translate" or "translate3d"
+                     && args.Length >= 1
+                     && TryParseTranslateLength(
+                         args[0], referenceWidth, out x, out var combinedRelativeX))
+            {
+                var parsedY = 0d;
+                var combinedRelativeY = false;
+                if (args.Length >= 2
+                    && !TryParseTranslateLength(
+                        args[1], referenceHeight, out parsedY, out combinedRelativeY))
+                {
+                    return false;
+                }
+                authoredTransforms.Add(new TranslateTransform(x, parsedY));
+                usesPercentageTranslation |= combinedRelativeX || combinedRelativeY;
+            }
+            else if (function.Name is "scale" or "scale3d"
+                     && TryParseCssScaleArguments(args, out var scaleX, out var scaleY))
+            {
+                authoredTransforms.Add(new ScaleTransform(scaleX, scaleY));
+            }
+            else if (function.Name == "scalex"
+                     && TryParseFiniteCssNumber(args, out var scaleXOnly))
+            {
+                authoredTransforms.Add(new ScaleTransform(scaleXOnly, 1));
+            }
+            else if (function.Name == "scaley"
+                     && TryParseFiniteCssNumber(args, out var scaleYOnly))
+            {
+                authoredTransforms.Add(new ScaleTransform(1, scaleYOnly));
+            }
+            else if (function.Name == "rotate"
+                     && args.Length >= 1
+                     && TryParseCssAngle(args[0], out var rotationDegrees))
+            {
+                authoredTransforms.Add(new RotateTransform(rotationDegrees));
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        if (authoredTransforms.Count == 0)
+        {
+            return false;
+        }
+        if (authoredTransforms.Count == 1)
+        {
+            matrix = authoredTransforms[0].Value;
+            return true;
+        }
+
+        var group = new TransformGroup();
+        for (var index = authoredTransforms.Count - 1; index >= 0; index--)
+        {
+            group.Children.Add(authoredTransforms[index]);
+        }
+        matrix = group.Value;
+        return true;
+    }
+
+    private static bool MatricesNearlyEqual(Matrix left, Matrix right)
+        => Math.Abs(left.M11 - right.M11) < 0.000001
+           && Math.Abs(left.M12 - right.M12) < 0.000001
+           && Math.Abs(left.M21 - right.M21) < 0.000001
+           && Math.Abs(left.M22 - right.M22) < 0.000001
+           && Math.Abs(left.M31 - right.M31) < 0.000001
+           && Math.Abs(left.M32 - right.M32) < 0.000001;
+
     private void RequestCssTransformFrame()
     {
-        if (_cssRotateTransition is null || !_cssTransformFrameRequest.IsEmpty)
+        if ((_cssRotateTransition is null && _cssMatrixTransition is null)
+            || !_cssTransformFrameRequest.IsEmpty)
         {
             return;
         }
@@ -11076,22 +12864,30 @@ public class AvaloniaDomElement :
             _cssTransformFrameRequest = Host.Services.Frames.RequestFrame(_ =>
             {
                 _cssTransformFrameRequest = default;
-                var transition = _cssRotateTransition;
-                if (transition is null || !OwnerDocument.IsConnectedStyleElement(this))
+                if ((_cssRotateTransition is null && _cssMatrixTransition is null)
+                    || !OwnerDocument.IsConnectedStyleElement(this))
                 {
-                    CancelCssRotateTransition();
+                    CancelCssTransformTransition();
                     return;
                 }
 
-                AdvanceCssRotateTransition(
-                    Host.Services.Clock.Elapsed - transition.StartedAt,
-                    updateNativePresentation: transition.CompositionVisual is null);
+                if (_cssRotateTransition is { } rotateTransition)
+                {
+                    AdvanceCssRotateTransition(
+                        Host.Services.Clock.Elapsed - rotateTransition.StartedAt,
+                        updateNativePresentation: rotateTransition.CompositionVisual is null);
+                }
+                else if (_cssMatrixTransition is { } matrixTransition)
+                {
+                    AdvanceCssMatrixTransition(
+                        Host.Services.Clock.Elapsed - matrixTransition.StartedAt);
+                }
                 RequestCssTransformFrame();
             });
         }
         catch (ObjectDisposedException)
         {
-            CancelCssRotateTransition();
+            CancelCssTransformTransition();
         }
     }
 
@@ -11116,8 +12912,6 @@ public class AvaloniaDomElement :
                 Control.RenderTransform = new RotateTransform(sample.Angle);
             }
         }
-        OwnerDocument.InvalidateComputedStyleSnapshots();
-
         if (sample.Progress >= 1)
         {
             if (transition.CompositionVisual is { } compositionVisual)
@@ -11126,7 +12920,26 @@ public class AvaloniaDomElement :
                 ApplyCssTransformOrigin(GetStyleValue("transform-origin"));
                 Control.RenderTransform = new RotateTransform(transition.TargetDegrees);
             }
-            CancelCssRotateTransition(resetComposition: false);
+            CancelCssTransformTransition(resetComposition: false);
+            OwnerDocument.InvalidateComputedStyleSnapshots();
+        }
+    }
+
+    private void AdvanceCssMatrixTransition(TimeSpan elapsed)
+    {
+        var transition = _cssMatrixTransition;
+        if (transition is null)
+        {
+            return;
+        }
+
+        var sample = SampleCssMatrixTransition(transition, elapsed);
+        ApplyCssTransformOrigin(GetStyleValue("transform-origin"));
+        Control.RenderTransform = new MatrixTransform(sample.Matrix);
+        if (sample.Progress >= 1)
+        {
+            CancelCssTransformTransition();
+            OwnerDocument.InvalidateComputedStyleSnapshots();
         }
     }
 
@@ -11144,10 +12957,21 @@ public class AvaloniaDomElement :
                 StartedAt = Host.Services.Clock.Elapsed - elapsed
             };
         }
-        AdvanceCssRotateTransition(elapsed);
+        if (_cssRotateTransition is not null)
+        {
+            AdvanceCssRotateTransition(elapsed);
+        }
+        else if (_cssMatrixTransition is { } matrixTransition)
+        {
+            _cssMatrixTransition = matrixTransition with
+            {
+                StartedAt = Host.Services.Clock.Elapsed - elapsed
+            };
+            AdvanceCssMatrixTransition(elapsed);
+        }
     }
 
-    private void CancelCssRotateTransition(bool resetComposition = true)
+    private void CancelCssTransformTransition(bool resetComposition = true)
     {
         if (!_cssTransformFrameRequest.IsEmpty)
         {
@@ -11159,6 +12983,7 @@ public class AvaloniaDomElement :
             ResetCssRotateCompositionAnimation(compositionVisual);
         }
         _cssRotateTransition = null;
+        _cssMatrixTransition = null;
     }
 
     private static void ResetCssRotateCompositionAnimation(CompositionVisual visual)
@@ -11223,15 +13048,43 @@ public class AvaloniaDomElement :
 
     private Matrix? GetComputedTransformMatrix()
     {
+        if (_cssMatrixTransition is { } matrixTransition)
+        {
+            return SampleCssMatrixTransition(
+                matrixTransition,
+                Host.Services.Clock.Elapsed - matrixTransition.StartedAt).Matrix;
+        }
         if (_cssRotateTransition is { } transition)
         {
             var sample = SampleCssRotateTransition(
                 transition,
                 Host.Services.Clock.Elapsed - transition.StartedAt);
-            return new RotateTransform(sample.Angle).Value;
+            return Matrix.CreateRotation(sample.Angle * Math.PI / 180d);
         }
 
         return Control.RenderTransform?.Value;
+    }
+
+    private static CssMatrixTransitionSample SampleCssMatrixTransition(
+        CssMatrixTransition transition,
+        TimeSpan elapsed)
+    {
+        var activeElapsed = elapsed - transition.Delay;
+        var progress = activeElapsed <= TimeSpan.Zero
+            ? 0
+            : Math.Clamp(activeElapsed.TotalMilliseconds / transition.Duration.TotalMilliseconds, 0, 1);
+        var eased = transition.Timing.Evaluate(progress);
+        static double Interpolate(double start, double target, double amount)
+            => start + (target - start) * amount;
+        return new CssMatrixTransitionSample(
+            new Matrix(
+                Interpolate(transition.Start.M11, transition.Target.M11, eased),
+                Interpolate(transition.Start.M12, transition.Target.M12, eased),
+                Interpolate(transition.Start.M21, transition.Target.M21, eased),
+                Interpolate(transition.Start.M22, transition.Target.M22, eased),
+                Interpolate(transition.Start.M31, transition.Target.M31, eased),
+                Interpolate(transition.Start.M32, transition.Target.M32, eased)),
+            progress);
     }
 
     private static bool TryParseSingleCssRotation(string? value, out double degrees)
@@ -11370,6 +13223,28 @@ public class AvaloniaDomElement :
         TimeSpan Delay,
         CssTransitionTiming Timing);
 
+    private sealed record CssScalarTransition(
+        double Start,
+        double Target,
+        TimeSpan Duration,
+        TimeSpan Delay,
+        CssTransitionTiming Timing,
+        TimeSpan StartedAt,
+        bool StartSent);
+
+    private readonly record struct CssScalarTransitionSample(double Value, double Progress);
+
+    private sealed record CssColorTransition(
+        Color Start,
+        Color Target,
+        TimeSpan Duration,
+        TimeSpan Delay,
+        CssTransitionTiming Timing,
+        TimeSpan StartedAt,
+        bool StartSent);
+
+    private readonly record struct CssColorTransitionSample(Color Value, double Progress);
+
     private sealed record CssRotateTransition(
         double StartDegrees,
         double TargetDegrees,
@@ -11380,6 +13255,16 @@ public class AvaloniaDomElement :
         CompositionVisual? CompositionVisual);
 
     private readonly record struct CssRotateTransitionSample(double Angle, double Progress);
+
+    private sealed record CssMatrixTransition(
+        Matrix Start,
+        Matrix Target,
+        TimeSpan Duration,
+        TimeSpan Delay,
+        CssTransitionTiming Timing,
+        TimeSpan StartedAt);
+
+    private readonly record struct CssMatrixTransitionSample(Matrix Matrix, double Progress);
 
     private readonly record struct CssTransitionTiming(double X1, double Y1, double X2, double Y2)
     {
@@ -11480,8 +13365,18 @@ public class AvaloniaDomElement :
         }
         else if (parts.Length >= 2)
         {
-            TryParseOriginPart(parts[0], horizontal: true, out x);
-            TryParseOriginPart(parts[1], horizontal: false, out y);
+            var first = parts[0].Trim().ToLowerInvariant();
+            var second = parts[1].Trim().ToLowerInvariant();
+            if (first is "top" or "bottom" && second is "left" or "right")
+            {
+                TryParseOriginPart(second, horizontal: true, out x);
+                TryParseOriginPart(first, horizontal: false, out y);
+            }
+            else
+            {
+                TryParseOriginPart(first, horizontal: true, out x);
+                TryParseOriginPart(second, horizontal: false, out y);
+            }
         }
         Control.RenderTransformOrigin = new RelativePoint(x, y, RelativeUnit.Relative);
 
@@ -11729,6 +13624,7 @@ public class AvaloniaDomElement :
         var previousPosition = CssLayout.GetPosition(Control);
         var position = CssLayout.ParsePosition(GetStyleValue("position"));
         SetCssLayoutValue(CssLayout.PositionProperty, position, useChangeSet);
+        SetCssLayoutValue(CssLayout.FloatProperty, CssLayout.ParseFloat(GetStyleValue("float")), useChangeSet);
         SetCssLayoutValue(CssLayout.BoxSizingProperty, CssLayout.ParseBoxSizing(GetStyleValue("box-sizing")), useChangeSet);
         SetCssLayoutValue(
             CssLayout.FixedTableLayoutProperty,
@@ -12623,6 +14519,7 @@ public class AvaloniaDomElement :
     }
 
     private readonly record struct ComputedStyleSnapshotState(
+        bool IsConnected,
         CssComputedValues ComputedValues,
         CssDeclaredPropertySet DeclaredProperties,
         Rect Bounds,
@@ -12643,6 +14540,7 @@ public class AvaloniaDomElement :
         FontStyle FontStyle,
         double Opacity,
         bool IsVisible,
+        bool HasActiveTransformTransition,
         Matrix? RenderTransform,
         CssDisplay Display,
         string OverflowX,
@@ -12652,7 +14550,7 @@ public class AvaloniaDomElement :
     {
         private readonly AvaloniaDomElement _element;
         private readonly Control _control;
-        private readonly Dictionary<string, string> _values = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _values = new(CssPropertyNameComparer.Instance);
 
         private ComputedStyleBuilder(AvaloniaDomElement element)
         {
@@ -12670,8 +14568,14 @@ public class AvaloniaDomElement :
         public static CssComputedStyle BuildLazy(AvaloniaDomElement element)
         {
             var builder = new ComputedStyleBuilder(element);
-            return new CssComputedStyle(builder.ResolveProperty, builder.MaterializeValues);
+            return new CssComputedStyle(
+                builder.ResolveProperty,
+                builder.MaterializeValues,
+                IsLivePresentationProperty);
         }
+
+        private static bool IsLivePresentationProperty(string propertyName)
+            => propertyName is "transform" or "opacity" or "color";
 
         private Dictionary<string, string> MaterializeValues()
         {
@@ -12681,7 +14585,32 @@ public class AvaloniaDomElement :
 
         private string ResolveProperty(string propertyName)
         {
+            // Chrome exposes an empty resolved declaration for elements that do
+            // not participate in a document tree. Libraries then fall back to
+            // the element's authored inline declaration. Returning retained-host
+            // defaults such as 0px/static here masks those authored values and
+            // breaks detached construction, cloning, and show/hide preparation.
+            if (!_element.OwnerDocument.IsConnectedStyleElement(_element))
+            {
+                return string.Empty;
+            }
+
             var normalized = CssStyleDeclaration.NormalizePropertyName(propertyName);
+            if (TryResolveConnectedUsedValue(normalized, out var usedValue))
+            {
+                return usedValue;
+            }
+            if (normalized == "opacity" && _element._cssOpacityTransition is not null)
+            {
+                return (_element._cssPresentedOpacity ?? _control.Opacity)
+                    .ToString("0.######", CultureInfo.InvariantCulture);
+            }
+            if (normalized == "color"
+                && _element._cssColorTransition is not null
+                && _element._cssPresentedColor is { } animatedColor)
+            {
+                return CssColor(animatedColor);
+            }
             if (_element.DeclaredStyleProperties.Contains(normalized)
                 && _element.ComputedStyleValues.TryGetValue(normalized, out var declaredValue)
                 && !(declaredValue is "auto" or "none"
@@ -12691,6 +14620,7 @@ public class AvaloniaDomElement :
                 {
                     "font-weight" => SerializeComputedFontWeight(declaredValue, FontWeight.Normal),
                     "transform" => SerializeComputedTransform(),
+                    "transform-origin" => SerializeComputedTransformOrigin(),
                     "color" or "background-color" or "outline-color" => SerializeColor(declaredValue),
                     _ when normalized.StartsWith("border-", StringComparison.Ordinal)
                            && normalized.EndsWith("-color", StringComparison.Ordinal)
@@ -12768,11 +14698,16 @@ public class AvaloniaDomElement :
                 "font-style" => ResolveFontStyle(),
                 "opacity" => FormatNumber(_control.Opacity),
                 "transform" => SerializeComputedTransform(),
+                "transform-origin" => SerializeComputedTransformOrigin(),
                 "visibility" => _control.IsVisible ? "visible" : "hidden",
+                "direction" => _element.ComputedStyleValues.GetValueOrDefault("direction") ?? "ltr",
                 "display" => ResolveDisplay(),
                 "overflow-x" => ResolveOverflow().X,
                 "overflow-y" => ResolveOverflow().Y,
                 "overflow" => ResolveOverflowShorthand(),
+                "grid-area" or "grid-row" or "grid-row-start" or "grid-row-end"
+                    or "grid-column" or "grid-column-start" or "grid-column-end"
+                    => _element.ComputedStyleValues.GetValueOrDefault(normalized) ?? "auto",
                 "pointer-events" => "auto",
                 "line-height" => "normal",
                 _ => string.Empty
@@ -12888,6 +14823,7 @@ public class AvaloniaDomElement :
             }
             var (overflowX, overflowY) = builder.ResolveOverflow();
             return new ComputedStyleSnapshotState(
+                element.OwnerDocument.IsConnectedStyleElement(element),
                 element._computedStyleValues,
                 element._declaredStyleProperties,
                 control.Bounds,
@@ -12901,14 +14837,21 @@ public class AvaloniaDomElement :
                 FormatColor(borderBrush),
                 cornerRadius,
                 FormatColor(background),
-                foreground is null ? string.Empty : FormatColor(foreground),
+                element._cssColorTransition is not null && element._cssPresentedColor is { } animated
+                    ? CssColor(animated)
+                    : foreground is null ? string.Empty : FormatColor(foreground),
                 fontFamily?.ToString() ?? string.Empty,
                 fontSize,
                 fontWeight,
                 fontStyle,
-                control.Opacity,
+                element._cssOpacityTransition is not null
+                    ? element._cssPresentedOpacity ?? control.Opacity
+                    : control.Opacity,
                 control.IsVisible,
-                element.GetComputedTransformMatrix(),
+                element._cssRotateTransition is not null || element._cssMatrixTransition is not null,
+                element._cssRotateTransition is not null || element._cssMatrixTransition is not null
+                    ? null
+                    : control.RenderTransform?.Value,
                 CssLayout.GetDisplay(control),
                 overflowX,
                 overflowY);
@@ -12916,6 +14859,11 @@ public class AvaloniaDomElement :
 
         private void Populate()
         {
+            if (!_element.OwnerDocument.IsConnectedStyleElement(_element))
+            {
+                return;
+            }
+
             AddValue("box-sizing", _element.ComputedStyleValues.TryGetValue("box-sizing", out var boxSizing)
                 ? boxSizing
                 : "content-box");
@@ -12947,14 +14895,42 @@ public class AvaloniaDomElement :
             AddBackground(background);
 
             var foreground = ResolveBrush("Foreground", null);
-            AddForeground(foreground);
+            if (_element._cssColorTransition is not null
+                && _element._cssPresentedColor is { } animatedColor)
+            {
+                AddValue("color", CssColor(animatedColor));
+            }
+            else
+            {
+                AddForeground(foreground);
+            }
 
             AddFontProperties();
-            AddOpacity();
+            if (_element._cssOpacityTransition is not null)
+            {
+                AddValue("opacity", FormatNumber(
+                    _element._cssPresentedOpacity ?? _control.Opacity));
+            }
+            else
+            {
+                AddOpacity();
+            }
             AddValue("transform", SerializeComputedTransform());
+            AddValue("transform-origin", SerializeComputedTransformOrigin());
             AddVisibility();
             AddDisplay();
             AddOverflow();
+            AddValue("grid-area", _element.ComputedStyleValues.GetValueOrDefault("grid-area") ?? "auto");
+            AddValue("grid-row", _element.ComputedStyleValues.GetValueOrDefault("grid-row") ?? "auto");
+            AddValue("grid-row-start", _element.ComputedStyleValues.GetValueOrDefault("grid-row-start") ?? "auto");
+            AddValue("grid-row-end", _element.ComputedStyleValues.GetValueOrDefault("grid-row-end") ?? "auto");
+            AddValue("grid-column", _element.ComputedStyleValues.GetValueOrDefault("grid-column") ?? "auto");
+            AddValue(
+                "grid-column-start",
+                _element.ComputedStyleValues.GetValueOrDefault("grid-column-start") ?? "auto");
+            AddValue(
+                "grid-column-end",
+                _element.ComputedStyleValues.GetValueOrDefault("grid-column-end") ?? "auto");
 
             AddValue("pointer-events", "auto");
             AddValue("line-height", "normal");
@@ -12982,6 +14958,7 @@ public class AvaloniaDomElement :
                 {
                     "font-weight" => SerializeComputedFontWeight(pair.Value, FontWeight.Normal),
                     "transform" => SerializeComputedTransform(),
+                    "transform-origin" => SerializeComputedTransformOrigin(),
                     "color" or "background-color" => SerializeColor(pair.Value),
                     _ when normalized.StartsWith("border-", StringComparison.Ordinal)
                            && normalized.EndsWith("-color", StringComparison.Ordinal)
@@ -13255,6 +15232,83 @@ public class AvaloniaDomElement :
             return FormatFixedLength(value);
         }
 
+        private bool TryResolveConnectedUsedValue(string propertyName, out string value)
+        {
+            value = string.Empty;
+            if (_control.Parent is not Control parent)
+            {
+                return false;
+            }
+
+            var parentBorder = parent switch
+            {
+                CssLayoutPanel panel => panel.BorderThickness,
+                Border border => border.BorderThickness,
+                TemplatedControl templated => templated.BorderThickness,
+                _ => default
+            };
+            var paddingBoxWidth = Math.Max(0, parent.Bounds.Width - parentBorder.Left - parentBorder.Right);
+            var paddingBoxHeight = Math.Max(0, parent.Bounds.Height - parentBorder.Top - parentBorder.Bottom);
+            var paddingLeft = CssLayout.Resolve(CssLayout.GetPaddingLeft(parent), paddingBoxWidth) ?? 0;
+            var paddingRight = CssLayout.Resolve(CssLayout.GetPaddingRight(parent), paddingBoxWidth) ?? 0;
+            var paddingTop = CssLayout.Resolve(CssLayout.GetPaddingTop(parent), paddingBoxHeight) ?? 0;
+            var paddingBottom = CssLayout.Resolve(CssLayout.GetPaddingBottom(parent), paddingBoxHeight) ?? 0;
+            var contentWidth = Math.Max(0, paddingBoxWidth - paddingLeft - paddingRight);
+
+            CssLength? length = propertyName switch
+            {
+                "left" or "inset-inline-start" => CssLayout.GetLeft(_control),
+                "top" or "inset-block-start" => CssLayout.GetTop(_control),
+                "right" or "inset-inline-end" => CssLayout.GetRight(_control),
+                "bottom" or "inset-block-end" => CssLayout.GetBottom(_control),
+                "margin-left" => CssLayout.GetMarginLeft(_control),
+                "margin-top" => CssLayout.GetMarginTop(_control),
+                "margin-right" => CssLayout.GetMarginRight(_control),
+                "margin-bottom" => CssLayout.GetMarginBottom(_control),
+                _ => null
+            };
+            if (!length.HasValue)
+            {
+                return false;
+            }
+
+            if (propertyName.StartsWith("margin-", StringComparison.Ordinal))
+            {
+                var left = CssLayout.GetMarginLeft(_control);
+                var right = CssLayout.GetMarginRight(_control);
+                var leftIsAuto = left is { IsAuto: true };
+                var rightIsAuto = right is { IsAuto: true };
+                if (length.Value.IsAuto && propertyName is "margin-left" or "margin-right")
+                {
+                    var resolvedLeft = leftIsAuto ? 0 : CssLayout.Resolve(left, contentWidth) ?? 0;
+                    var resolvedRight = rightIsAuto ? 0 : CssLayout.Resolve(right, contentWidth) ?? 0;
+                    var remaining = Math.Max(
+                        0,
+                        contentWidth - _control.Bounds.Width - resolvedLeft - resolvedRight);
+                    var resolved = leftIsAuto && rightIsAuto ? remaining / 2 : remaining;
+                    value = FormatFixedLength(resolved);
+                    return true;
+                }
+
+                var margin = CssLayout.Resolve(length, contentWidth);
+                if (!margin.HasValue)
+                {
+                    return false;
+                }
+                value = FormatFixedLength(margin.Value);
+                return true;
+            }
+
+            var horizontal = propertyName is "left" or "right" or "inset-inline-start" or "inset-inline-end";
+            var inset = CssLayout.Resolve(length, horizontal ? paddingBoxWidth : paddingBoxHeight);
+            if (!inset.HasValue)
+            {
+                return false;
+            }
+            value = FormatFixedLength(inset.Value);
+            return true;
+        }
+
         private static string FormatMinDimension(double value)
         {
             if (!double.IsFinite(value))
@@ -13325,6 +15379,18 @@ public class AvaloniaDomElement :
             return $"matrix({FormatMatrixNumber(matrix.M11)}, {FormatMatrixNumber(matrix.M12)}, " +
                    $"{FormatMatrixNumber(matrix.M21)}, {FormatMatrixNumber(matrix.M22)}, " +
                    $"{FormatMatrixNumber(matrix.M31)}, {FormatMatrixNumber(matrix.M32)})";
+        }
+
+        private string SerializeComputedTransformOrigin()
+        {
+            var origin = _control.RenderTransformOrigin;
+            var x = origin.Unit == RelativeUnit.Relative
+                ? origin.Point.X * _control.Bounds.Width
+                : origin.Point.X;
+            var y = origin.Unit == RelativeUnit.Relative
+                ? origin.Point.Y * _control.Bounds.Height
+                : origin.Point.Y;
+            return $"{FormatFixedLength(x)} {FormatFixedLength(y)}";
         }
 
         private static string FormatMatrixNumber(double value)
@@ -13457,6 +15523,8 @@ public class AvaloniaDomElement :
             return null;
         }
 
+        ThrowIfHierarchyCycle(child);
+
         if (TryGetControlsCollection(Control, out var list))
         {
             var collectInsertion = OwnerDocument.CollectPerformanceMetrics;
@@ -13471,6 +15539,23 @@ public class AvaloniaDomElement :
                 OwnerDocument.RecordDomNodeInsertion(insertionStarted, insertionAllocationStarted);
             }
 
+            if (reference is not null)
+            {
+                if (list.IndexOf(reference.Control) < 0)
+                {
+                    throw new InvalidOperationException(
+                        "insertBefore reference is not a child of this node.");
+                }
+
+                if (ReferenceEquals(child.Control, reference.Control))
+                {
+                    RecordInsertion();
+                    return child;
+                }
+            }
+
+            // Validate the reference and handle the identity no-op before
+            // detaching. A rejected insertion must leave both trees intact.
             DetachFromCurrentParentWithNotification(child);
 
             if (OwnerDocument.IsConnectedStyleElement(this))
@@ -13546,7 +15631,13 @@ public class AvaloniaDomElement :
         {
             if (reference is not null && !ReferenceEquals(cc.Content, reference.Control))
             {
-                return null;
+                throw new InvalidOperationException(
+                    "insertBefore reference is not a child of this node.");
+            }
+
+            if (reference is not null && ReferenceEquals(child.Control, reference.Control))
+            {
+                return child;
             }
 
             DetachFromCurrentParentWithNotification(child);
@@ -13573,7 +15664,13 @@ public class AvaloniaDomElement :
         {
             if (reference is not null && !ReferenceEquals(decorator.Child, reference.Control))
             {
-                return null;
+                throw new InvalidOperationException(
+                    "insertBefore reference is not a child of this node.");
+            }
+
+            if (reference is not null && ReferenceEquals(child.Control, reference.Control))
+            {
+                return child;
             }
 
             DetachFromCurrentParentWithNotification(child);
@@ -13597,6 +15694,35 @@ public class AvaloniaDomElement :
         }
 
         return null;
+    }
+
+    private void ThrowIfHierarchyCycle(AvaloniaDomElement child)
+    {
+        for (Control? ancestor = Control; ancestor is not null; ancestor = ancestor.Parent as Control)
+        {
+            if (ReferenceEquals(ancestor, child.Control))
+            {
+                throw new InvalidOperationException(
+                    "A DOM mutation cannot insert an ancestor into its descendant.");
+            }
+        }
+    }
+
+    private bool IsDirectChild(AvaloniaDomElement child)
+    {
+        if (TryGetControlsCollection(Control, out var list))
+        {
+            return list.IndexOf(child.Control) >= 0;
+        }
+        if (Control is ContentControl cc)
+        {
+            return ReferenceEquals(cc.Content, child.Control);
+        }
+        if (Control is Decorator decorator)
+        {
+            return ReferenceEquals(decorator.Child, child.Control);
+        }
+        return false;
     }
 
     private void TriggerIframeNavigationIfNeeded(AvaloniaDomElement child)
@@ -13658,7 +15784,9 @@ public class AvaloniaDomElement :
                     : null;
                 return true;
             case "class":
-                value = string.Join(' ', ((Control as StyledElement)?.Classes ?? new Classes()).Where(c => !c.StartsWith(':')));
+                value = HasAttributePresence("class")
+                    ? string.Join(' ', ((Control as StyledElement)?.Classes ?? new Classes()).Where(c => !c.StartsWith(':')))
+                    : null;
                 return true;
             case "title":
                 value = string.Equals(_nodeNameOverride, "IFRAME", StringComparison.OrdinalIgnoreCase)
@@ -13666,7 +15794,7 @@ public class AvaloniaDomElement :
                     : ToolTip.GetTip(Control)?.ToString();
                 return true;
             case "style":
-                value = GetStyleString(Control);
+                value = HasAttributePresence("style") ? GetStyleString(Control) : null;
                 return true;
             case "disabled":
                 // Avoid the generic CLR-property fallback turning a missing
@@ -13706,7 +15834,8 @@ public class AvaloniaDomElement :
 
         if (s_disableStyleSerializationBuilder)
         {
-            return string.Join("; ", _styleValues.Select(kv => $"{kv.Key}: {kv.Value}"));
+            return string.Join("; ", _styleValues.Select(kv =>
+                $"{kv.Key}: {kv.Value}{(_importantStyleProperties.Contains(kv.Key) ? " !important" : string.Empty)}"));
         }
 
         var builder = new StringBuilder(_styleValues.Count * 24);
@@ -13718,10 +15847,16 @@ public class AvaloniaDomElement :
             }
 
             builder.Append(pair.Key).Append(": ").Append(pair.Value);
+            if (_importantStyleProperties.Contains(pair.Key))
+            {
+                builder.Append(" !important");
+            }
         }
 
         return builder.ToString();
     }
+
+    internal string GetStyleText() => GetStyleString(Control);
 
     internal void SetStyleText(string? value)
     {
@@ -14277,11 +16412,17 @@ public sealed class DomHeadElement
 
     public string nodeName => "HEAD";
 
+    public string tagName => "HEAD";
+
+    public string localName => "head";
+
     public DocumentStyleProbe style { get; }
 
     public AvaloniaDomDocument ownerDocument => _document;
 
     public DomDocumentElement? parentElement => _parent;
+
+    public DomDocumentElement? parentNode => _parent;
 
     public object[] childNodes => _children.ToArray();
 
@@ -14422,6 +16563,7 @@ public sealed class DomDocumentElement : ICssSelectorNode
     private readonly DomHeadElement _head;
     private readonly Dictionary<string, string?> _attributes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _dataAttributes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<DomEventRegistration>> _eventListeners = new(StringComparer.OrdinalIgnoreCase);
     private DomStringMap? _dataset;
 
     internal DomDocumentElement(AvaloniaDomDocument document, DomHeadElement head)
@@ -14435,6 +16577,10 @@ public sealed class DomDocumentElement : ICssSelectorNode
     public int nodeType => 1;
 
     public string nodeName => "HTML";
+
+    public string tagName => "HTML";
+
+    public string localName => "html";
 
     public DocumentStyleProbe style { get; }
 
@@ -14501,9 +16647,75 @@ public sealed class DomDocumentElement : ICssSelectorNode
 
     public DomDocumentElement? parentElement => null;
 
+    public AvaloniaDomDocument parentNode => _document;
+
     public double clientWidth => _document.GetDocumentViewportClientSize().Width;
 
     public double clientHeight => _document.GetDocumentViewportClientSize().Height;
+
+    public double clientLeft => 0;
+
+    public double clientTop => 0;
+
+    public double scrollWidth => body?.scrollWidth ?? clientWidth;
+
+    public double scrollHeight => body?.scrollHeight ?? clientHeight;
+
+    public double scrollLeft
+    {
+        get
+        {
+            _document.EnsureStylesCurrent();
+            _document.FlushPendingLayout();
+            return body?.Control is CssLayoutPanel panel ? panel.ScrollOffset.X : body?.scrollLeft ?? 0;
+        }
+        set
+        {
+            _document.EnsureStylesCurrent();
+            _document.FlushPendingLayout();
+            if (body?.Control is CssLayoutPanel panel)
+            {
+                panel.SetDocumentScrollOffset(
+                    new Vector(value, panel.ScrollOffset.Y),
+                    _document.GetDocumentViewportClientSize());
+            }
+            else if (body is { } bodyElement)
+            {
+                bodyElement.scrollLeft = value;
+            }
+        }
+    }
+
+    public double scrollTop
+    {
+        get
+        {
+            _document.EnsureStylesCurrent();
+            _document.FlushPendingLayout();
+            return body?.Control is CssLayoutPanel panel ? panel.ScrollOffset.Y : body?.scrollTop ?? 0;
+        }
+        set
+        {
+            _document.EnsureStylesCurrent();
+            _document.FlushPendingLayout();
+            if (body?.Control is CssLayoutPanel panel)
+            {
+                panel.SetDocumentScrollOffset(
+                    new Vector(panel.ScrollOffset.X, value),
+                    _document.GetDocumentViewportClientSize());
+            }
+            else if (body is { } bodyElement)
+            {
+                bodyElement.scrollTop = value;
+            }
+        }
+    }
+
+    public DomRect getBoundingClientRect()
+        => new(new Rect(0, 0, clientWidth, clientHeight));
+
+    public DomRect[] getClientRects()
+        => [getBoundingClientRect()];
 
     public DomHeadElement head => _head;
 
@@ -14571,17 +16783,104 @@ public sealed class DomDocumentElement : ICssSelectorNode
         return node;
     }
 
+    public object? querySelector(string selector)
+        => _document.querySelector(selector);
+
+    public object[] querySelectorAll(string selector)
+        => _document.querySelectorAll(selector);
+
+    public object removeChild(object node)
+    {
+        if (node is DomHeadElement)
+        {
+            throw new InvalidOperationException("The live document HEAD cannot be detached by this bounded root model.");
+        }
+        if (node is AvaloniaDomElement element && body is { } bodyElement)
+        {
+            return bodyElement.removeChild(element)
+                   ?? throw new InvalidOperationException("removeChild requires a child of the document root.");
+        }
+        throw new InvalidOperationException("removeChild requires a child of the document root.");
+    }
+
     public void addEventListener(string type, object handler)
-        => _document.addEventListener(type, handler);
+        => addEventListener(type, handler, options: null);
 
     public void addEventListener(string type, object handler, object? options)
-        => _document.addEventListener(type, handler, options);
+    {
+        var adapter = _document.ExternalEventListenerAdapter;
+        var listener = adapter?.GetEventListener(handler, create: true);
+        if (listener is null)
+        {
+            return;
+        }
+
+        var parsed = adapter!.GetEventListenerOptions(options);
+        var normalized = NormalizeEventName(type);
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return;
+        }
+
+        if (!_eventListeners.TryGetValue(normalized, out var listeners))
+        {
+            listeners = new List<DomEventRegistration>();
+            _eventListeners[normalized] = listeners;
+        }
+        if (!listeners.Any(item => item.Matches(listener, parsed.Capture)))
+        {
+            listeners.Add(new DomEventRegistration(
+                listener,
+                new EventListenerOptions(parsed.Capture, parsed.Once, parsed.Passive)));
+        }
+    }
 
     public void removeEventListener(string type, object handler)
-        => _document.removeEventListener(type, handler);
+        => removeEventListener(type, handler, options: null);
 
     public void removeEventListener(string type, object handler, object? options)
-        => _document.removeEventListener(type, handler, options);
+    {
+        var adapter = _document.ExternalEventListenerAdapter;
+        var listener = adapter?.GetEventListener(handler, create: false);
+        if (listener is null)
+        {
+            return;
+        }
+
+        var parsed = adapter!.GetEventListenerOptions(options);
+        var normalized = NormalizeEventName(type);
+        if (!_eventListeners.TryGetValue(normalized, out var listeners))
+        {
+            return;
+        }
+        var registration = listeners.FirstOrDefault(item => item.Matches(listener, parsed.Capture));
+        if (registration is not null)
+        {
+            RemoveListener(normalized, registration);
+        }
+    }
+
+    public void click() => _document.DispatchProgrammaticClick(this);
+
+    internal IReadOnlyList<DomEventRegistration>? GetListeners(string type)
+    {
+        var normalized = NormalizeEventName(type);
+        return _eventListeners.TryGetValue(normalized, out var listeners) ? listeners : null;
+    }
+
+    internal void RemoveListener(string type, DomEventRegistration listener)
+    {
+        var normalized = NormalizeEventName(type);
+        if (_eventListeners.TryGetValue(normalized, out var listeners)
+            && listeners.Remove(listener)
+            && listeners.Count == 0)
+        {
+            _eventListeners.Remove(normalized);
+        }
+    }
+
+    private static string NormalizeEventName(string? type)
+        => string.IsNullOrWhiteSpace(type) ? string.Empty : type.Trim().ToLowerInvariant();
 
     private DomDocumentTokenList? _classList;
     public DomDocumentTokenList classList => _classList ??= new DomDocumentTokenList(_document);
@@ -14685,20 +16984,39 @@ public sealed class DomDocumentImplementation
         _document = document;
     }
 
-    public AvaloniaDomDocument createHTMLDocument(string? title)
+    public DomParsedDocument createHTMLDocument(string? title)
     {
-        if (!string.IsNullOrWhiteSpace(title))
+        var html = (AvaloniaDomElement?)_document.createElement("html")
+                   ?? throw new InvalidOperationException("Unable to create a detached HTML root.");
+        var head = (AvaloniaDomElement?)_document.createElement("head")
+                   ?? throw new InvalidOperationException("Unable to create a detached HTML head.");
+        var body = (AvaloniaDomElement?)_document.createElement("body")
+                   ?? throw new InvalidOperationException("Unable to create a detached HTML body.");
+        html.appendChild(head);
+        html.appendChild(body);
+        if (!string.IsNullOrEmpty(title))
         {
-            _document.title = title;
+            var titleElement = (AvaloniaDomElement?)_document.createElement("title")
+                               ?? throw new InvalidOperationException("Unable to create a detached title.");
+            titleElement.textContent = title;
+            head.appendChild(titleElement);
         }
 
-        return _document;
+        return new DomParsedDocument(_document, html, body, head);
+    }
+
+    public DomParsedDocument createDocument(string? namespaceUri, string? qualifiedName, object? doctype)
+    {
+        var root = string.IsNullOrEmpty(qualifiedName)
+            ? null
+            : _document.CreateXmlElement(qualifiedName, namespaceUri);
+        return new DomParsedDocument(_document, root, xmlMode: true);
     }
 }
 
 public sealed class DocumentStyleProbe : DynamicObject, IHtmlMlCssStyleDeclarationTarget
 {
-    private readonly Dictionary<string, string> _values = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _values = new(CssPropertyNameComparer.Instance);
     private readonly Action? _changed;
 
     internal DocumentStyleProbe(Action? changed = null)
@@ -14750,7 +17068,7 @@ public sealed class DocumentStyleProbe : DynamicObject, IHtmlMlCssStyleDeclarati
 
     public void SetCssText(string? value)
     {
-        var next = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var next = new Dictionary<string, string>(CssPropertyNameComparer.Instance);
         var remaining = value.AsSpan();
         while (!remaining.IsEmpty)
         {
@@ -14802,6 +17120,9 @@ public sealed class DocumentStyleProbe : DynamicObject, IHtmlMlCssStyleDeclarati
     public void setProperty(string propertyName, string? value)
         => SetProperty(propertyName, value);
 
+    public bool supportsPropertyName(string propertyName)
+        => CssPropertyCatalog.IsSupported(propertyName);
+
     void IHtmlMlCssStyleDeclarationTarget.SetProperty(string propertyName, string? value)
         => SetProperty(propertyName, value);
 
@@ -14813,8 +17134,24 @@ public sealed class DocumentStyleProbe : DynamicObject, IHtmlMlCssStyleDeclarati
             return;
         }
 
-        value = value?.Trim();
-        if (string.IsNullOrEmpty(value))
+        if (value is not null)
+        {
+            if (!normalized.StartsWith("--", StringComparison.Ordinal)
+                && !CssPropertyCatalog.IsSupported(normalized))
+            {
+                return;
+            }
+            if (!CssPropertyCatalog.IsValidCssomValue(normalized, value))
+            {
+                return;
+            }
+            if (value.Length == 0)
+            {
+                value = null;
+            }
+        }
+
+        if (value is null)
         {
             removeProperty(normalized);
             return;
@@ -14979,6 +17316,12 @@ public sealed class DomTokenList
     }
 
     public void SetFromString(string? value)
+        => SetFromString(value, notifyAttributeMutation: true);
+
+    internal void SetFromAttribute(string? value)
+        => SetFromString(value, notifyAttributeMutation: false);
+
+    private void SetFromString(string? value, bool notifyAttributeMutation)
     {
         var styled = Styled;
         if (styled is null)
@@ -14994,6 +17337,10 @@ public sealed class DomTokenList
         if (string.Equals(currentValue, value ?? string.Empty, StringComparison.Ordinal)
             || (currentValue.Length == 0 && string.IsNullOrWhiteSpace(value)))
         {
+            if (notifyAttributeMutation && !_element.HasClassAttribute)
+            {
+                _element.RaiseClassListMutation(null, currentValue);
+            }
             return;
         }
 
@@ -15032,7 +17379,10 @@ public sealed class DomTokenList
             styled.Classes.Add(cls);
         }
 
-        NotifyClassMutation(before);
+        if (notifyAttributeMutation)
+        {
+            NotifyClassMutation(before);
+        }
     }
 
 
@@ -15043,12 +17393,12 @@ public sealed class DomTokenList
     {
         foreach (var token in tokens)
         {
-            if (string.IsNullOrWhiteSpace(token))
+            if (string.IsNullOrEmpty(token))
             {
                 continue;
             }
 
-            foreach (var part in token.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            foreach (var part in token.Split(new[] { ' ', '\t', '\r', '\n', '\f' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 yield return part;
             }
@@ -15057,13 +17407,8 @@ public sealed class DomTokenList
 
     private void NotifyClassMutation(string? before)
     {
-        var after = _element.getAttribute("class");
-        _element.RaiseAttributeMutation("class", before, after);
-        // Class changes must invalidate selector state before the immediate
-        // presentation refresh performs its synchronous style read. Reversing
-        // this order consumes any pending connected-branch cascade with stale
-        // class state, then forces a second cascade for the actual mutation.
-        _element.ApplyCanvasPositioning();
+        var after = value;
+        _element.RaiseClassListMutation(before, after);
     }
 
     private void OnClassesChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -15133,7 +17478,7 @@ public sealed class CssStyleDeclaration : DynamicObject, IHtmlMlCssStyleDeclarat
 
     public string cssText
     {
-        get => string.Join("; ", _element.StyleValues.Select(kv => $"{kv.Key}: {kv.Value}"));
+        get => _element.GetStyleText();
         set => _element.SetStyleText(value);
     }
 
@@ -15175,6 +17520,9 @@ public sealed class CssStyleDeclaration : DynamicObject, IHtmlMlCssStyleDeclarat
         _element.SetStyleProperty(propertyName, value);
     }
 
+    public bool supportsPropertyName(string propertyName)
+        => CssPropertyCatalog.IsSupported(propertyName);
+
     void IHtmlMlCssStyleDeclarationTarget.SetProperty(string propertyName, string? value)
         => _element.SetStyleProperty(propertyName, value);
 
@@ -15198,7 +17546,12 @@ public sealed class CssStyleDeclaration : DynamicObject, IHtmlMlCssStyleDeclarat
 
         if (char.IsWhiteSpace(name[0]) || char.IsWhiteSpace(name[^1]))
         {
-            name = name.Trim();
+            return string.Empty;
+        }
+
+        if (name.StartsWith("--", StringComparison.Ordinal))
+        {
+            return CssCustomPropertySyntax.IsValidName(name) ? name : string.Empty;
         }
 
         var containsUppercase = false;
@@ -15289,14 +17642,18 @@ public sealed class CssStyleDeclaration : DynamicObject, IHtmlMlCssStyleDeclarat
     }
 }
 
-public sealed class CssComputedStyle : DynamicObject, IHtmlMlComputedStyleTarget
+public sealed class CssComputedStyle : DynamicObject,
+    IHtmlMlComputedStyleTarget,
+    IHtmlMlComputedStylePropertySupportTarget,
+    IHtmlMlLiveComputedStyleTarget
 {
     private Dictionary<string, string> _values;
     private readonly Func<string, string>? _valueResolver;
     private readonly Func<Dictionary<string, string>>? _materializer;
+    private readonly Func<string, bool>? _isLiveProperty;
     private bool _materialized;
 
-    internal static CssComputedStyle Empty { get; } = new(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    internal static CssComputedStyle Empty { get; } = new(new Dictionary<string, string>(CssPropertyNameComparer.Instance));
 
     internal CssComputedStyle(Dictionary<string, string> values)
     {
@@ -15310,11 +17667,13 @@ public sealed class CssComputedStyle : DynamicObject, IHtmlMlComputedStyleTarget
 
     internal CssComputedStyle(
         Func<string, string> valueResolver,
-        Func<Dictionary<string, string>> materializer)
+        Func<Dictionary<string, string>> materializer,
+        Func<string, bool>? isLiveProperty = null)
     {
-        _values = new Dictionary<string, string>(4, StringComparer.OrdinalIgnoreCase);
+        _values = new Dictionary<string, string>(4, CssPropertyNameComparer.Instance);
         _valueResolver = valueResolver;
         _materializer = materializer;
+        _isLiveProperty = isLiveProperty;
     }
 
     public int length => EnsureMaterialized().Count;
@@ -15354,6 +17713,20 @@ public sealed class CssComputedStyle : DynamicObject, IHtmlMlComputedStyleTarget
     string IHtmlMlComputedStyleTarget.GetPropertyValue(string propertyName)
         => getPropertyValue(propertyName) ?? string.Empty;
 
+    bool IHtmlMlComputedStylePropertySupportTarget.SupportsPropertyName(string propertyName)
+        => CssPropertyCatalog.IsSupported(propertyName);
+
+    bool IHtmlMlLiveComputedStyleTarget.IsPropertyLive(string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            return false;
+        }
+
+        var normalized = CssStyleDeclaration.NormalizePropertyName(propertyName);
+        return _isLiveProperty?.Invoke(normalized) == true;
+    }
+
     public string item(int index)
     {
         var values = EnsureMaterialized();
@@ -15372,6 +17745,15 @@ public sealed class CssComputedStyle : DynamicObject, IHtmlMlComputedStyleTarget
 
     private string GetResolvedValue(string normalized)
     {
+        // A CSSStyleProperties object returned by getComputedStyle is live.
+        // Presentation-only transition values therefore cannot be frozen in
+        // the per-object cache, including after length/item materializes the
+        // complete declaration.
+        if (_isLiveProperty?.Invoke(normalized) == true)
+        {
+            return _valueResolver?.Invoke(normalized) ?? string.Empty;
+        }
+
         if (_values.TryGetValue(normalized, out var value))
         {
             return value;
@@ -15577,6 +17959,70 @@ public sealed class DomRect
     public double bottom { get; }
 }
 
+public sealed class DomAttribute
+{
+    public DomAttribute(string name, string value, AvaloniaDomDocument? ownerDocument = null)
+    {
+        this.name = name;
+        localName = name;
+        nodeName = name;
+        this.value = value;
+        nodeValue = value;
+        this.ownerDocument = ownerDocument;
+    }
+
+    public int nodeType => 2;
+
+    public AvaloniaDomDocument? ownerDocument { get; }
+
+    public string name { get; }
+
+    public string localName { get; }
+
+    public string nodeName { get; }
+
+    public string value { get; }
+
+    public string nodeValue { get; }
+}
+
+public sealed class DomComment : DomNodeCore
+{
+    private string _data;
+
+    public DomComment(string data, AvaloniaDomDocument ownerDocument)
+    {
+        _data = data ?? string.Empty;
+        this.ownerDocument = ownerDocument;
+    }
+
+    public int nodeType => 8;
+
+    public string nodeName => "#comment";
+
+    public AvaloniaDomDocument ownerDocument { get; }
+
+    public object? parentNode => null;
+
+    public string data
+    {
+        get => _data;
+        set => _data = value ?? string.Empty;
+    }
+
+    public string nodeValue
+    {
+        get => _data;
+        set => _data = value ?? string.Empty;
+    }
+
+    public string textContent
+    {
+        get => _data;
+        set => _data = value ?? string.Empty;
+    }
+}
+
 public class DomRange : DomRangeCore
 {
     private readonly AvaloniaDomDocument _document;
@@ -15598,16 +18044,74 @@ public class DomRange : DomRangeCore
 
 public class DomDocumentFragment : DomDocumentFragmentCore<AvaloniaDomElement>
 {
+    private readonly AvaloniaDomElement _container;
+
     public DomDocumentFragment(AvaloniaDomElement container)
         : base(container)
     {
+        _container = container;
+    }
+
+    public void append(params object?[] nodes) => _container.append(nodes);
+
+    public string? textContent
+    {
+        get => _container.textContent;
+        set => _container.textContent = value;
     }
 }
 
 public sealed class DomParsedDocument : DomParsedDocumentCore<AvaloniaDomElement>
 {
-    public DomParsedDocument(AvaloniaDomElement? documentElement)
-        : base(documentElement)
+    private readonly AvaloniaDomDocument _document;
+    private readonly AvaloniaDomElement? _head;
+    private readonly bool _xmlMode;
+    private DomDocumentImplementation? _implementation;
+
+    public DomParsedDocument(
+        AvaloniaDomDocument document,
+        AvaloniaDomElement? documentElement,
+        AvaloniaDomElement? body = null,
+        AvaloniaDomElement? head = null,
+        bool xmlMode = false)
+        : base(documentElement, body)
     {
+        _document = document;
+        _head = head;
+        _xmlMode = xmlMode;
     }
+
+    public int nodeType => 9;
+
+    public string nodeName => "#document";
+
+    public object? defaultView => null;
+
+    public object? location => null;
+
+    public string cookie
+    {
+        get => string.Empty;
+        set { }
+    }
+
+    public AvaloniaDomElement? head => _head;
+
+    public object? createElement(string tagName)
+        => _xmlMode ? _document.CreateXmlElement(tagName) : _document.createElement(tagName);
+
+    public object? createElementNS(string? namespaceUri, string qualifiedName)
+        => _xmlMode
+            ? _document.CreateXmlElement(qualifiedName, namespaceUri)
+            : _document.createElementNS(namespaceUri, qualifiedName);
+
+    public object? createTextNode(string data) => _document.createTextNode(data);
+
+    public DomComment createComment(string data) => _document.createComment(data);
+
+    public DomAttribute createAttribute(string name) => _document.createAttribute(name);
+
+    public object? createDocumentFragment() => _document.createDocumentFragment();
+
+    public DomDocumentImplementation implementation => _implementation ??= new(_document);
 }

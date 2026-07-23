@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOM attribute DOMString coercion</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("setAttribute converts boolean numeric and null values to DOMString", () => {
+    const node = document.createElement("div");
+    node.setAttribute("data-boolean", true);
+    node.setAttribute("data-number", 42);
+    node.setAttribute("data-null", null);
+    assert(node.getAttribute("data-boolean") === "true", "boolean attribute value");
+    assert(node.getAttribute("data-number") === "42", "numeric attribute value");
+    assert(node.getAttribute("data-null") === "null", "null attribute value");
+  });
+
+  test("setAttributeNS preserves nullable namespace and converts value", () => {
+    const node = document.createElement("div");
+    node.setAttributeNS(null, "data-count", 7);
+    assert(node.getAttribute("data-count") === "7", "namespaced numeric value");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

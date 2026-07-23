@@ -90,13 +90,38 @@ public enum HtmlMlResourceKind
 public readonly record struct HtmlMlResourceRequest(
     string Specifier,
     string? BaseAddress,
-    HtmlMlResourceKind Kind);
+    HtmlMlResourceKind Kind)
+{
+    public string? IfNoneMatch { get; init; }
+
+    public DateTimeOffset? IfModifiedSince { get; init; }
+}
 
 public readonly record struct HtmlMlTextResource(
     string CacheKey,
     string Content,
     string DisplayName,
-    string? Directory);
+    string? Directory)
+{
+    public string? EntityTag { get; init; }
+
+    public DateTimeOffset? LastModified { get; init; }
+
+    /// <summary>
+    /// The HTTP freshness boundary for this representation. A persistent cache
+    /// may reuse the content without contacting the origin before this instant;
+    /// after it, validators such as <see cref="EntityTag"/> must be used.
+    /// </summary>
+    public DateTimeOffset? FreshUntil { get; init; }
+
+    /// <summary>
+    /// Whether the representation may be stored. HTTP <c>no-store</c>
+    /// responses set this to <see langword="false"/>.
+    /// </summary>
+    public bool IsCacheable { get; init; } = true;
+
+    public bool NotModified { get; init; }
+}
 
 public interface IHtmlMlResourceLoader
 {

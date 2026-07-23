@@ -46,6 +46,54 @@ public sealed class CssComputedValueNormalizerTests
     }
 
     [Theory]
+    [InlineData("2", "2", "auto", "auto", "auto")]
+    [InlineData("2 / 3", "2", "3", "auto", "auto")]
+    [InlineData("2 / 3 / 4 / 5", "2", "3", "4", "5")]
+    public void ExpandsGridAreaPlacementComponents(
+        string shorthand,
+        string rowStart,
+        string columnStart,
+        string rowEnd,
+        string columnEnd)
+    {
+        Assert.True(CssComputedValueNormalizer.TryExpandGridPlacementShorthand(
+            "grid-area",
+            shorthand,
+            out var actualRowStart,
+            out var actualColumnStart,
+            out var actualRowEnd,
+            out var actualColumnEnd));
+        Assert.Equal(
+            (rowStart, columnStart, rowEnd, columnEnd),
+            (actualRowStart, actualColumnStart, actualRowEnd, actualColumnEnd));
+    }
+
+    [Theory]
+    [InlineData("grid-row", "3", "3", "auto", "auto", "auto")]
+    [InlineData("grid-row", "3 / 4", "3", "auto", "4", "auto")]
+    [InlineData("grid-column", "2", "auto", "2", "auto", "auto")]
+    [InlineData("grid-column", "2 / 5", "auto", "2", "auto", "5")]
+    public void ExpandsGridAxisPlacementComponents(
+        string property,
+        string shorthand,
+        string rowStart,
+        string columnStart,
+        string rowEnd,
+        string columnEnd)
+    {
+        Assert.True(CssComputedValueNormalizer.TryExpandGridPlacementShorthand(
+            property,
+            shorthand,
+            out var actualRowStart,
+            out var actualColumnStart,
+            out var actualRowEnd,
+            out var actualColumnEnd));
+        Assert.Equal(
+            (rowStart, columnStart, rowEnd, columnEnd),
+            (actualRowStart, actualColumnStart, actualRowEnd, actualColumnEnd));
+    }
+
+    [Theory]
     [InlineData("green solid 5px", "green", "solid", "5px")]
     [InlineData("5px green", "green", "none", "5px")]
     [InlineData("dashed", "currentcolor", "dashed", "medium")]
@@ -229,6 +277,33 @@ public sealed class CssComputedValueNormalizerTests
         Assert.Equal("14px", values["font-size"]);
         Assert.Equal("20px", values["line-height"]);
         Assert.Equal("-apple-system, sans-serif", values["font-family"]);
+    }
+
+    [Fact]
+    public void NormalizesSimpleEmBoxLengthsAfterShorthandExpansion()
+    {
+        var values = new CssPropertyValueStore
+        {
+            ["font-size"] = "4px",
+            ["inset"] = "1em 2em 3em 4em",
+            ["width"] = "25em",
+            ["min-height"] = "2.5em",
+            ["margin"] = "5em",
+            ["padding"] = "6em",
+            ["gap"] = "7em 8em",
+            ["flex-basis"] = "9em"
+        };
+
+        CssComputedValueNormalizer.ExpandShorthands(values);
+
+        Assert.Equal(("4px", "8px", "12px", "16px"),
+            (values["top"], values["right"], values["bottom"], values["left"]));
+        Assert.Equal("100px", values["width"]);
+        Assert.Equal("10px", values["min-height"]);
+        Assert.Equal("20px", values["margin-right"]);
+        Assert.Equal("24px", values["padding-left"]);
+        Assert.Equal(("28px", "32px"), (values["row-gap"], values["column-gap"]));
+        Assert.Equal("36px", values["flex-basis"]);
     }
 
     [Theory]

@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Programmatic nested click propagation and Event prototype behavior</title>
+<body>
+<div id="fixture"><a id="trigger" role="button"><span id="nested">activate</span></a></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("Event propagation methods are inherited from Event.prototype", () => {
+    const event = new Event("neutral-event", { bubbles: true, cancelable: true });
+    assert(typeof Event.prototype.preventDefault === "function", "Event.prototype.preventDefault is not callable");
+    assert(typeof Event.prototype.stopPropagation === "function", "Event.prototype.stopPropagation is not callable");
+    assert(typeof Event.prototype.stopImmediatePropagation === "function",
+      "Event.prototype.stopImmediatePropagation is not callable");
+    assert(Event.prototype.isPrototypeOf(event), "constructed Event does not inherit Event.prototype");
+    assert(!Object.prototype.hasOwnProperty.call(event, "preventDefault"),
+      "constructed Event unexpectedly owns preventDefault");
+  });
+
+  test("click on a nested element bubbles with stable target and currentTarget", () => {
+    const trigger = document.getElementById("trigger");
+    const nested = document.getElementById("nested");
+    const observations = [];
+    trigger.addEventListener("click", event => {
+      observations.push("trigger");
+      assert(event.target === nested, "ancestor listener did not retain the nested click target");
+      assert(event.currentTarget === trigger, "ancestor currentTarget was not the trigger");
+      assert(event.bubbles === true, "programmatic click did not bubble");
+      assert(event.cancelable === true, "programmatic click was not cancelable");
+    });
+    document.addEventListener("click", event => {
+      if (event.target !== nested) return;
+      observations.push("document");
+      assert(event.currentTarget === document, "document currentTarget was incorrect");
+    });
+    nested.click();
+    assert(observations.join(",") === "trigger,document",
+      `nested click propagation was ${observations.join(",") || "empty"}`);
+  });
+
+  test("a patched Event prototype observes and cancels a programmatic click", () => {
+    const nested = document.getElementById("nested");
+    const original = Event.prototype.preventDefault;
+    let patchedCalls = 0;
+    let received = null;
+    Event.prototype.preventDefault = function() {
+      patchedCalls++;
+      return original.call(this);
+    };
+    try {
+      nested.addEventListener("click", event => {
+        received = event;
+        event.neutralDelegateMarker = nested;
+        event.preventDefault();
+      }, { once: true });
+      nested.click();
+    } finally {
+      Event.prototype.preventDefault = original;
+    }
+    assert(received !== null, "programmatic click listener did not run");
+    assert(Event.prototype.isPrototypeOf(received), "programmatic click event does not inherit Event.prototype");
+    assert(received.neutralDelegateMarker === nested, "event expando did not survive propagation");
+    assert(received.defaultPrevented === true, "patched preventDefault did not cancel the click");
+    assert(patchedCalls === 1, `patched preventDefault was called ${patchedCalls} times`);
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

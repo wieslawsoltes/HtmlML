@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>HtmlML contract: Canvas 2D chart drawing primitives</title>
+<canvas id="chart" width="160" height="100"></canvas>
+<script>
+const state = window.__htmlMlWptState = {
+  complete: false,
+  harness: null,
+  results: [],
+  errors: [],
+  diagnostics: []
+};
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+try {
+  const canvas = document.getElementById("chart");
+  const context = canvas.getContext("2d");
+  assert(!!context, "2D context is available");
+
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.translate(4, 6);
+  context.scale(1.25, 0.75);
+  context.setLineDash([4, 2]);
+  context.beginPath();
+  context.moveTo(2, 4);
+  context.lineTo(30, 4);
+  context.arcTo(40, 4, 40, 14, 5);
+  context.arc(40, 20, 6, 0, Math.PI);
+  context.rect(8, 28, 24, 12);
+  context.closePath();
+  context.save();
+  context.clip();
+  context.fillRect(0, 0, 80, 60);
+  context.restore();
+  context.fill();
+  context.stroke();
+  context.fillText("chart", 48, 30);
+  const metrics = context.measureText("chart");
+  assert(Number.isFinite(metrics.width) && metrics.width >= 0,
+    "measureText returns a finite non-negative width");
+  context.restore();
+
+  const base = new Path2D();
+  base.arc(70, 40, 8, 0, Math.PI * 2);
+  const combined = new Path2D();
+  combined.addPath(base);
+  context.fill(combined);
+  state.results.push({
+    name: "chart-shaped Canvas 2D and Path2D primitives execute as one stateful composition",
+    status: "PASS",
+    message: null,
+    stack: null
+  });
+  state.harness = { status: 0, message: null, stack: null };
+} catch (error) {
+  state.results.push({
+    name: "chart-shaped Canvas 2D and Path2D primitives execute as one stateful composition",
+    status: "FAIL",
+    message: String(error && error.message || error),
+    stack: error && error.stack ? String(error.stack) : null
+  });
+  state.harness = {
+    status: 1,
+    message: state.results[0].message,
+    stack: state.results[0].stack
+  };
+}
+state.complete = true;
+</script>

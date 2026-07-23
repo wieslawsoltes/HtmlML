@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ParentNode append variadic node and string insertion</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("append inserts every node argument in order and returns undefined", () => {
+    const host = document.createElement("div");
+    const first = document.createElement("button");
+    const second = document.createElement("span");
+    const third = document.createElement("div");
+    first.id = "append-first";
+    second.id = "append-second";
+    third.id = "append-third";
+    const returned = host.append(first, second, third);
+    assert(returned === undefined, "append did not return undefined");
+    assert(host.children.length === 3, "append did not insert all node arguments");
+    assert(host.firstElementChild === first && first.nextElementSibling === second
+      && second.nextElementSibling === third && host.lastElementChild === third,
+      "append did not preserve node argument order");
+  });
+
+  test("append converts non-node arguments to adjacent text nodes", () => {
+    const host = document.createElement("div");
+    const marker = document.createElement("span");
+    marker.textContent = "node";
+    host.append("prefix-", marker, "-suffix", 42);
+    assert(host.textContent === "prefix-node-suffix42", "append did not stringify arguments");
+    assert(host.childNodes.length === 4, "append did not retain adjacent text nodes");
+    assert(host.firstChild.nodeType === 3 && host.lastChild.nodeType === 3,
+      "string arguments were not represented as text nodes");
+  });
+
+  test("append moves existing nodes and flattens a DocumentFragment", () => {
+    const source = document.createElement("div");
+    const destination = document.createElement("div");
+    const moving = document.createElement("i");
+    source.appendChild(moving);
+    const fragment = document.createDocumentFragment();
+    const one = document.createElement("b");
+    const two = document.createElement("u");
+    fragment.append(one, two);
+    destination.append(moving, fragment);
+    assert(source.children.length === 0 && moving.parentNode === destination,
+      "append did not move an existing node");
+    assert(fragment.childNodes.length === 0, "append did not empty the fragment");
+    assert(destination.children.length === 3
+      && destination.children[0] === moving
+      && destination.children[1] === one
+      && destination.children[2] === two,
+      "append did not flatten the fragment in order");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

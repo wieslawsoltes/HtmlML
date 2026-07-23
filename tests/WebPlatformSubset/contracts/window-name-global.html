@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Window name is an own mutable browsing-context property</title>
+<body>
+<input id="name" name="name">
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(testName, body) {
+    try {
+      body();
+      state.results.push({ name: testName, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name: testName,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  test("window.name exists before same-named document properties", () => {
+    assert(Object.prototype.hasOwnProperty.call(window, "name"),
+      "window.name was not an own property");
+    assert(typeof window.name === "string", `window.name type was ${typeof window.name}`);
+    assert(window.name === "", `initial window.name was ${window.name}`);
+    assert(name === window.name, "bare name did not resolve to window.name");
+  });
+
+  test("window.name is writable and shadows same-named elements", () => {
+    window.name = "component-context";
+    assert(window.name === "component-context", `assigned window.name was ${window.name}`);
+    assert(name === "component-context", "bare name did not track the assigned window property");
+    assert(document.getElementById("name").tagName === "INPUT",
+      "same-named element was removed from document lookup");
+    window.name = "";
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

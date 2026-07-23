@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>all unset resets component controls without erasing inheritance or custom properties</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #host {
+    color: rgb(10, 20, 30);
+    font-size: 19px;
+    line-height: 27px;
+  }
+  #control {
+    width: 200px;
+    height: 60px;
+    padding: 11px;
+    margin: 13px;
+    border: 5px solid red;
+    background: red;
+    opacity: 0.25;
+    transform: translate(12px, 8px);
+    --all-token: retained;
+  }
+  #control {
+    all: unset;
+    display: flex;
+    width: 90px;
+  }
+</style>
+<body>
+<div id="host"><button id="control" style="height: 44px">Reset control</button></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function test(name, callback) {
+    try {
+      callback();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  const control = document.getElementById("control");
+  const style = getComputedStyle(control);
+
+  test("all: unset clears earlier modeled layout and paint declarations", () => {
+    assert(style.getPropertyValue("padding-left") === "0px",
+      "padding survived all:unset: " + style.getPropertyValue("padding-left"));
+    assert(style.getPropertyValue("margin-left") === "0px",
+      "margin survived all:unset: " + style.getPropertyValue("margin-left"));
+    assert(style.borderTopWidth === "0px",
+      "border survived all:unset: " + style.borderTopWidth);
+    assert(style.backgroundColor.startsWith("rgba(")
+        && style.backgroundColor.endsWith(", 0)"),
+      "background survived all:unset: " + style.backgroundColor);
+    assert(style.opacity === "1", "opacity survived all:unset: " + style.opacity);
+    assert(style.transform === "none", "transform survived all:unset: " + style.transform);
+  });
+
+  test("all: unset preserves inheritance, custom properties, inline priority, and later declarations", () => {
+    assert(style.display === "flex", "later display declaration was lost: " + style.display);
+    assert(style.width === "90px", "later width declaration was lost: " + style.width);
+    assert(style.height === "44px", "inline height was overwritten: " + style.height);
+    assert(style.color === "rgb(10, 20, 30)", "color did not inherit: " + style.color);
+    assert(style.fontSize === "19px", "font-size did not inherit: " + style.fontSize);
+    assert(style.lineHeight === "27px", "line-height did not inherit: " + style.lineHeight);
+    assert(style.getPropertyValue("--all-token") === "retained",
+      "custom property was erased: " + style.getPropertyValue("--all-token"));
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>
+</body>

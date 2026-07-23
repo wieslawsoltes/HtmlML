@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOMParser HTML document primitives</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function equal(actual, expected, message) {
+    if (!Object.is(actual, expected)) throw new Error(`${message}: expected ${expected}, got ${actual}`);
+  }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("DOMParser is constructible and produces a detached HTML body", () => {
+    const parsed = new DOMParser().parseFromString(
+      `<section class="card" role="region"><strong data-state="ready">Title</strong><input name="tag" value="one"></section>`, "text/html");
+    assert(parsed && parsed.body, "parsed document body is missing");
+    assert(parsed.body !== document.body, "parsed body reused the live body");
+    equal(parsed.body.querySelectorAll("*").length, 3, "parsed descendant count");
+    equal(parsed.body.querySelector("strong")?.getAttribute("data-state"), "ready", "parsed attribute");
+    equal(parsed.body.querySelector("input")?.value, "one", "parsed input value reflection");
+  });
+
+  test("parsed HTML body supports mutation and serialization", () => {
+    const parsed = new DOMParser().parseFromString(`<div><script>bad()<\/script><span>Safe</span></div>`, "text/html");
+    parsed.body.querySelector("script").remove();
+    equal(parsed.body.querySelector("script"), null, "removed parsed node");
+    assert(parsed.body.innerHTML.includes("<span>Safe</span>"), `unexpected serialized body '${parsed.body.innerHTML}'`);
+    const roleDocument = new DOMParser().parseFromString(`<div role="tooltip">Tip</div>`, "text/html");
+    assert(roleDocument.body.innerHTML.includes(`role="tooltip"`),
+      `serialized role was lost: '${roleDocument.body.innerHTML}'`);
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

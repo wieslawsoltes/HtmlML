@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Avalonia;
@@ -19,7 +20,7 @@ namespace HtmlML.WebPlatformSubset.Runner;
 
 internal sealed partial class WptSubsetRunner
 {
-    private const string ArtifactSchema = "htmlml-wpt-subset-result-v1";
+    private const string ArtifactSchema = "htmlml-wpt-subset-result-v2";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
@@ -28,6 +29,7 @@ internal sealed partial class WptSubsetRunner
 
     private readonly RunnerOptions _options;
     private readonly string _subsetRoot;
+    private readonly string _standardsSubsetRoot;
     private readonly string _upstreamRoot;
     private readonly ProfileManifest _manifest;
     private readonly string _testHarness;
@@ -39,7 +41,15 @@ internal sealed partial class WptSubsetRunner
         _options = options;
         _subsetRoot = Path.GetDirectoryName(options.ManifestPath)
                       ?? throw new ArgumentException("The profile manifest has no parent directory.");
-        _upstreamRoot = Path.Combine(_subsetRoot, "upstream");
+        // Consumer-composition profiles keep their contracts and package locks
+        // outside the standards subset, but share the exact pinned WPT harness.
+        // This preserves engine isolation without presenting a framework pass as
+        // an upstream standards result.
+        _standardsSubsetRoot = Path.Combine(
+            options.RepositoryRoot,
+            "tests",
+            "WebPlatformSubset");
+        _upstreamRoot = Path.Combine(_standardsSubsetRoot, "upstream");
         _pinnedUpstreamFiles = ReadPinnedUpstreamFiles();
         _manifest = JsonSerializer.Deserialize<ProfileManifest>(
                         File.ReadAllText(options.ManifestPath),
@@ -92,6 +102,7 @@ internal sealed partial class WptSubsetRunner
             WptRevision = _manifest.WptRevision,
             Runtime = _manifest.Runtime,
             Engine = _options.Engine,
+            NativeEngineIdentity = ResolveNativeEngineIdentity(),
             StartedAt = startedAt,
             Duration = timer.Elapsed,
             Selection = _options.Selection,
@@ -110,6 +121,21 @@ internal sealed partial class WptSubsetRunner
         return requiredFailure ? 1 : 0;
     }
 
+    private string? ResolveNativeEngineIdentity()
+    {
+        if (_options.Engine != "native") return null;
+        var libraryPath = _options.NativeLibraryPath;
+        if (string.IsNullOrWhiteSpace(libraryPath) || !File.Exists(libraryPath))
+        {
+            throw new InvalidOperationException(
+                "Native WPT evidence requires an existing --native-library path.");
+        }
+        NativeApi.Configure(libraryPath);
+        var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(libraryPath)))
+            .ToLowerInvariant();
+        return $"abi={NativeApi.GetAbiVersion()};sha256={hash}";
+    }
+
     private TestResult RunTestHarness(ProfileTest test)
     {
         var timer = Stopwatch.StartNew();
@@ -125,9 +151,17 @@ internal sealed partial class WptSubsetRunner
 
             if (!state.Complete)
             {
-                return Failure(test, "TIMEOUT", timer.Elapsed,
-                    state.Errors.Count > 0 ? string.Join(Environment.NewLine, state.Errors) : "Document did not complete.",
-                    state.Results);
+                var timeoutDetails = state.Errors.Count > 0
+                    ? string.Join(Environment.NewLine, state.Errors)
+                    : "Document did not complete.";
+                if (state.Diagnostics.Count > 0)
+                {
+                    timeoutDetails = string.Join(
+                        Environment.NewLine,
+                        new[] { timeoutDetails }.Concat(
+                            state.Diagnostics.Select(value => "diagnostic: " + value)));
+                }
+                return Failure(test, "TIMEOUT", timer.Elapsed, timeoutDetails, state.Results);
             }
 
             var subtests = state.Results;
@@ -182,12 +216,16 @@ internal sealed partial class WptSubsetRunner
                 throw new InvalidDataException($"Reftest '{test.Path}' has no reference path.");
             }
 
-            var reference = RenderDocument(File.ReadAllText(UpstreamPath(test.Reference)), test.Reference);
+            var reference = RenderDocument(
+                File.ReadAllText(TestDocumentPath(test.Reference)),
+                test.Reference);
             // Render the inert reference first. Some tests leave delayed layout
             // work behind while their host is disposing; allowing that test
             // work to precede the reference can starve the newly opened window
             // and produce a blank comparison frame.
-            var actual = RenderDocument(File.ReadAllText(UpstreamPath(test.Path)), test.Path);
+            var actual = RenderDocument(
+                File.ReadAllText(TestDocumentPath(test.Path)),
+                test.Path);
             timer.Stop();
             var equal = actual.PixelSize == reference.PixelSize && actual.Pixels.SequenceEqual(reference.Pixels);
             if (equal)
@@ -288,7 +326,7 @@ internal sealed partial class WptSubsetRunner
                 for (var index = 0; index < 24; index++)
                 {
                     environment.SettleFrame();
-                    Pump();
+                    Pump(waitForRenderTimer: true);
                 }
 
                 return environment.CaptureSnapshot(documentName);
@@ -337,7 +375,13 @@ internal sealed partial class WptSubsetRunner
                 host,
                 new ClearScriptV8RuntimeOptions
                 {
-                    EnableTrustedSameOriginContextSharing = !directDocument,
+                    // Both prepared upstream documents and direct neutral
+                    // contracts may create same-origin iframes. Certification
+                    // uses HtmlML's reviewed shared-context V8 build and must
+                    // expose the same connected about:blank lifecycle in both
+                    // lanes rather than making direct contracts silently less
+                    // capable.
+                    EnableTrustedSameOriginContextSharing = true,
                     // Conformance runs must not inherit compilation units created
                     // by a different local native V8 build. Cache behavior has its
                     // own versioned tests; this lane measures DOM/layout behavior.
@@ -378,16 +422,19 @@ internal sealed partial class WptSubsetRunner
 
     private void LoadDirectManagedDocument(ClearScriptV8Runtime runtime, string html)
     {
-        var scripts = InlineScriptRegex().Matches(html)
+        var scriptRegex = InlineScriptRegex();
+        var styleRegex = StyleElementRegex();
+        var scripts = scriptRegex.Matches(html)
+            .Where(match => !HtmlScriptSemantics.IsInertScript(match.Groups["attributes"].Value))
             .Select(match => match.Groups["source"].Value)
             .ToList();
-        var styles = StyleElementRegex().Matches(html)
+        var htmlWithoutScripts = HtmlScriptSemantics.RemoveAllScripts(html, scriptRegex);
+        var styles = styleRegex.Matches(htmlWithoutScripts)
             .Select(match => match.Groups["source"].Value)
             .ToList();
         var bodyMatch = BodyElementRegex().Match(html);
         var body = bodyMatch.Success ? bodyMatch.Groups["body"].Value : html;
-        body = InlineScriptRegex().Replace(body, string.Empty);
-        body = StyleElementRegex().Replace(body, string.Empty);
+        body = HtmlScriptSemantics.RemoveExecutableScriptsAndStyles(body, scriptRegex, styleRegex);
 
         runtime.Execute($$"""
             document.body.style.margin = '0';
@@ -424,6 +471,23 @@ internal sealed partial class WptSubsetRunner
         html = CheckLayoutHarnessTagRegex().Replace(
             html,
             _ => "<script>" + _checkLayoutHarness + "</script>");
+        var bodyOnLoad = BodyOnLoadAttributeRegex().Match(html);
+        var bodyOnLoadRegistration = string.Empty;
+        if (bodyOnLoad.Success)
+        {
+            var source = bodyOnLoad.Groups["double"].Success
+                ? bodyOnLoad.Groups["double"].Value
+                : bodyOnLoad.Groups["single"].Success
+                    ? bodyOnLoad.Groups["single"].Value
+                    : bodyOnLoad.Groups["bare"].Value;
+            source = WebUtility.HtmlDecode(source);
+            html = BodyOnLoadAttributeRegex().Replace(
+                html,
+                match => "<body" + match.Groups["before"].Value + match.Groups["after"].Value + ">",
+                1);
+            bodyOnLoadRegistration =
+                "<script>window.addEventListener('load', function(event){" + source + "});</script>";
+        }
         if (string.Equals(path, "css/selectors/hover-002.html", StringComparison.Ordinal))
         {
             // The case is about :hover invalidation, but also uses legacy
@@ -440,7 +504,8 @@ internal sealed partial class WptSubsetRunner
         }
         var replacement = "<script>" + HarnessPreamble + "</script>" +
                           "<script>" + _testHarness + "</script>" +
-                          "<script>" + HarnessReporter + "</script>";
+                          "<script>" + HarnessReporter + "</script>" +
+                          bodyOnLoadRegistration;
         // A replacement string would interpret the many '$&' and '$` tokens in
         // upstream testharness.js as Regex replacement substitutions.
         var replaced = TestHarnessTagRegex().Replace(html, _ => replacement, 1);
@@ -544,7 +609,6 @@ internal sealed partial class WptSubsetRunner
 
             var suffixIndex = href.IndexOfAny(['?', '#']);
             var pathPart = suffixIndex >= 0 ? href[..suffixIndex] : href;
-            var suffix = suffixIndex >= 0 ? href[suffixIndex..] : string.Empty;
             if (string.IsNullOrWhiteSpace(pathPart))
             {
                 return link;
@@ -578,10 +642,20 @@ internal sealed partial class WptSubsetRunner
                     $"'{canonicalRelativePath}'. Add the exact upstream file and digest before loading it.");
             }
 
-            var absoluteHref = new Uri(fullResourcePath).AbsoluteUri + suffix;
-            var replacement = hrefMatch.Groups["prefix"].Value +
-                              "\"" + WebUtility.HtmlEncode(absoluteHref) + "\"";
-            return link[..hrefMatch.Index] + replacement + link[(hrefMatch.Index + hrefMatch.Length)..];
+            var source = File.ReadAllText(fullResourcePath);
+            if (source.Contains("</style", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Pinned stylesheet '{canonicalRelativePath}' cannot be safely inlined by the bounded adapter.");
+            }
+            // Both engine adapters must consume identical prepared CSS. The
+            // native WPT environment has no general file-URL loader, so merely
+            // rewriting href to file:// silently left the required stylesheet
+            // unapplied and produced false layout failures. Inline only the
+            // exact pinned resource after its provenance check above.
+            return $"<style data-htmlml-source={JsonSerializer.Serialize(canonicalRelativePath)}>" +
+                   source +
+                   "</style>";
         });
     }
 
@@ -650,16 +724,16 @@ internal sealed partial class WptSubsetRunner
                 throw new InvalidDataException($"Unknown test type '{test.Type}' for '{test.Path}'.");
             }
             if (test.Type == "reftest" &&
-                (string.IsNullOrWhiteSpace(test.Reference) || !File.Exists(UpstreamPath(test.Reference))))
+                (string.IsNullOrWhiteSpace(test.Reference) || !File.Exists(TestDocumentPath(test.Reference))))
             {
-                throw new FileNotFoundException($"Pinned reference for '{test.Path}' is missing.");
+                throw new FileNotFoundException($"Reference for '{test.Path}' is missing.");
             }
         }
     }
 
     private void ValidateUpstreamIntegrity()
     {
-        var provenancePath = Path.Combine(_subsetRoot, "upstream-files.json");
+        var provenancePath = Path.Combine(_standardsSubsetRoot, "upstream-files.json");
         using var provenance = JsonDocument.Parse(File.ReadAllText(provenancePath));
         var root = provenance.RootElement;
         var revision = root.GetProperty("revision").GetString();
@@ -698,7 +772,7 @@ internal sealed partial class WptSubsetRunner
 
     private HashSet<string> ReadPinnedUpstreamFiles()
     {
-        var provenancePath = Path.Combine(_subsetRoot, "upstream-files.json");
+        var provenancePath = Path.Combine(_standardsSubsetRoot, "upstream-files.json");
         using var provenance = JsonDocument.Parse(File.ReadAllText(provenancePath));
         return provenance.RootElement.GetProperty("files")
             .EnumerateObject()
@@ -741,9 +815,24 @@ internal sealed partial class WptSubsetRunner
         return fullPath;
     }
 
-    private static void Pump()
+    private static void Pump(bool waitForRenderTimer = false)
     {
-        Thread.Sleep(4);
+        // The headless render timer targets 60 Hz. A timed sleep makes the
+        // runner itself a second, coarser clock: even a requested 1 ms sleep
+        // can be descheduled long enough to turn a due 16.67 ms render tick
+        // into an apparent >25 ms frame. Yield to the timer thread, then drain
+        // the UI dispatcher without synthesizing frames or timestamps.
+        if (waitForRenderTimer)
+        {
+            // Reftest capture needs at least one retained-composition commit;
+            // unlike a temporal harness, merely polling as fast as possible
+            // can finish its bounded settle loop before the next render tick.
+            Thread.Sleep(1);
+        }
+        else
+        {
+            Thread.Yield();
+        }
         Dispatcher.UIThread.RunJobs();
     }
 
@@ -936,6 +1025,15 @@ internal sealed partial class WptSubsetRunner
             click: function (target) {
               return enqueueInputAction('click', target, null);
             },
+            context_click: function (target) {
+              return enqueueInputAction('contextClick', target, null);
+            },
+            wheel: function (target, deltaY) {
+              return enqueueInputAction('wheel', target, deltaY);
+            },
+            set_viewport: function (target, width, height) {
+              return enqueueInputAction('resize', target, JSON.stringify([width, height]));
+            },
             send_keys: function (target, keys) {
               return enqueueInputAction('sendKeys', target, keys);
             }
@@ -971,6 +1069,11 @@ internal sealed partial class WptSubsetRunner
                 return String(element.tagName || '') + '#' + String(element.id || '') +
                   ' style=' + String(element.getAttribute('style') || '');
               });
+              if (window.events && typeof window.events === 'object') {
+                state.diagnostics.push('focus-events=' + JSON.stringify(window.events));
+              }
+              state.diagnostics.push(
+                'activeElement=' + String(document.activeElement && document.activeElement.id || ''));
             } catch (error) {
               state.diagnostics.push('style snapshot failed: ' + String(error));
             }
@@ -985,22 +1088,22 @@ internal sealed partial class WptSubsetRunner
         """;
 
     [GeneratedRegex(
-        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*[\"']/resources/testharness\\.js[\"'])[^>]*>\\s*</script\\s*>",
+        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*(?:[\"']/resources/testharness\\.js[\"']|/resources/testharness\\.js(?=\\s|>)))[^>]*>\\s*</script\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex TestHarnessTagRegex();
 
     [GeneratedRegex(
-        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*[\"']/resources/testharnessreport\\.js[\"'])[^>]*>\\s*</script\\s*>",
+        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*(?:[\"']/resources/testharnessreport\\.js[\"']|/resources/testharnessreport\\.js(?=\\s|>)))[^>]*>\\s*</script\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex TestHarnessReportTagRegex();
 
     [GeneratedRegex(
-        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*[\"']/resources/check-layout-th\\.js[\"'])[^>]*>\\s*</script\\s*>",
+        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*(?:[\"']/resources/check-layout-th\\.js[\"']|/resources/check-layout-th\\.js(?=\\s|>)))[^>]*>\\s*</script\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex CheckLayoutHarnessTagRegex();
 
     [GeneratedRegex(
-        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*[\"']/resources/testdriver(?:-actions|-vendor)?\\.js[\"'])[^>]*>\\s*</script\\s*>",
+        "<script\\b(?=[^>]*\\bsrc\\s*=\\s*(?:[\"']/resources/testdriver(?:-actions|-vendor)?\\.js[\"']|/resources/testdriver(?:-actions|-vendor)?\\.js(?=\\s|>)))[^>]*>\\s*</script\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex TestDriverTagRegex();
 
@@ -1011,7 +1114,7 @@ internal sealed partial class WptSubsetRunner
     private static partial Regex ScriptTagRegex();
 
     [GeneratedRegex(
-        "<script\\b[^>]*>(?<source>[\\s\\S]*?)</script\\s*>",
+        "<script\\b(?<attributes>[^>]*)>(?<source>[\\s\\S]*?)</script\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex InlineScriptRegex();
 
@@ -1024,6 +1127,11 @@ internal sealed partial class WptSubsetRunner
         "<body\\b[^>]*>(?<body>[\\s\\S]*?)</body\\s*>",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex BodyElementRegex();
+
+    [GeneratedRegex(
+        "<body\\b(?<before>[^>]*?)\\s+onload\\s*=\\s*(?:\"(?<double>[^\"]*)\"|'(?<single>[^']*)'|(?<bare>[^\\s>]+))(?<after>[^>]*)>",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex BodyOnLoadAttributeRegex();
 
     [GeneratedRegex(
         "\\brel\\s*=\\s*(?:\"(?<double>[^\"]*)\"|'(?<single>[^']*)'|(?<bare>[^\\s>]+))",
@@ -1112,6 +1220,15 @@ internal sealed partial class WptSubsetRunner
                     case "click":
                         Click(target);
                         break;
+                    case "contextClick":
+                        Click(target, MouseButton.Right);
+                        break;
+                    case "wheel":
+                        Wheel(target, action.Value);
+                        break;
+                    case "resize":
+                        Resize(action.Value);
+                        break;
                     case "sendKeys":
                         SendKeys(target, action.Value);
                         break;
@@ -1137,24 +1254,49 @@ internal sealed partial class WptSubsetRunner
 
         private void MovePointerTo(AvaloniaDomElement target)
         {
+            var localPoint = new Point(
+                Math.Max(0, target.Control.Bounds.Width / 2),
+                Math.Max(0, target.Control.Bounds.Height / 2));
+            var rootPoint = target.Control.TranslatePoint(localPoint, Window) ?? localPoint;
             if (_pointerTarget is not null && !ReferenceEquals(_pointerTarget, target))
             {
-                RaiseBoundary(_pointerTarget, InputElement.PointerExitedEvent);
+                RaiseBoundary(_pointerTarget, InputElement.PointerExitedEvent, rootPoint);
             }
             if (!ReferenceEquals(_pointerTarget, target))
             {
-                RaiseBoundary(target, InputElement.PointerEnteredEvent);
+                RaiseBoundary(target, InputElement.PointerEnteredEvent, rootPoint);
                 _pointerTarget = target;
             }
         }
 
-        private void Click(AvaloniaDomElement target)
+        private void Click(AvaloniaDomElement target, MouseButton button = MouseButton.Left)
         {
             MovePointerTo(target);
             var localPoint = new Point(
                 Math.Max(0, target.Control.Bounds.Width / 2),
                 Math.Max(0, target.Control.Bounds.Height / 2));
             var rootPoint = target.Control.TranslatePoint(localPoint, Window) ?? localPoint;
+            var pressedModifiers = button switch
+            {
+                MouseButton.Left => RawInputModifiers.LeftMouseButton,
+                MouseButton.Middle => RawInputModifiers.MiddleMouseButton,
+                MouseButton.Right => RawInputModifiers.RightMouseButton,
+                _ => RawInputModifiers.None
+            };
+            var pressedKind = button switch
+            {
+                MouseButton.Left => PointerUpdateKind.LeftButtonPressed,
+                MouseButton.Middle => PointerUpdateKind.MiddleButtonPressed,
+                MouseButton.Right => PointerUpdateKind.RightButtonPressed,
+                _ => PointerUpdateKind.Other
+            };
+            var releasedKind = button switch
+            {
+                MouseButton.Left => PointerUpdateKind.LeftButtonReleased,
+                MouseButton.Middle => PointerUpdateKind.MiddleButtonReleased,
+                MouseButton.Right => PointerUpdateKind.RightButtonReleased,
+                _ => PointerUpdateKind.Other
+            };
             target.Control.RaiseEvent(new PointerPressedEventArgs(
                 target.Control,
                 _pointer,
@@ -1162,11 +1304,14 @@ internal sealed partial class WptSubsetRunner
                 rootPoint,
                 1,
                 new PointerPointProperties(
-                    RawInputModifiers.LeftMouseButton,
-                    PointerUpdateKind.LeftButtonPressed),
+                    pressedModifiers,
+                    pressedKind),
                 KeyModifiers.None));
 
-            Focus(target, NavigationMethod.Pointer);
+            if (button == MouseButton.Left)
+            {
+                Focus(target, NavigationMethod.Pointer);
+            }
 
             target.Control.RaiseEvent(new PointerReleasedEventArgs(
                 target.Control,
@@ -1176,34 +1321,106 @@ internal sealed partial class WptSubsetRunner
                 2,
                 new PointerPointProperties(
                     RawInputModifiers.None,
-                    PointerUpdateKind.LeftButtonReleased),
+                    releasedKind),
                 KeyModifiers.None,
-                MouseButton.Left));
+                button));
+        }
+
+        private void Wheel(AvaloniaDomElement target, string? value)
+        {
+            MovePointerTo(target);
+            if (!double.TryParse(value, out var deltaY))
+            {
+                throw new NotSupportedException($"WPT wheel delta '{value}' was not numeric.");
+            }
+            var localPoint = new Point(
+                Math.Max(0, target.Control.Bounds.Width / 2),
+                Math.Max(0, target.Control.Bounds.Height / 2));
+            var rootPoint = target.Control.TranslatePoint(localPoint, Window) ?? localPoint;
+            target.Control.RaiseEvent(new PointerWheelEventArgs(
+                target.Control,
+                _pointer,
+                Window,
+                rootPoint,
+                3,
+                new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.Other),
+                KeyModifiers.None,
+                new Vector(0, -deltaY / 100)));
+        }
+
+        private void Resize(string? value)
+        {
+            var size = JsonSerializer.Deserialize<double[]>(value ?? "[]") ?? [];
+            if (size.Length != 2 || size[0] <= 1 || size[1] <= 1)
+            {
+                throw new NotSupportedException($"WPT viewport size '{value}' was invalid.");
+            }
+            Window.Width = size[0];
+            Window.Height = size[1];
+            Dispatcher.UIThread.RunJobs();
         }
 
         private static void SendKeys(AvaloniaDomElement target, string? keys)
         {
-            if (!string.Equals(keys, "\uE004", StringComparison.Ordinal))
-            {
-                throw new NotSupportedException(
-                    $"WPT send_keys supports only the WebDriver Tab key (U+E004), not '{keys}'.");
-            }
-
             Focus(target, NavigationMethod.Tab);
+            if (string.Equals(keys, "\uE004", StringComparison.Ordinal))
+            {
+                RaiseKey(target, InputElement.KeyDownEvent, Key.Tab, "Tab");
+                RaiseKey(target, InputElement.KeyUpEvent, Key.Tab, "Tab");
+                return;
+            }
+            if (string.IsNullOrEmpty(keys))
+            {
+                throw new NotSupportedException("WPT send_keys requires a non-empty value.");
+            }
+            foreach (var rune in keys.EnumerateRunes())
+            {
+                var key = PrintableAsciiKey(rune);
+                var symbol = rune.ToString();
+                RaiseKey(target, InputElement.KeyDownEvent, key, symbol);
+                target.Control.RaiseEvent(new TextInputEventArgs
+                {
+                    RoutedEvent = InputElement.TextInputEvent,
+                    Source = target.Control,
+                    Text = symbol
+                });
+                RaiseKey(target, InputElement.KeyUpEvent, key, symbol);
+            }
+        }
+
+        private static void RaiseKey(
+            AvaloniaDomElement target,
+            RoutedEvent routedEvent,
+            Key key,
+            string symbol)
+        {
             target.Control.RaiseEvent(new KeyEventArgs
             {
-                RoutedEvent = InputElement.KeyDownEvent,
+                RoutedEvent = routedEvent,
                 Source = target.Control,
-                Key = Key.Tab,
+                Key = key,
+                KeySymbol = symbol,
                 KeyModifiers = KeyModifiers.None
             });
-            target.Control.RaiseEvent(new KeyEventArgs
+        }
+
+        private static Key PrintableAsciiKey(Rune rune)
+        {
+            var scalar = rune.Value;
+            if (scalar is >= 'a' and <= 'z') scalar -= 'a' - 'A';
+            if (scalar is >= 'A' and <= 'Z'
+                && Enum.TryParse<Key>(((char)scalar).ToString(), out var letter))
             {
-                RoutedEvent = InputElement.KeyUpEvent,
-                Source = target.Control,
-                Key = Key.Tab,
-                KeyModifiers = KeyModifiers.None
-            });
+                return letter;
+            }
+            if (scalar is >= '0' and <= '9'
+                && Enum.TryParse<Key>($"D{(char)scalar}", out var digit))
+            {
+                return digit;
+            }
+            if (scalar == ' ') return Key.Space;
+            throw new NotSupportedException(
+                $"WPT send_keys currently supports printable ASCII letters, digits, and space, not '{rune}'.");
         }
 
         private static void Focus(AvaloniaDomElement target, NavigationMethod method)
@@ -1216,14 +1433,17 @@ internal sealed partial class WptSubsetRunner
             }
         }
 
-        private void RaiseBoundary(AvaloniaDomElement target, RoutedEvent routedEvent)
+        private void RaiseBoundary(
+            AvaloniaDomElement target,
+            RoutedEvent routedEvent,
+            Point rootPoint)
         {
             target.Control.RaiseEvent(new PointerEventArgs(
                 routedEvent,
                 target.Control,
                 _pointer,
                 Window,
-                new Point(0, 0),
+                rootPoint,
                 0,
                 new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.Other),
                 KeyModifiers.None));

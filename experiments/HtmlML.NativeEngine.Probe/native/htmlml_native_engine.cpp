@@ -12,9 +12,12 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -128,6 +131,10 @@ struct script_request final {
     std::string document_name;
 };
 
+struct url_request final {
+    std::string url;
+};
+
 struct evaluation_completion final {
     std::mutex mutex;
     std::condition_variable ready;
@@ -147,6 +154,18 @@ uint64_t mix_hash(uint64_t hash, uint64_t value)
 {
     hash ^= value + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
     return hash;
+}
+
+void store_maximum(std::atomic<uint64_t>& target, uint64_t value)
+{
+    auto current = target.load(std::memory_order_relaxed);
+    while (current < value
+        && !target.compare_exchange_weak(
+            current,
+            value,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed)) {
+    }
 }
 
 bool command_uses_dom_string(const htmlml_scene_command& command)
@@ -317,11 +336,26 @@ bool append_localized_dom_damage(
 } // namespace
 
 struct htmlml_engine final {
-    explicit htmlml_engine(uint32_t command_count, std::string compilation_cache_directory = {})
-        : command_count_(command_count < minimum_command_count
-              ? minimum_command_count
-              : command_count)
+    explicit htmlml_engine(
+        uint32_t command_count,
+        std::string compilation_cache_directory = {},
+        htmlml_resource_load_callback resource_load_callback = nullptr,
+        void* resource_load_user_data = nullptr,
+        htmlml_scene_published_callback scene_published_callback = nullptr,
+        void* scene_published_user_data = nullptr,
+        htmlml_text_measure_callback text_measure_callback = nullptr,
+        void* text_measure_user_data = nullptr)
+        : command_count_(command_count == 0U
+              ? 0U
+              : (command_count < minimum_command_count
+                    ? minimum_command_count
+                    : command_count))
         , compilation_cache_directory_(std::move(compilation_cache_directory))
+        , resource_load_callback_(resource_load_callback)
+        , resource_load_user_data_(resource_load_user_data)
+        , scene_published_callback_(scene_published_callback)
+        , scene_published_user_data_(scene_published_user_data)
+        , document_(text_measure_callback, text_measure_user_data)
         , worker_([this](std::stop_token token) { run(token); })
     {
     }
@@ -357,6 +391,11 @@ struct htmlml_engine final {
         enqueued_inputs_.fetch_add(1, std::memory_order_relaxed);
         wake_.notify_one();
         return true;
+    }
+
+    uint32_t cursor() const noexcept
+    {
+        return current_cursor_.load(std::memory_order_acquire);
     }
 
     bool execute_script(
@@ -398,6 +437,29 @@ struct htmlml_engine final {
         std::lock_guard lock(configuration_mutex_);
         resource_root_.assign(value, length);
         return true;
+    }
+
+    bool load_url(const char* value, size_t length)
+    {
+#if !defined(HTMLML_NATIVE_ENGINE_WITH_V8)
+        static_cast<void>(value);
+        static_cast<void>(length);
+        set_last_error("Native engine was built without V8 support");
+        return false;
+#else
+        if (value == nullptr || length == 0U) {
+            set_last_error("Document URL is empty");
+            return false;
+        }
+        std::lock_guard lock(script_mutex_);
+        if (url_requests_.size() >= 8U) {
+            set_last_error("Native document queue is full");
+            return false;
+        }
+        url_requests_.push_back({std::string(value, length)});
+        wake_.notify_one();
+        return true;
+#endif
     }
 
     size_t evaluate_json(
@@ -518,6 +580,19 @@ struct htmlml_engine final {
 #endif
     }
 
+    size_t take_input_dispatch_failure(char* destination, size_t capacity)
+    {
+        std::lock_guard lock(input_dispatch_failure_mutex_);
+        if (input_dispatch_failures_.empty()) return 0U;
+        const auto& failure = input_dispatch_failures_.front();
+        const auto required = failure.size() + 1U;
+        if (destination == nullptr || capacity < required) return required;
+        std::copy(failure.begin(), failure.end(), destination);
+        destination[failure.size()] = '\0';
+        input_dispatch_failures_.pop_front();
+        return required;
+    }
+
     size_t copy_first_iframe_html(char* destination, size_t capacity) const
     {
         std::lock_guard lock(iframe_html_mutex_);
@@ -537,6 +612,42 @@ struct htmlml_engine final {
         if (destination != nullptr && capacity > 0) {
             const auto copy_count = std::min(scene_diagnostics_.size(), capacity - 1U);
             std::copy_n(scene_diagnostics_.data(), copy_count, destination);
+            destination[copy_count] = '\0';
+        }
+        return required;
+    }
+
+    size_t copy_feature_use(char* destination, size_t capacity) const
+    {
+#if !defined(HTMLML_NATIVE_ENGINE_WITH_V8)
+        const std::string report = R"({"schema":"htmlml-native-feature-use-v2","complete":false,"incompleteCategories":["v8-runtime"],"observations":[],"compositionDiscovery":{"schema":"htmlml-native-composition-use-v1","complete":false,"incompleteCategories":["runtime-not-ready"],"detectors":[],"observations":[]}})";
+#else
+        const auto report = runtime_ == nullptr
+            ? std::string(R"({"schema":"htmlml-native-feature-use-v2","complete":false,"incompleteCategories":["runtime-not-ready"],"observations":[],"compositionDiscovery":{"schema":"htmlml-native-composition-use-v1","complete":false,"incompleteCategories":["runtime-not-ready"],"detectors":[],"observations":[]}})")
+            : runtime_->feature_use_json();
+#endif
+        const auto required = report.size() + 1U;
+        if (destination != nullptr && capacity > 0) {
+            const auto copy_count = std::min(report.size(), capacity - 1U);
+            std::copy_n(report.data(), copy_count, destination);
+            destination[copy_count] = '\0';
+        }
+        return required;
+    }
+
+    size_t copy_event_listener_inventory(char* destination, size_t capacity) const
+    {
+#if !defined(HTMLML_NATIVE_ENGINE_WITH_V8)
+        const std::string report = R"({"schema":"htmlml-event-listener-inventory-v1","complete":false,"targets":[]})";
+#else
+        const auto report = runtime_ == nullptr
+            ? std::string(R"({"schema":"htmlml-event-listener-inventory-v1","complete":false,"targets":[]})")
+            : runtime_->event_listener_inventory_json();
+#endif
+        const auto required = report.size() + 1U;
+        if (destination != nullptr && capacity > 0) {
+            const auto copy_count = std::min(report.size(), capacity - 1U);
+            std::copy_n(report.data(), copy_count, destination);
             destination[copy_count] = '\0';
         }
         return required;
@@ -642,6 +753,38 @@ struct htmlml_engine final {
             applied_pointer_move_inputs_.load(std::memory_order_relaxed);
         result.applied_wheel_inputs =
             applied_wheel_inputs_.load(std::memory_order_relaxed);
+        result.applied_animation_frames =
+            applied_animation_frames_.load(std::memory_order_relaxed);
+        result.coalesced_animation_frames =
+            coalesced_animation_frames_.load(std::memory_order_relaxed);
+        result.last_animation_advance_nanoseconds =
+            last_animation_advance_nanoseconds_.load(std::memory_order_relaxed);
+        result.last_layout_nanoseconds =
+            last_layout_nanoseconds_.load(std::memory_order_relaxed);
+        result.last_scene_build_nanoseconds =
+            last_scene_build_nanoseconds_.load(std::memory_order_relaxed);
+        result.maximum_scene_publication_nanoseconds =
+            maximum_scene_publication_nanoseconds_.load(std::memory_order_relaxed);
+    }
+
+    void read_input_dispatch_metrics(htmlml_input_dispatch_metrics& result) const
+    {
+        result.last_dispatch_nanoseconds =
+            last_input_dispatch_nanoseconds_.load(std::memory_order_relaxed);
+        result.maximum_dispatch_nanoseconds =
+            maximum_input_dispatch_nanoseconds_.load(std::memory_order_relaxed);
+        result.last_dispatch_sequence =
+            last_input_dispatch_sequence_.load(std::memory_order_relaxed);
+    }
+
+    void read_resource_cache_metrics(htmlml_resource_cache_metrics& result) const
+    {
+        result.requests = resource_cache_requests_.load(std::memory_order_relaxed);
+        result.hits = resource_cache_hits_.load(std::memory_order_relaxed);
+        result.misses = resource_cache_misses_.load(std::memory_order_relaxed);
+        result.rejections = resource_cache_rejections_.load(std::memory_order_relaxed);
+        result.bytes_read = resource_cache_bytes_read_.load(std::memory_order_relaxed);
+        result.bytes_written = resource_cache_bytes_written_.load(std::memory_order_relaxed);
     }
 
 private:
@@ -665,11 +808,73 @@ private:
         runtime_ = std::make_unique<htmlml_native::v8_dom_runtime>(
             document_,
             [this] {
-                return std::pair{
+                return htmlml_native::v8_dom_runtime::viewport_metrics{
                     static_cast<float>(viewport_width_),
-                    static_cast<float>(viewport_height_)};
+                    static_cast<float>(viewport_height_),
+                    device_scale_factor_};
             },
-            compilation_cache_directory_);
+            compilation_cache_directory_,
+            [this](
+                uint32_t kind,
+                const std::string& url,
+                const std::string& entity_tag,
+                int64_t last_modified_unix_seconds,
+                htmlml_native::v8_dom_runtime::resource_response& response) {
+                if (resource_load_callback_ == nullptr) return false;
+                const auto required = resource_load_callback_(
+                    resource_load_user_data_,
+                    kind,
+                    url.data(),
+                    url.size(),
+                    entity_tag.data(),
+                    entity_tag.size(),
+                    last_modified_unix_seconds,
+                    nullptr,
+                    0U);
+                constexpr size_t envelope_header_size =
+                    2U + sizeof(uint32_t) + sizeof(int64_t) + sizeof(int64_t);
+                if (required < envelope_header_size) return false;
+                std::vector<char> buffer(required);
+                if (resource_load_callback_(
+                        resource_load_user_data_,
+                        kind,
+                        url.data(),
+                        url.size(),
+                        entity_tag.data(),
+                        entity_tag.size(),
+                        last_modified_unix_seconds,
+                        buffer.data(),
+                        buffer.size()) != required) {
+                    return false;
+                }
+                const auto status = static_cast<uint8_t>(buffer[0]);
+                const auto cacheable = static_cast<uint8_t>(buffer[1]) != 0U;
+                uint32_t response_tag_length = 0U;
+                int64_t response_last_modified = 0;
+                int64_t response_fresh_until = 0;
+                std::memcpy(&response_tag_length, buffer.data() + 2U, sizeof(response_tag_length));
+                std::memcpy(
+                    &response_last_modified,
+                    buffer.data() + 2U + sizeof(response_tag_length),
+                    sizeof(response_last_modified));
+                std::memcpy(
+                    &response_fresh_until,
+                    buffer.data() + 2U + sizeof(response_tag_length) + sizeof(response_last_modified),
+                    sizeof(response_fresh_until));
+                if (status < 1U || status > 2U
+                    || response_tag_length > required - envelope_header_size) return false;
+                response.not_modified = status == 2U;
+                response.cacheable = cacheable;
+                response.last_modified_unix_seconds = response_last_modified;
+                response.fresh_until_unix_seconds = response_fresh_until;
+                response.entity_tag.assign(
+                    buffer.data() + envelope_header_size,
+                    response_tag_length);
+                response.content.assign(
+                    buffer.data() + envelope_header_size + response_tag_length,
+                    required - envelope_header_size - response_tag_length);
+                return true;
+            });
         if (!runtime_->initialize()) {
             set_last_error(runtime_->last_error());
             runtime_.reset();
@@ -686,9 +891,26 @@ private:
             bool changed = checkpoint_requested_.exchange(
                 false,
                 std::memory_order_acq_rel);
+            // Treat the latest coalesced viewport as a barrier for pointer work.
+            // Avalonia reports pointer coordinates in the newly arranged control,
+            // so dispatching queued input against the preceding DOM viewport makes
+            // hit testing appear to stop working after a live window resize.
+            uint64_t resize_input_count = 0;
+            if (take_latest_resize(event, resize_input_count)) {
+                apply(event);
+                consumed_inputs_.fetch_add(resize_input_count, std::memory_order_relaxed);
+                applied_resize_inputs_.fetch_add(1, std::memory_order_relaxed);
+                changed = true;
+            }
+
             const auto input_batch_started = std::chrono::steady_clock::now();
             uint32_t applied_input_groups = 0;
             while (applied_input_groups < 8U) {
+                // Yield as soon as another live-resize update arrives. The next
+                // worker iteration applies it before consuming more pointer input.
+                if (resize_pending_.load(std::memory_order_acquire)) {
+                    break;
+                }
                 if (deferred_input.has_value()) {
                     event = *deferred_input;
                     deferred_input.reset();
@@ -696,46 +918,149 @@ private:
                     break;
                 }
 
-                uint64_t consumed_count = 1;
                 const auto pressed_pointer_move = event.kind == HTMLML_INPUT_POINTER_MOVE
                     && (event.flags & 1U) != 0U;
                 const auto threshold_drag_move = pressed_pointer_move
                     && drag_moves_to_preserve != 0U;
-                const auto may_coalesce = event.kind == HTMLML_INPUT_WHEEL
+                const auto may_coalesce = event.kind == HTMLML_INPUT_FRAME
+                    || event.kind == HTMLML_INPUT_WHEEL
                     || (event.kind == HTMLML_INPUT_POINTER_MOVE
                         && (!pressed_pointer_move || drag_moves_to_preserve == 0U));
                 if (may_coalesce) {
+                    // Continuous device input commonly arrives as alternating
+                    // wheel, hover-move, and display-frame records. Coalescing
+                    // only adjacent records of the same kind lets that stream
+                    // grow without bound whenever a component synchronously
+                    // reads layout from its handlers. Consume a bounded
+                    // continuous prefix instead: wheel deltas accumulate,
+                    // pointer movement is latest-position-wins, and only the
+                    // newest display timestamp is relevant. Discrete input
+                    // remains an ordering barrier.
+                    std::optional<htmlml_input_event> frame;
+                    std::optional<htmlml_input_event> pointer_move;
+                    std::optional<htmlml_input_event> wheel;
+                    uint64_t frame_count = 0;
+                    uint64_t pointer_move_count = 0;
+                    uint64_t wheel_count = 0;
+                    const auto accumulate = [&](
+                        const htmlml_input_event& candidate) -> bool {
+                        if (candidate.kind == HTMLML_INPUT_FRAME) {
+                            frame = candidate;
+                            ++frame_count;
+                            return true;
+                        }
+                        if (candidate.kind == HTMLML_INPUT_POINTER_MOVE) {
+                            if (pointer_move.has_value()
+                                && pointer_move->flags != candidate.flags) {
+                                return false;
+                            }
+                            pointer_move = candidate;
+                            ++pointer_move_count;
+                            return true;
+                        }
+                        if (candidate.kind == HTMLML_INPUT_WHEEL) {
+                            const auto direction = [](const htmlml_input_event& value) {
+                                return value.delta_y > 0 ? 1
+                                    : value.delta_y < 0 ? -1
+                                    : value.delta_x > 0 ? 1
+                                    : value.delta_x < 0 ? -1 : 0;
+                            };
+                            if (wheel.has_value()
+                                && (wheel->flags != candidate.flags
+                                    || (direction(*wheel) != 0
+                                        && direction(candidate) != 0
+                                        && direction(*wheel) != direction(candidate))
+                                    || std::abs(wheel->x - candidate.x) > 4.0
+                                    || std::abs(wheel->y - candidate.y) > 4.0)) {
+                                return false;
+                            }
+                            if (!wheel.has_value()) {
+                                wheel = candidate;
+                            } else {
+                                wheel->delta_x += candidate.delta_x;
+                                wheel->delta_y += candidate.delta_y;
+                                wheel->sequence = std::max(
+                                    wheel->sequence,
+                                    candidate.sequence);
+                                wheel->x = candidate.x;
+                                wheel->y = candidate.y;
+                            }
+                            ++wheel_count;
+                            return true;
+                        }
+                        return false;
+                    };
+
+                    static_cast<void>(accumulate(event));
+                    uint64_t consumed_count = 1;
                     htmlml_input_event next{};
                     while (consumed_count < 256U && inputs_.try_pop(next)) {
-                        const auto same_flags = next.flags == event.flags;
-                        const auto current_wheel_direction = event.delta_y > 0 ? 1
-                            : event.delta_y < 0 ? -1
-                            : event.delta_x > 0 ? 1
-                            : event.delta_x < 0 ? -1 : 0;
-                        const auto next_wheel_direction = next.delta_y > 0 ? 1
-                            : next.delta_y < 0 ? -1
-                            : next.delta_x > 0 ? 1
-                            : next.delta_x < 0 ? -1 : 0;
-                        const auto compatible = next.kind == event.kind
-                            && same_flags
-                            && (event.kind != HTMLML_INPUT_WHEEL
-                                || current_wheel_direction == 0
-                                || next_wheel_direction == 0
-                                || current_wheel_direction == next_wheel_direction);
-                        if (!compatible) {
+                        if (!accumulate(next)) {
                             deferred_input = next;
                             break;
                         }
-
-                        if (event.kind == HTMLML_INPUT_WHEEL) {
-                            event.delta_x += next.delta_x;
-                            event.delta_y += next.delta_y;
-                        }
-                        event.sequence = std::max(event.sequence, next.sequence);
-                        event.x = next.x;
-                        event.y = next.y;
                         ++consumed_count;
                     }
+
+                    std::vector<std::pair<htmlml_input_event, uint64_t>> aggregates;
+                    if (frame.has_value()) {
+                        aggregates.emplace_back(*frame, frame_count);
+                    }
+                    if (pointer_move.has_value()) {
+                        aggregates.emplace_back(*pointer_move, pointer_move_count);
+                    }
+                    if (wheel.has_value()) {
+                        aggregates.emplace_back(*wheel, wheel_count);
+                    }
+                    std::sort(
+                        aggregates.begin(),
+                        aggregates.end(),
+                        [](const auto& left, const auto& right) {
+                            return left.first.sequence < right.first.sequence;
+                        });
+                    for (const auto& [aggregate, aggregate_count] : aggregates) {
+                        apply(aggregate);
+                        if (aggregate.kind == HTMLML_INPUT_POINTER_MOVE) {
+                            applied_pointer_move_inputs_.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
+                            if (aggregate_count > 1) {
+                                coalesced_pointer_move_inputs_.fetch_add(
+                                    aggregate_count - 1,
+                                    std::memory_order_relaxed);
+                            }
+                        } else if (aggregate.kind == HTMLML_INPUT_WHEEL) {
+                            applied_wheel_inputs_.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
+                            if (aggregate_count > 1) {
+                                coalesced_wheel_inputs_.fetch_add(
+                                    aggregate_count - 1,
+                                    std::memory_order_relaxed);
+                            }
+                        } else if (aggregate.kind == HTMLML_INPUT_FRAME) {
+                            applied_animation_frames_.fetch_add(
+                                1,
+                                std::memory_order_relaxed);
+                            if (aggregate_count > 1) {
+                                coalesced_animation_frames_.fetch_add(
+                                    aggregate_count - 1,
+                                    std::memory_order_relaxed);
+                            }
+                        }
+                        changed = changed
+                            || aggregate.kind != HTMLML_INPUT_FRAME
+                            || document_.dirty();
+                    }
+                    consumed_inputs_.fetch_add(
+                        consumed_count,
+                        std::memory_order_relaxed);
+                    applied_input_groups += static_cast<uint32_t>(aggregates.size());
+                    if (std::chrono::steady_clock::now() - input_batch_started
+                        >= std::chrono::milliseconds(4)) {
+                        break;
+                    }
+                    continue;
                 }
 
                 apply(event);
@@ -749,36 +1074,22 @@ private:
                 } else if (event.kind == HTMLML_INPUT_POINTER_UP) {
                     drag_moves_to_preserve = 0U;
                 }
-                consumed_inputs_.fetch_add(consumed_count, std::memory_order_relaxed);
+                consumed_inputs_.fetch_add(1, std::memory_order_relaxed);
                 if (event.kind == HTMLML_INPUT_POINTER_MOVE) {
                     applied_pointer_move_inputs_.fetch_add(1, std::memory_order_relaxed);
-                    if (consumed_count > 1) {
-                        coalesced_pointer_move_inputs_.fetch_add(
-                            consumed_count - 1,
-                            std::memory_order_relaxed);
-                    }
                 } else if (event.kind == HTMLML_INPUT_WHEEL) {
                     applied_wheel_inputs_.fetch_add(1, std::memory_order_relaxed);
-                    if (consumed_count > 1) {
-                        coalesced_wheel_inputs_.fetch_add(
-                            consumed_count - 1,
-                            std::memory_order_relaxed);
-                    }
                 }
-                changed = true;
+                // A frame input only releases queued requestAnimationFrame work.
+                // The task pump below marks the scene dirty if a callback ran;
+                // idle display frames should not force scene publication.
+                changed = changed || event.kind != HTMLML_INPUT_FRAME || document_.dirty();
                 ++applied_input_groups;
                 if (threshold_drag_move
                     || std::chrono::steady_clock::now() - input_batch_started
                     >= std::chrono::milliseconds(4)) {
                     break;
                 }
-            }
-            uint64_t resize_input_count = 0;
-            if (take_latest_resize(event, resize_input_count)) {
-                apply(event);
-                consumed_inputs_.fetch_add(resize_input_count, std::memory_order_relaxed);
-                applied_resize_inputs_.fetch_add(1, std::memory_order_relaxed);
-                changed = true;
             }
 
 #if defined(HTMLML_NATIVE_ENGINE_WITH_V8)
@@ -812,11 +1123,23 @@ private:
                 frame_scripts_executed_.store(runtime_->frame_scripts_executed(), std::memory_order_relaxed);
                 frame_script_errors_.store(runtime_->frame_script_errors(), std::memory_order_relaxed);
                 update_compilation_metrics();
+                update_component_readiness();
                 changed = true;
             }
 
-            if (document_.has_active_animations() && document_.advance_animations()) {
-                changed = true;
+            if (document_.has_active_animations()) {
+                const auto animation_started = std::chrono::steady_clock::now();
+                if (document_.advance_animations()) {
+                    changed = true;
+                }
+                last_animation_advance_nanoseconds_.store(
+                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - animation_started).count()),
+                    std::memory_order_relaxed);
+            }
+            if (runtime_ != nullptr && !runtime_->dispatch_transition_events()) {
+                script_errors_.fetch_add(1, std::memory_order_relaxed);
+                set_last_error(runtime_->last_error());
             }
 
             std::vector<script_request> scripts;
@@ -828,6 +1151,33 @@ private:
                 std::lock_guard lock(configuration_mutex_);
                 runtime_->set_resource_root(resource_root_);
             }
+            std::vector<url_request> urls;
+            {
+                std::lock_guard lock(script_mutex_);
+                urls.swap(url_requests_);
+            }
+            for (const auto& request : urls) {
+                if (runtime_ != nullptr && runtime_->load_url(request.url)) {
+                    native_scene_active_ = true;
+                    frame_scripts_executed_.store(
+                        runtime_->frame_scripts_executed(),
+                        std::memory_order_relaxed);
+                    frame_script_errors_.store(
+                        runtime_->frame_script_errors(),
+                        std::memory_order_relaxed);
+                    update_compilation_metrics();
+                    set_last_error(runtime_->frame_script_errors() == 0
+                        ? std::string{}
+                        : runtime_->frame_last_error());
+                } else {
+                    script_errors_.fetch_add(1, std::memory_order_relaxed);
+                    set_last_error(runtime_ == nullptr
+                        ? "V8 runtime is unavailable"
+                        : runtime_->last_error());
+                    update_compilation_metrics();
+                }
+                changed = true;
+            }
             for (const auto& script : scripts) {
                 if (runtime_ != nullptr && runtime_->execute(script.source, script.document_name)) {
                     executed_scripts_.fetch_add(1, std::memory_order_relaxed);
@@ -835,6 +1185,7 @@ private:
                     frame_scripts_executed_.store(runtime_->frame_scripts_executed(), std::memory_order_relaxed);
                     frame_script_errors_.store(runtime_->frame_script_errors(), std::memory_order_relaxed);
                     update_compilation_metrics();
+                    update_component_readiness();
                     set_last_error(runtime_->frame_script_errors() == 0
                         ? std::string{}
                         : runtime_->frame_last_error());
@@ -860,6 +1211,7 @@ private:
                         evaluation.source,
                         evaluation.document_name,
                         result);
+                if (succeeded) update_component_readiness();
                 {
                     std::lock_guard lock(evaluation.completion->mutex);
                     evaluation.completion->result = std::move(result);
@@ -882,7 +1234,19 @@ private:
             if (scene_pending && now >= next_scene_publication) {
                 if (publish_scene()) {
                     scene_pending = false;
-                    next_scene_publication = now + std::chrono::milliseconds(16);
+                    // Keep the producer on a stable 16 ms cadence. Scheduling
+                    // from the completion time adds dispatch/layout cost to
+                    // every interval and drifts a nominal 60 Hz resize stream
+                    // toward 30-45 Hz even when each frame is comfortably
+                    // inside budget.
+                    constexpr auto scene_interval = std::chrono::milliseconds(16);
+                    if (next_scene_publication <= now) {
+                        const auto overdue = now - next_scene_publication;
+                        next_scene_publication += scene_interval
+                            * (overdue / scene_interval + 1);
+                    } else {
+                        next_scene_publication += scene_interval;
+                    }
                     continue;
                 }
             }
@@ -913,6 +1277,12 @@ private:
     void apply(const htmlml_input_event& event)
     {
         last_input_sequence_ = std::max(last_input_sequence_, event.sequence);
+        const auto measures_input_dispatch =
+            event.kind != HTMLML_INPUT_RESIZE
+            && event.kind != HTMLML_INPUT_FRAME;
+        const auto input_dispatch_started = measures_input_dispatch
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
         switch (event.kind) {
         case HTMLML_INPUT_POINTER_MOVE:
         case HTMLML_INPUT_POINTER_DOWN:
@@ -922,7 +1292,12 @@ private:
 #if defined(HTMLML_NATIVE_ENGINE_WITH_V8)
             if (runtime_ != nullptr && !runtime_->dispatch_input(event)) {
                 script_errors_.fetch_add(1, std::memory_order_relaxed);
-                set_last_error(runtime_->last_error());
+                record_input_dispatch_failure(event, runtime_->last_error());
+            }
+            if (runtime_ != nullptr) {
+                current_cursor_.store(
+                    runtime_->current_cursor_kind(),
+                    std::memory_order_release);
             }
             update_compilation_metrics();
 #endif
@@ -933,7 +1308,18 @@ private:
 #if defined(HTMLML_NATIVE_ENGINE_WITH_V8)
             if (runtime_ != nullptr && !runtime_->dispatch_input(event)) {
                 script_errors_.fetch_add(1, std::memory_order_relaxed);
-                set_last_error(runtime_->last_error());
+                record_input_dispatch_failure(event, runtime_->last_error());
+            }
+            update_compilation_metrics();
+#endif
+            break;
+        case HTMLML_INPUT_KEY_DOWN:
+        case HTMLML_INPUT_KEY_UP:
+        case HTMLML_INPUT_TEXT:
+#if defined(HTMLML_NATIVE_ENGINE_WITH_V8)
+            if (runtime_ != nullptr && !runtime_->dispatch_input(event)) {
+                script_errors_.fetch_add(1, std::memory_order_relaxed);
+                record_input_dispatch_failure(event, runtime_->last_error());
             }
             update_compilation_metrics();
 #endif
@@ -941,6 +1327,9 @@ private:
         case HTMLML_INPUT_RESIZE:
             viewport_width_ = event.x > 1.0 ? event.x : 1.0;
             viewport_height_ = event.y > 1.0 ? event.y : 1.0;
+            device_scale_factor_ = std::isfinite(event.delta_x) && event.delta_x > 0.0
+                ? event.delta_x
+                : 1.0;
             document_.mark_dirty();
 #if defined(HTMLML_NATIVE_ENGINE_WITH_V8)
             {
@@ -971,8 +1360,28 @@ private:
 #endif
             break;
         case HTMLML_INPUT_FRAME:
+            document_.signal_animation_frame(event.x);
+#if defined(HTMLML_NATIVE_ENGINE_WITH_V8)
+            if (runtime_ != nullptr) {
+                runtime_->signal_animation_frame(event.x);
+                update_compilation_metrics();
+            }
+#endif
+            break;
         default:
             break;
+        }
+        if (measures_input_dispatch) {
+            const auto elapsed = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - input_dispatch_started).count());
+            last_input_dispatch_nanoseconds_.store(
+                elapsed,
+                std::memory_order_relaxed);
+            last_input_dispatch_sequence_.store(
+                event.sequence,
+                std::memory_order_release);
+            store_maximum(maximum_input_dispatch_nanoseconds_, elapsed);
         }
     }
 
@@ -988,8 +1397,23 @@ private:
         compilation_cache_bytes_read_.store(runtime_->compilation_cache_bytes_read(), std::memory_order_relaxed);
         compilation_cache_bytes_written_.store(runtime_->compilation_cache_bytes_written(), std::memory_order_relaxed);
         compilation_time_nanoseconds_.store(runtime_->compilation_time_nanoseconds(), std::memory_order_relaxed);
+        resource_cache_requests_.store(runtime_->resource_cache_requests(), std::memory_order_relaxed);
+        resource_cache_hits_.store(runtime_->resource_cache_hits(), std::memory_order_relaxed);
+        resource_cache_misses_.store(runtime_->resource_cache_misses(), std::memory_order_relaxed);
+        resource_cache_rejections_.store(runtime_->resource_cache_rejections(), std::memory_order_relaxed);
+        resource_cache_bytes_read_.store(runtime_->resource_cache_bytes_read(), std::memory_order_relaxed);
+        resource_cache_bytes_written_.store(runtime_->resource_cache_bytes_written(), std::memory_order_relaxed);
         input_events_dispatched_.store(runtime_->input_events_dispatched(), std::memory_order_relaxed);
         input_callbacks_invoked_.store(runtime_->input_callbacks_invoked(), std::memory_order_relaxed);
+    }
+
+    void update_component_readiness()
+    {
+        if (runtime_ != nullptr
+            && component_ready_.load(std::memory_order_relaxed) == 0U
+            && runtime_->component_ready()) {
+            component_ready_.store(1U, std::memory_order_relaxed);
+        }
     }
 #endif
 
@@ -1032,12 +1456,22 @@ private:
         uint32_t scene_flags = base_revision == 0 ? scene_flag_checkpoint : 0U;
         if (native_scene_active_) {
             if (document_.dirty()) {
+                const auto layout_started = std::chrono::steady_clock::now();
                 document_.layout(width, height);
+                last_layout_nanoseconds_.store(
+                    static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - layout_started).count()),
+                    std::memory_order_relaxed);
             }
+            const auto scene_build_started = std::chrono::steady_clock::now();
             document_.build_scene(
                 next->commands,
                 next->canvas_strings,
                 next->canvas_string_bytes);
+            last_scene_build_nanoseconds_.store(
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - scene_build_started).count()),
+                std::memory_order_relaxed);
             dom_nodes_.store(document_.node_count(), std::memory_order_relaxed);
             layout_passes_.store(document_.layout_passes(), std::memory_order_relaxed);
             iframe_nodes_.store(document_.count_tag("iframe"), std::memory_order_relaxed);
@@ -1055,9 +1489,7 @@ private:
                 std::memory_order_relaxed);
 #if defined(HTMLML_NATIVE_ENGINE_WITH_V8)
             if (runtime_ != nullptr) {
-                component_ready_.store(
-                    runtime_->component_ready() ? 1U : 0U,
-                    std::memory_order_relaxed);
+                update_component_readiness();
                 if (component_ready_.load(std::memory_order_relaxed) != 0U) {
                     scene_flags |= scene_flag_component_ready;
                 }
@@ -1272,10 +1704,21 @@ private:
             std::shared_ptr<const scene>(std::move(next)),
             std::memory_order_release);
         published_scenes_.fetch_add(1, std::memory_order_relaxed);
-        last_scene_publication_nanoseconds_.store(
+        const auto publication_nanoseconds =
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - publication_started).count()),
+                std::chrono::steady_clock::now() - publication_started).count());
+        last_scene_publication_nanoseconds_.store(
+            publication_nanoseconds,
             std::memory_order_relaxed);
+        store_maximum(maximum_scene_publication_nanoseconds_, publication_nanoseconds);
+        if (scene_published_callback_ != nullptr) {
+            scene_published_callback_(
+                scene_published_user_data_,
+                revision,
+                last_input_sequence_,
+                width,
+                height);
+        }
         return true;
     }
 
@@ -1285,8 +1728,24 @@ private:
         last_error_ = std::move(value);
     }
 
+    void record_input_dispatch_failure(
+        const htmlml_input_event& event,
+        const std::string& error)
+    {
+        set_last_error(error);
+        auto payload = std::to_string(event.sequence)
+            + "\n" + std::to_string(event.kind)
+            + "\n" + error;
+        std::lock_guard lock(input_dispatch_failure_mutex_);
+        input_dispatch_failures_.push_back(std::move(payload));
+    }
+
     uint32_t command_count_;
     std::string compilation_cache_directory_;
+    htmlml_resource_load_callback resource_load_callback_{nullptr};
+    void* resource_load_user_data_{nullptr};
+    htmlml_scene_published_callback scene_published_callback_{nullptr};
+    void* scene_published_user_data_{nullptr};
     mutable std::mutex configuration_mutex_;
     std::string resource_root_;
     input_ring inputs_;
@@ -1299,6 +1758,7 @@ private:
     std::unique_ptr<htmlml_native::v8_dom_runtime> runtime_;
 #endif
     std::vector<script_request> scripts_;
+    std::vector<url_request> url_requests_;
     std::vector<evaluation_request> evaluations_;
     std::mutex script_mutex_;
     std::shared_ptr<const scene> latest_{};
@@ -1308,6 +1768,7 @@ private:
     uint64_t last_input_sequence_{0};
     double viewport_width_{1000};
     double viewport_height_{616};
+    double device_scale_factor_{1};
     double pointer_x_{500};
     double pointer_y_{308};
     double scroll_x_{0};
@@ -1335,6 +1796,12 @@ private:
     std::atomic<uint64_t> compilation_cache_bytes_read_{0};
     std::atomic<uint64_t> compilation_cache_bytes_written_{0};
     std::atomic<uint64_t> compilation_time_nanoseconds_{0};
+    std::atomic<uint64_t> resource_cache_requests_{0};
+    std::atomic<uint64_t> resource_cache_hits_{0};
+    std::atomic<uint64_t> resource_cache_misses_{0};
+    std::atomic<uint64_t> resource_cache_rejections_{0};
+    std::atomic<uint64_t> resource_cache_bytes_read_{0};
+    std::atomic<uint64_t> resource_cache_bytes_written_{0};
     std::atomic<uint64_t> input_events_dispatched_{0};
     std::atomic<uint64_t> input_callbacks_invoked_{0};
     std::atomic<uint64_t> busiest_canvas_width_milli_{0};
@@ -1351,6 +1818,16 @@ private:
     std::atomic<uint64_t> coalesced_wheel_inputs_{0};
     std::atomic<uint64_t> applied_pointer_move_inputs_{0};
     std::atomic<uint64_t> applied_wheel_inputs_{0};
+    std::atomic<uint64_t> applied_animation_frames_{0};
+    std::atomic<uint64_t> coalesced_animation_frames_{0};
+    std::atomic<uint64_t> last_animation_advance_nanoseconds_{0};
+    std::atomic<uint64_t> last_layout_nanoseconds_{0};
+    std::atomic<uint64_t> last_scene_build_nanoseconds_{0};
+    std::atomic<uint64_t> maximum_scene_publication_nanoseconds_{0};
+    std::atomic<uint64_t> last_input_dispatch_nanoseconds_{0};
+    std::atomic<uint64_t> maximum_input_dispatch_nanoseconds_{0};
+    std::atomic<uint64_t> last_input_dispatch_sequence_{0};
+    std::atomic<uint32_t> current_cursor_{HTMLML_CURSOR_DEFAULT};
     std::atomic<bool> checkpoint_requested_{false};
     mutable std::mutex iframe_html_mutex_;
     std::string iframe_html_;
@@ -1365,6 +1842,8 @@ private:
     std::string pending_host_request_;
     mutable std::mutex console_message_mutex_;
     std::string pending_console_message_;
+    mutable std::mutex input_dispatch_failure_mutex_;
+    std::deque<std::string> input_dispatch_failures_;
     bool native_scene_active_{false};
     std::shared_ptr<acknowledgement_state> acknowledgement_{
         std::make_shared<acknowledgement_state>()};
@@ -1386,7 +1865,7 @@ struct htmlml_scene_lease final {
     {
         view = htmlml_scene_view{
             static_cast<uint32_t>(sizeof(htmlml_scene_view)),
-            1U,
+            2U,
             value->header,
             value->commands.data(),
             value->canvas_layers.data(),
@@ -1428,7 +1907,7 @@ extern "C" {
 
 uint32_t htmlml_engine_get_abi_version(void)
 {
-    return 1U;
+    return 2U;
 }
 
 uint8_t htmlml_engine_prewarm(void)
@@ -1456,7 +1935,8 @@ htmlml_engine* htmlml_engine_create(uint32_t simulated_chart_command_count)
 
 htmlml_engine* htmlml_engine_create_with_options(const htmlml_engine_options* options)
 {
-    if (options == nullptr || options->struct_size < sizeof(htmlml_engine_options)) {
+    constexpr auto legacy_options_size = offsetof(htmlml_engine_options, resource_load_callback);
+    if (options == nullptr || options->struct_size < legacy_options_size) {
         return nullptr;
     }
     try {
@@ -1467,9 +1947,25 @@ htmlml_engine* htmlml_engine_create_with_options(const htmlml_engine_options* op
                 options->compilation_cache_directory,
                 options->compilation_cache_directory_length);
         }
+        constexpr auto resource_callback_options_size =
+            offsetof(htmlml_engine_options, scene_published_callback);
+        const auto has_resource_callback =
+            options->struct_size >= resource_callback_options_size;
+        constexpr auto scene_callback_options_size =
+            offsetof(htmlml_engine_options, text_measure_callback);
+        const auto has_scene_published_callback =
+            options->struct_size >= scene_callback_options_size;
+        const auto has_text_measure_callback =
+            options->struct_size >= sizeof(htmlml_engine_options);
         return new htmlml_engine(
             options->simulated_chart_command_count,
-            std::move(cache_directory));
+            std::move(cache_directory),
+            has_resource_callback ? options->resource_load_callback : nullptr,
+            has_resource_callback ? options->resource_load_user_data : nullptr,
+            has_scene_published_callback ? options->scene_published_callback : nullptr,
+            has_scene_published_callback ? options->scene_published_user_data : nullptr,
+            has_text_measure_callback ? options->text_measure_callback : nullptr,
+            has_text_measure_callback ? options->text_measure_user_data : nullptr);
     } catch (...) {
         return nullptr;
     }
@@ -1491,9 +1987,22 @@ uint8_t htmlml_engine_set_resource_root(
         : 0U;
 }
 
+uint8_t htmlml_engine_load_url(
+    htmlml_engine* engine,
+    const char* url,
+    size_t url_length)
+{
+    return engine != nullptr && engine->load_url(url, url_length) ? 1U : 0U;
+}
+
 uint8_t htmlml_engine_enqueue(htmlml_engine* engine, const htmlml_input_event* event)
 {
     return engine != nullptr && event != nullptr && engine->enqueue(*event) ? 1U : 0U;
+}
+
+uint32_t htmlml_engine_get_cursor(const htmlml_engine* engine)
+{
+    return engine == nullptr ? HTMLML_CURSOR_DEFAULT : engine->cursor();
 }
 
 uint8_t htmlml_engine_execute_script(
@@ -1551,6 +2060,16 @@ size_t htmlml_engine_take_console_message(
         : engine->take_console_message(destination, destination_capacity);
 }
 
+size_t htmlml_engine_take_input_dispatch_failure(
+    htmlml_engine* engine,
+    char* destination,
+    size_t destination_capacity)
+{
+    return engine == nullptr
+        ? 0U
+        : engine->take_input_dispatch_failure(destination, destination_capacity);
+}
+
 size_t htmlml_engine_copy_last_error(
     const htmlml_engine* engine,
     char* destination,
@@ -1577,6 +2096,26 @@ size_t htmlml_engine_copy_scene_diagnostics(
     return engine == nullptr
         ? 0U
         : engine->copy_scene_diagnostics(destination, destination_capacity);
+}
+
+size_t htmlml_engine_copy_feature_use(
+    const htmlml_engine* engine,
+    char* destination,
+    size_t destination_capacity)
+{
+    return engine == nullptr
+        ? 0U
+        : engine->copy_feature_use(destination, destination_capacity);
+}
+
+size_t htmlml_engine_copy_event_listener_inventory(
+    const htmlml_engine* engine,
+    char* destination,
+    size_t destination_capacity)
+{
+    return engine == nullptr
+        ? 0U
+        : engine->copy_event_listener_inventory(destination, destination_capacity);
 }
 
 size_t htmlml_engine_copy_canvas_layouts(
@@ -1656,6 +2195,30 @@ void htmlml_engine_get_metrics(
         return;
     }
     engine->read_metrics(*metrics);
+}
+
+uint8_t htmlml_engine_get_input_dispatch_metrics(
+    const htmlml_engine* engine,
+    htmlml_input_dispatch_metrics* metrics)
+{
+    if (engine == nullptr || metrics == nullptr
+        || metrics->struct_size < sizeof(htmlml_input_dispatch_metrics)) {
+        return 0U;
+    }
+    engine->read_input_dispatch_metrics(*metrics);
+    return 1U;
+}
+
+uint8_t htmlml_engine_get_resource_cache_metrics(
+    const htmlml_engine* engine,
+    htmlml_resource_cache_metrics* metrics)
+{
+    if (engine == nullptr || metrics == nullptr
+        || metrics->struct_size < sizeof(htmlml_resource_cache_metrics)) {
+        return 0U;
+    }
+    engine->read_resource_cache_metrics(*metrics);
+    return 1U;
 }
 
 } // extern "C"

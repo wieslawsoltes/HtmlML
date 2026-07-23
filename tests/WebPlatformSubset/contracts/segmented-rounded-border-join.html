@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Adjacent rounded border segments share an open edge</title>
+<style>
+  html, body { margin: 0; background: white; }
+  .segment {
+    position: absolute;
+    top: 40px;
+    box-sizing: border-box;
+    height: 24px;
+    border: 1px solid rgb(0, 120, 130);
+  }
+  #leading { left: 40px; width: 120px; border-right-width: 0; border-radius: 4px 0 0 4px; }
+  #trailing { left: 160px; width: 60px; border-left-width: 0; border-radius: 0 4px 4px 0; }
+</style>
+<div id="segments"><div id="leading" class="segment"></div><div id="trailing" class="segment"></div></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const check = (name, body) => {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error),
+        stack: error.stack ? String(error.stack) : null });
+    }
+  };
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const leading = document.getElementById("leading");
+  const trailing = document.getElementById("trailing");
+  check("adjacent border segments share one exact open-edge coordinate", () => {
+    const left = leading.getBoundingClientRect();
+    const right = trailing.getBoundingClientRect();
+    assert(Math.abs(left.right - right.left) < .01,
+      `segment bounds leave a gap: ${left.right} vs ${right.left}`);
+    assert(Math.abs(left.width + right.width - 180) < .01
+      && Math.abs(left.height - 24) < .01 && Math.abs(right.height - 24) < .01,
+      `segment geometry differs: ${left.width}x${left.height}, ${right.width}x${right.height}`);
+  });
+  check("outer corners remain rounded while touching border sides are zero-width", () => {
+    const left = getComputedStyle(leading);
+    const right = getComputedStyle(trailing);
+    assert(parseFloat(left.borderRightWidth) === 0 && parseFloat(right.borderLeftWidth) === 0,
+      `touching widths differ: ${left.borderRightWidth}, ${right.borderLeftWidth}`);
+    assert(parseFloat(left.borderTopLeftRadius) === 4
+      && parseFloat(left.borderBottomLeftRadius) === 4
+      && parseFloat(left.borderTopRightRadius) === 0
+      && parseFloat(left.borderBottomRightRadius) === 0,
+      `leading radii differ: ${left.borderRadius}`);
+    assert(parseFloat(right.borderTopRightRadius) === 4
+      && parseFloat(right.borderBottomRightRadius) === 4
+      && parseFloat(right.borderTopLeftRadius) === 0
+      && parseFloat(right.borderBottomLeftRadius) === 0,
+      `trailing radii differ: ${right.borderRadius}`);
+  });
+  state.harness = state.results.some(result => result.status !== "PASS")
+    ? { status: 1, message: "segmented border primitive failed", stack: null }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Detached canvas descendants leave the published scene reference</title>
+<style>
+  html, body { margin: 0; background: #fff; }
+  #chart { width: 320px; height: 160px; border: 4px solid #111; overflow: hidden; }
+  canvas { display: block; width: 320px; height: 160px; }
+</style>
+<div id="chart"><canvas id="main" width="320" height="160"></canvas></div>
+<script>
+  const context = document.querySelector("#main").getContext("2d");
+  context.fillStyle = "#087f23";
+  context.fillRect(0, 0, 320, 160);
+</script>

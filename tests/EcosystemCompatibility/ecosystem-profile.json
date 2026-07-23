@@ -1,0 +1,218 @@
+{
+  "profile": "htmlml-ecosystem-consumers-1",
+  "suiteKind": "ecosystem-consumer",
+  "wptRevision": "2c705104a295c48053eeddf7fe0170d790a4e853",
+  "runtime": "v8",
+  "viewport": {
+    "width": 1024,
+    "height": 768,
+    "deviceScaleFactor": 1
+  },
+  "required": [],
+  "candidate": [
+    {
+      "path": "contracts/jquery-core.html",
+      "type": "contract",
+      "capabilities": ["selectors", "traversal", "dom-mutation", "attributes-properties", "cssom", "delegated-events", "forms", "deferred"],
+      "evidence": ["jquery-4.0.0-composition"],
+      "reason": "Discovery fixture for common jQuery composition paths; not a standards claim."
+    },
+    {
+      "path": "contracts/jquery-callbacks-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "callback-list-options", "callback-ordering", "callback-memory", "callback-locking", "callback-reentrancy"],
+      "evidence": ["jquery-4.0.0-callbacks-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "All 51 dynamically registered cases from jQuery's unmodified callbacks.js execute through the bounded QUnit-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/jquery-attributes-upstream-1.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "attribute-reflection", "property-reflection", "boolean-attributes", "form-values", "select-option-state", "class-token-mutation", "svg-class-mutation", "xml-attributes", "fixture-reset"],
+      "evidence": ["jquery-4.0.0-attributes-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "Runs shard 1/3 of the 65 browser-local cases from jQuery's unmodified attributes.js against its complete official fixture. The one PHP/CSP/iframe case remains explicitly harness-blocked; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/jquery-attributes-upstream-2.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "attribute-reflection", "property-reflection", "boolean-attributes", "form-values", "select-option-state", "class-token-mutation", "svg-class-mutation", "xml-attributes", "fixture-reset"],
+      "evidence": ["jquery-4.0.0-attributes-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "Runs shard 2/3 of the same unchanged 65-case attributes source; sharding bounds retained-runtime cost without rewriting or omitting cases."
+    },
+    {
+      "path": "contracts/jquery-attributes-upstream-3.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "attribute-reflection", "property-reflection", "boolean-attributes", "form-values", "select-option-state", "class-token-mutation", "svg-class-mutation", "xml-attributes", "fixture-reset"],
+      "evidence": ["jquery-4.0.0-attributes-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "Runs shard 3/3 of the same unchanged 65-case attributes source; sharding bounds retained-runtime cost without rewriting or omitting cases."
+    },
+    {
+      "path": "contracts/jquery-css-upstream-1.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "computed-style", "css-property-assignment", "relative-css-values", "unit-conversion", "show-hide-toggle", "cascade-display", "box-model", "custom-properties", "visibility-selectors", "fixture-reset"],
+      "evidence": ["jquery-4.0.0-css-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "Runs shard 1/4 of 55 browser-local cases from jQuery's unmodified css.js against its official fixture and stylesheet. Two Shadow DOM and three separately served iframe cases remain explicitly harness-blocked; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/jquery-css-upstream-2.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "computed-style", "css-property-assignment", "relative-css-values", "unit-conversion", "show-hide-toggle", "cascade-display", "box-model", "custom-properties", "visibility-selectors", "fixture-reset"],
+      "evidence": ["jquery-4.0.0-css-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "Runs shard 2/4 of the same unchanged 55-case CSS source; sharding bounds retained-runtime cost without rewriting or omitting selected cases."
+    },
+    {
+      "path": "contracts/jquery-css-upstream-3.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "computed-style", "css-property-assignment", "relative-css-values", "unit-conversion", "show-hide-toggle", "cascade-display", "box-model", "custom-properties", "visibility-selectors", "fixture-reset"],
+      "evidence": ["jquery-4.0.0-css-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "Runs shard 3/4 of the same unchanged 55-case CSS source; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/jquery-css-upstream-4.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "computed-style", "css-property-assignment", "relative-css-values", "unit-conversion", "show-hide-toggle", "cascade-display", "box-model", "custom-properties", "visibility-selectors", "fixture-reset"],
+      "evidence": ["jquery-4.0.0-css-unit", "jquery-commit-4f2fae08f23b54ce09322e62e73cce6161b8d3cb"],
+      "reason": "Runs shard 4/4 of the same unchanged 55-case CSS source; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-components.html",
+      "type": "contract",
+      "capabilities": ["tabs", "collapse", "dropdown", "popper-placement", "modal", "tooltip", "popover", "offcanvas", "scrollspy", "intersection-observer", "bounded-scroll", "carousel", "transition-lifecycle", "custom-events", "aria-state"],
+      "evidence": ["bootstrap-5.3.8-composition"],
+      "reason": "Discovery fixture for common Bootstrap component lifecycles; not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-alert-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "data-api-dismissal", "custom-cancelable-events", "transition-completion", "node-removal", "instance-lifecycle", "jquery-interface"],
+      "evidence": ["bootstrap-v5.3.8-alert-spec", "bootstrap-commit-25aa8cc0b32f0d1a54be575347e6d84b70b1acd7"],
+      "reason": "All 18 cases from Bootstrap's unmodified alert.spec.js execute through the bounded Jasmine-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-base-component-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "base-component-metadata", "selector-resolution", "event-listener-disposal", "instance-cache", "jquery-element-unwrapping"],
+      "evidence": ["bootstrap-v5.3.8-base-component-spec", "bootstrap-commit-25aa8cc0b32f0d1a54be575347e6d84b70b1acd7"],
+      "reason": "All 14 cases from Bootstrap's unmodified base-component.spec.js execute through the bounded Jasmine-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-button-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "constructor-selector-resolution", "data-api-click", "class-state", "aria-pressed", "instance-lifecycle", "jquery-interface"],
+      "evidence": ["bootstrap-v5.3.8-button-spec", "bootstrap-commit-25aa8cc0b32f0d1a54be575347e6d84b70b1acd7"],
+      "reason": "All 13 cases from Bootstrap's unmodified button.spec.js execute through a bounded Jasmine-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-collapse-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "dimension-transitions", "nested-accordion-state", "delegated-data-api-click", "selector-resolution", "aria-expanded", "class-lifecycle", "custom-cancelable-events", "instance-lifecycle", "jquery-interface"],
+      "evidence": ["bootstrap-v5.3.8-collapse-spec", "bootstrap-commit-25aa8cc0b32f0d1a54be575347e6d84b70b1acd7"],
+      "reason": "All 43 cases from Bootstrap's unmodified collapse.spec.js execute through the bounded Jasmine-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-toast-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "timed-autohide", "hover-pause-resume", "delegated-dismissal", "custom-cancelable-events", "transition-completion", "timeout-cleanup", "instance-lifecycle", "jquery-interface"],
+      "evidence": ["bootstrap-v5.3.8-toast-spec", "bootstrap-commit-25aa8cc0b32f0d1a54be575347e6d84b70b1acd7"],
+      "reason": "All 31 cases from Bootstrap's unmodified toast.spec.js execute through the bounded Jasmine-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-tab-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "tab-activation", "keyboard-navigation", "focus-transfer", "nested-tabs", "dropdown-tabs", "aria-selected", "tabindex-reflection", "class-lifecycle", "custom-cancelable-events", "instance-lifecycle", "jquery-interface"],
+      "evidence": ["bootstrap-v5.3.8-tab-spec", "bootstrap-commit-25aa8cc0b32f0d1a54be575347e6d84b70b1acd7"],
+      "reason": "All 47 cases from Bootstrap's unmodified tab.spec.js execute through the bounded Jasmine-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/bootstrap-dropdown-upstream.html",
+      "type": "contract",
+      "capabilities": ["official-upstream-suite", "dropdown-activation", "keyboard-navigation", "focus-transfer", "delegated-data-api", "auto-close-policy", "popper-configuration", "virtual-reference", "aria-expanded", "class-lifecycle", "custom-cancelable-events", "instance-lifecycle", "jquery-interface"],
+      "evidence": ["bootstrap-v5.3.8-dropdown-spec", "bootstrap-commit-25aa8cc0b32f0d1a54be575347e6d84b70b1acd7"],
+      "reason": "All 87 cases from Bootstrap's unmodified dropdown.spec.js execute through the bounded Jasmine-compatible browser harness; compatibility evidence, not a standards claim."
+    },
+    {
+      "path": "contracts/react-dom.html",
+      "type": "contract",
+      "capabilities": ["createRoot", "hydrateRoot", "reconciliation", "keyed-reorder", "synthetic-events", "controlled-input", "portals", "batched-updates", "transitions", "Suspense", "lazy-modules", "unmount"],
+      "evidence": ["react-dom-19.2.8-composition"],
+      "reason": "Discovery fixture for common React DOM composition paths; not a standards claim."
+    }
+  ],
+  "harnessBlocked": [],
+  "excluded": [
+    {
+      "area": "remaining upstream internal framework suites",
+      "reason": "Seven unmodified Bootstrap source suites and three unmodified jQuery QUnit files are selected. Every remaining upstream jQuery, Bootstrap, and React DOM file stays enumerated as harness-blocked or excluded until its original cases execute reproducibly."
+    }
+  ],
+  "consumers": [
+    {
+      "id": "jquery",
+      "package": "jquery",
+      "version": "4.0.0",
+      "stage": "discovery",
+      "documents": ["contracts/jquery-core.html", "contracts/jquery-callbacks-upstream.html", "contracts/jquery-attributes-upstream-1.html", "contracts/jquery-attributes-upstream-2.html", "contracts/jquery-attributes-upstream-3.html", "contracts/jquery-css-upstream-1.html", "contracts/jquery-css-upstream-2.html", "contracts/jquery-css-upstream-3.html", "contracts/jquery-css-upstream-4.html"],
+      "selected": 179,
+      "runnable": 179,
+      "excluded": ["Ajax transport and server fixtures", "animation timing", "legacy-browser compatibility branches"],
+      "harnessBlocked": ["21 of 24 upstream QUnit unit files still need fixture, assertion, timing, iframe, or mock-server adaptation.", "One attributes.js case and five css.js cases require a mock server, Shadow DOM, browser zoom, separately served iframe fixtures, or child browsing contexts."],
+      "upstreamSuite": {
+        "repository": "https://github.com/jquery/jquery.git",
+        "tag": "4.0.0",
+        "commit": "4f2fae08f23b54ce09322e62e73cce6161b8d3cb",
+        "root": "test/unit",
+        "discoveredFiles": 24,
+        "staticRegistrations": 847,
+        "selectedFiles": ["attributes.js", "callbacks.js", "css.js"],
+        "selectedCases": 171,
+        "runnableCases": 171,
+        "harnessBlockedFiles": 21,
+        "inFileHarnessBlockedCases": 6
+      }
+    },
+    {
+      "id": "bootstrap",
+      "package": "bootstrap",
+      "version": "5.3.8",
+      "stage": "discovery",
+      "documents": ["contracts/bootstrap-components.html", "contracts/bootstrap-alert-upstream.html", "contracts/bootstrap-base-component-upstream.html", "contracts/bootstrap-button-upstream.html", "contracts/bootstrap-collapse-upstream.html", "contracts/bootstrap-toast-upstream.html", "contracts/bootstrap-tab-upstream.html", "contracts/bootstrap-dropdown-upstream.html"],
+      "selected": 262,
+      "runnable": 262,
+      "excluded": ["tooltip and popover visual parity"],
+      "harnessBlocked": ["carousel.spec.js", "jquery.spec.js", "modal.spec.js", "offcanvas.spec.js", "popover.spec.js", "scrollspy.spec.js", "tooltip.spec.js"],
+      "upstreamSuite": {
+        "repository": "https://github.com/twbs/bootstrap.git",
+        "tag": "v5.3.8",
+        "commit": "25aa8cc0b32f0d1a54be575347e6d84b70b1acd7",
+        "root": "js/tests/unit",
+        "discoveredFiles": 14,
+        "selectedFiles": ["alert.spec.js", "base-component.spec.js", "button.spec.js", "collapse.spec.js", "dropdown.spec.js", "tab.spec.js", "toast.spec.js"],
+        "selectedCases": 253,
+        "runnableCases": 253,
+        "harnessBlockedFiles": ["carousel.spec.js", "jquery.spec.js", "modal.spec.js", "offcanvas.spec.js", "popover.spec.js", "scrollspy.spec.js", "tooltip.spec.js"]
+      }
+    },
+    {
+      "id": "react-dom",
+      "package": "react-dom",
+      "version": "19.2.8",
+      "stage": "discovery",
+      "documents": ["contracts/react-dom.html"],
+      "selected": 9,
+      "runnable": 9,
+      "excluded": [],
+      "harnessBlocked": ["All 128 React DOM Jest files still need React-internal aliases, feature flags, scheduler/act helpers, console assertions, JSX transformation, and resetModules semantics."],
+      "upstreamSuite": {
+        "repository": "https://github.com/facebook/react.git",
+        "tag": "v19.2.8",
+        "commit": "1dd4ecbdabf826f527fc9a58c05ea70375b7d170",
+        "root": "packages/react-dom/src/__tests__",
+        "discoveredFiles": 128,
+        "staticRegistrations": 2314,
+        "selectedFiles": [],
+        "selectedCases": 0,
+        "runnableCases": 0,
+        "harnessBlockedFiles": 128
+      }
+    }
+  ]
+}

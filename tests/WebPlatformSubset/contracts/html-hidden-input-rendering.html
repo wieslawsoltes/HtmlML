@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Hidden input elements do not generate rendered boxes</title>
+<style>
+  html, body { display: block; margin: 0; padding: 0; }
+  input { width: 120px; height: 20px; }
+</style>
+<body>
+<input id="hidden-control" type="hidden" value="secret">
+<input id="text-control" type="text" value="visible">
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const hidden = document.getElementById("hidden-control");
+  const text = document.getElementById("text-control");
+
+  function assertNoRenderedBox(element, label) {
+    assert(getComputedStyle(element).display === "none",
+      `${label} display was ${getComputedStyle(element).display}`);
+    assert(element.offsetWidth === 0 && element.offsetHeight === 0,
+      `${label} offsets were ${element.offsetWidth}x${element.offsetHeight}`);
+    assert(element.getClientRects().length === 0,
+      `${label} published ${element.getClientRects().length} client rectangles`);
+  }
+
+  test("input type hidden has no rendered box", () => {
+    assertNoRenderedBox(hidden, "hidden input");
+  });
+
+  test("ordinary text input retains its rendered box", () => {
+    assert(getComputedStyle(text).display === "inline-block",
+      `text input display was ${getComputedStyle(text).display}`);
+    assert(text.offsetWidth > 0 && text.offsetHeight > 0,
+      `text input offsets were ${text.offsetWidth}x${text.offsetHeight}`);
+    assert(text.getClientRects().length === 1,
+      `text input published ${text.getClientRects().length} client rectangles`);
+  });
+
+  test("input type mutation updates rendering synchronously", () => {
+    hidden.type = "text";
+    assert(getComputedStyle(hidden).display === "inline-block",
+      `changed text input display was ${getComputedStyle(hidden).display}`);
+    assert(hidden.offsetWidth > 0 && hidden.offsetHeight > 0,
+      `changed text input offsets were ${hidden.offsetWidth}x${hidden.offsetHeight}`);
+    assert(hidden.getClientRects().length === 1,
+      `changed text input published ${hidden.getClientRects().length} client rectangles`);
+    hidden.type = "hidden";
+    assertNoRenderedBox(hidden, "restored hidden input");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

@@ -1,0 +1,463 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed component CSS box and layout primitives</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .stage { position: relative; margin: 4px; }
+
+  #text-align-host {
+    width: 200px;
+    height: 20px;
+    text-align: right;
+  }
+  #text-align-child { display: inline-block; width: 20px; height: 10px; }
+
+  #visibility-stack { position: relative; width: 80px; height: 24px; }
+  #visibility-under, #visibility-hidden {
+    position: absolute;
+    inset: 0;
+  }
+  #visibility-hidden { visibility: hidden; }
+
+  #pointer-stack { position: relative; width: 80px; height: 24px; }
+  #pointer-under, #pointer-overlay {
+    position: absolute;
+    inset: 0;
+  }
+  #pointer-overlay { pointer-events: none; }
+
+  #outlined {
+    width: 30px;
+    height: 20px;
+    outline: 3px solid rgb(12, 34, 56);
+  }
+
+  #physical-box {
+    box-sizing: content-box;
+    width: 60px;
+    min-height: 40px;
+    padding-top: 3px;
+    padding-right: 7px;
+    padding-bottom: 5px;
+    padding-left: 9px;
+    border-width: 2px;
+    border-style: solid;
+    border-color: rgb(20, 40, 60);
+    background: rgb(70, 90, 110);
+  }
+  #border-none {
+    box-sizing: content-box;
+    width: 30px;
+    height: 10px;
+    border: 4px solid rgb(1, 2, 3);
+    border-style: none;
+  }
+
+  #positioning-host {
+    position: relative;
+    width: 200px;
+    height: 100px;
+  }
+  #positioned {
+    position: absolute;
+    inset-inline-start: 30px;
+    bottom: 10px;
+    width: 20px;
+    height: 20px;
+  }
+
+  #wrapped {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 10px;
+    width: 100px;
+  }
+  #wrapped > span { flex: 0 0 45px; height: 20px; }
+
+  #logical-padding {
+    box-sizing: content-box;
+    width: 40px;
+    height: 20px;
+    padding-inline: 11px 13px;
+    padding-block: 5px 7px;
+  }
+  #logical-padding-child { width: 5px; height: 5px; }
+
+  #overflow-host {
+    width: 60px;
+    height: 20px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  #overflow-child { width: 120px; height: 10px; }
+
+  #margin-row, #logical-margin-row {
+    display: flex;
+    width: 180px;
+    height: 50px;
+  }
+  #physical-margin {
+    flex: 0 0 20px;
+    height: 10px;
+    margin-top: 7px;
+    margin-right: 11px;
+    margin-bottom: 13px;
+    margin-left: 17px;
+  }
+  #physical-margin-after { flex: 0 0 10px; height: 10px; }
+  #logical-margin {
+    flex: 0 0 20px;
+    height: 10px;
+    margin-inline: 19px 23px;
+    margin-block: 5px 9px;
+  }
+  #logical-margin-after { flex: 0 0 10px; height: 10px; }
+
+  #edge-border {
+    box-sizing: content-box;
+    width: 40px;
+    height: 20px;
+    border-top: 3px solid rgb(101, 1, 2);
+    border-bottom: 5px solid rgb(3, 102, 4);
+    border-left: 7px solid rgb(5, 6, 103);
+    border-right: 9px solid rgb(104, 7, 8);
+    border-top-left-radius: 2px;
+    border-bottom-left-radius: 3px;
+    border-start-end-radius: 4px;
+    border-end-end-radius: 6px;
+  }
+
+  #max-height-box {
+    width: 30px;
+    height: 80px;
+    max-height: 30px;
+    overflow: hidden;
+  }
+
+  #block-padding {
+    box-sizing: content-box;
+    width: 20px;
+    height: 10px;
+    padding-block-start: 8px;
+    padding-block-end: 12px;
+  }
+  #block-padding-child { width: 5px; height: 5px; }
+
+  #inset-host {
+    position: relative;
+    width: 200px;
+    height: 100px;
+  }
+  #inset-all {
+    position: absolute;
+    inset: 5px 7px 11px 13px;
+  }
+  #inline-end {
+    position: absolute;
+    inset-inline-end: 17px;
+    top: 0;
+    width: 20px;
+    height: 10px;
+  }
+
+  #grow-row { display: flex; width: 120px; height: 10px; }
+  #grow-fixed { flex: 0 0 20px; }
+  #grow-item { flex-basis: 0; flex-grow: 1; }
+
+  #placement-grid {
+    display: grid;
+    width: 100px;
+    height: 20px;
+    grid-template-columns: 30px 70px;
+  }
+  #grid-placed { grid-column: 2; }
+
+  #middle-table {
+    border-collapse: collapse;
+    width: 80px;
+    height: 40px;
+  }
+  #middle-row { height: 40px; vertical-align: middle; }
+  #middle-cell { padding: 0; }
+  #middle-content { display: block; width: 10px; height: 10px; }
+</style>
+<div class="stage">
+  <div id="text-align-host"><span id="text-align-child"></span></div>
+  <div id="visibility-stack"><div id="visibility-under"></div><div id="visibility-hidden"></div></div>
+  <div id="pointer-stack"><div id="pointer-under"></div><div id="pointer-overlay"></div></div>
+  <div id="outlined"></div>
+  <div id="physical-box"></div>
+  <div id="border-none"></div>
+  <div id="positioning-host"><div id="positioned"></div></div>
+  <div id="wrapped"><span></span><span></span><span></span></div>
+  <div id="logical-padding"><div id="logical-padding-child"></div></div>
+  <div id="overflow-host"><div id="overflow-child"></div></div>
+  <div id="margin-row"><div id="physical-margin"></div><div id="physical-margin-after"></div></div>
+  <div id="logical-margin-row"><div id="logical-margin"></div><div id="logical-margin-after"></div></div>
+  <div id="edge-border"></div>
+  <div id="max-height-box"></div>
+  <div id="block-padding"><div id="block-padding-child"></div></div>
+  <div id="inset-host"><div id="inset-all"></div><div id="inline-end"></div></div>
+  <div id="grow-row"><div id="grow-fixed"></div><div id="grow-item"></div></div>
+  <div id="placement-grid"><div></div><div id="grid-placed"></div></div>
+  <table id="middle-table"><tr id="middle-row"><td id="middle-cell"><span id="middle-content"></span></td></tr></table>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function close(actual, expected, tolerance = 0.5) {
+    return Math.abs(actual - expected) <= tolerance;
+  }
+
+  function run(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function px(value) {
+    return Number.parseFloat(value);
+  }
+
+  run("text-align affects inline child geometry", () => {
+    const host = document.getElementById("text-align-host").getBoundingClientRect();
+    const child = document.getElementById("text-align-child").getBoundingClientRect();
+    assert(getComputedStyle(document.getElementById("text-align-host")).textAlign === "right",
+      "text-align did not survive the cascade");
+    assert(close(child.right, host.right), `right-aligned child ended at ${child.right}, host ${host.right}`);
+  });
+
+  run("visibility hidden retains layout and suppresses hit ownership", () => {
+    const hidden = document.getElementById("visibility-hidden");
+    const under = document.getElementById("visibility-under");
+    const rect = hidden.getBoundingClientRect();
+    assert(rect.width === 80 && rect.height === 24, `hidden box lost layout: ${rect.width}x${rect.height}`);
+    assert(getComputedStyle(hidden).visibility === "hidden", "visibility did not compute to hidden");
+    assert(document.elementFromPoint(rect.left + 4, rect.top + 4) === under,
+      "visibility:hidden element retained hit ownership");
+  });
+
+  run("pointer-events none passes hit testing to the underlying element", () => {
+    const overlay = document.getElementById("pointer-overlay");
+    const under = document.getElementById("pointer-under");
+    const rect = overlay.getBoundingClientRect();
+    assert(getComputedStyle(overlay).pointerEvents === "none", "pointer-events did not compute to none");
+    assert(document.elementFromPoint(rect.left + 4, rect.top + 4) === under,
+      "pointer-events:none overlay retained hit ownership");
+  });
+
+  run("outline shorthand computes all observed longhands without changing geometry", () => {
+    const node = document.getElementById("outlined");
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    assert(style.outlineStyle === "solid", `unexpected outline style ${style.outlineStyle}`);
+    assert(close(px(style.outlineWidth), 3), `unexpected outline width ${style.outlineWidth}`);
+    assert(style.outlineColor === "rgb(12, 34, 56)", `unexpected outline color ${style.outlineColor}`);
+    assert(rect.width === 30 && rect.height === 20, `outline changed principal geometry: ${rect.width}x${rect.height}`);
+  });
+
+  run("physical padding border background and min-height contribute correct geometry", () => {
+    const node = document.getElementById("physical-box");
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    assert(close(rect.width, 80) && close(rect.height, 52), `unexpected physical box ${rect.width}x${rect.height}`);
+    assert(close(px(style.paddingTop), 3) && close(px(style.paddingRight), 7)
+      && close(px(style.paddingBottom), 5) && close(px(style.paddingLeft), 9),
+      `unexpected padding ${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`);
+    assert(close(px(style.borderTopWidth), 2) && style.borderTopStyle === "solid",
+      `unexpected border ${style.borderTopWidth} ${style.borderTopStyle}`);
+    assert(style.borderTopColor === "rgb(20, 40, 60)", `unexpected border color ${style.borderTopColor}`);
+    assert(style.backgroundColor === "rgb(70, 90, 110)", `unexpected background ${style.backgroundColor}`);
+    assert(close(px(style.minHeight), 40), `unexpected min-height ${style.minHeight}`);
+  });
+
+  run("border-style none suppresses every authored border edge", () => {
+    const node = document.getElementById("border-none");
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    assert(rect.width === 30 && rect.height === 10,
+      `border-style:none retained border geometry: ${rect.width}x${rect.height}`);
+    assert(style.borderTopStyle === "none" && px(style.borderTopWidth) === 0,
+      `border-style:none computed as ${style.borderTopStyle} ${style.borderTopWidth}`);
+  });
+
+  run("logical inline inset and physical bottom position an absolute child", () => {
+    const host = document.getElementById("positioning-host").getBoundingClientRect();
+    const childNode = document.getElementById("positioned");
+    const child = childNode.getBoundingClientRect();
+    const style = getComputedStyle(childNode);
+    assert(close(child.left - host.left, 30), `unexpected inline-start offset ${child.left - host.left}`);
+    assert(close(host.bottom - child.bottom, 10), `unexpected bottom offset ${host.bottom - child.bottom}`);
+    assert(close(px(style.insetInlineStart), 30) && close(px(style.bottom), 10),
+      `unexpected computed insets ${style.insetInlineStart} ${style.bottom}`);
+  });
+
+  run("flex-wrap and column-gap create a second line with stable spacing", () => {
+    const host = document.getElementById("wrapped");
+    const items = [...host.children].map(node => node.getBoundingClientRect());
+    const style = getComputedStyle(host);
+    assert(style.flexWrap === "wrap", `unexpected flex-wrap ${style.flexWrap}`);
+    assert(close(px(style.columnGap), 10), `unexpected column gap ${style.columnGap}`);
+    assert(close(items[1].left - items[0].right, 10),
+      `unexpected first-line gap ${items[1].left - items[0].right}`);
+    assert(items[2].top >= items[0].bottom - 0.5, `third item did not wrap: ${items[2].top}`);
+  });
+
+  run("logical padding shorthands map to the LTR physical box", () => {
+    const hostNode = document.getElementById("logical-padding");
+    const host = hostNode.getBoundingClientRect();
+    const child = document.getElementById("logical-padding-child").getBoundingClientRect();
+    const style = getComputedStyle(hostNode);
+    assert(close(host.width, 64) && close(host.height, 32), `unexpected logical padded box ${host.width}x${host.height}`);
+    assert(close(child.left - host.left, 11) && close(child.top - host.top, 5),
+      `unexpected logical content offset ${child.left - host.left},${child.top - host.top}`);
+    assert(close(px(style.paddingRight), 13) && close(px(style.paddingBottom), 7),
+      `logical padding did not map to physical edges: ${style.paddingRight} ${style.paddingBottom}`);
+  });
+
+  run("overflow-x exposes and scrolls the horizontal overflow extent", () => {
+    const host = document.getElementById("overflow-host");
+    const style = getComputedStyle(host);
+    assert(style.overflowX === "auto" && style.overflowY === "hidden",
+      `unexpected overflow ${style.overflowX}/${style.overflowY}`);
+    assert(host.clientWidth === 60 && host.scrollWidth === 120,
+      `unexpected overflow extent ${host.clientWidth}/${host.scrollWidth}`);
+    host.scrollLeft = 20;
+    assert(host.scrollLeft === 20, `horizontal scroll did not update: ${host.scrollLeft}`);
+  });
+
+  run("physical margin longhands affect flex item placement and sibling spacing", () => {
+    const host = document.getElementById("margin-row").getBoundingClientRect();
+    const itemNode = document.getElementById("physical-margin");
+    const item = itemNode.getBoundingClientRect();
+    const after = document.getElementById("physical-margin-after").getBoundingClientRect();
+    const style = getComputedStyle(itemNode);
+    assert(close(item.left - host.left, 17) && close(item.top - host.top, 7),
+      `unexpected physical margin origin ${item.left - host.left},${item.top - host.top}`);
+    assert(close(after.left - item.right, 11), `unexpected margin-right spacing ${after.left - item.right}`);
+    assert(close(px(style.marginTop), 7) && close(px(style.marginRight), 11)
+      && close(px(style.marginBottom), 13) && close(px(style.marginLeft), 17),
+      `unexpected physical margins ${style.marginTop} ${style.marginRight} ${style.marginBottom} ${style.marginLeft}`);
+  });
+
+  run("logical margin shorthands map to LTR flex item placement", () => {
+    const host = document.getElementById("logical-margin-row").getBoundingClientRect();
+    const itemNode = document.getElementById("logical-margin");
+    const item = itemNode.getBoundingClientRect();
+    const after = document.getElementById("logical-margin-after").getBoundingClientRect();
+    const style = getComputedStyle(itemNode);
+    assert(close(item.left - host.left, 19) && close(item.top - host.top, 5),
+      `unexpected logical margin origin ${item.left - host.left},${item.top - host.top}`);
+    assert(close(after.left - item.right, 23), `unexpected inline-end margin ${after.left - item.right}`);
+    assert(close(px(style.marginLeft), 19) && close(px(style.marginRight), 23)
+      && close(px(style.marginTop), 5) && close(px(style.marginBottom), 9),
+      `logical margins did not map to physical edges: ${style.marginTop} ${style.marginRight} ${style.marginBottom} ${style.marginLeft}`);
+  });
+
+  run("physical border edges and logical end radii compose into outer geometry", () => {
+    const node = document.getElementById("edge-border");
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    assert(close(rect.width, 56) && close(rect.height, 28), `unexpected bordered box ${rect.width}x${rect.height}`);
+    assert(close(px(style.borderTopWidth), 3) && close(px(style.borderRightWidth), 9)
+      && close(px(style.borderBottomWidth), 5) && close(px(style.borderLeftWidth), 7),
+      `unexpected border widths ${style.borderTopWidth} ${style.borderRightWidth} ${style.borderBottomWidth} ${style.borderLeftWidth}`);
+    assert(style.borderTopColor === "rgb(101, 1, 2)"
+      && style.borderBottomColor === "rgb(3, 102, 4)"
+      && style.borderLeftColor === "rgb(5, 6, 103)",
+      `unexpected edge colors ${style.borderTopColor} ${style.borderBottomColor} ${style.borderLeftColor}`);
+    assert(close(px(style.borderTopLeftRadius), 2) && close(px(style.borderTopRightRadius), 4)
+      && close(px(style.borderBottomLeftRadius), 3) && close(px(style.borderBottomRightRadius), 6),
+      `unexpected mapped radii ${style.borderTopLeftRadius} ${style.borderTopRightRadius} ${style.borderBottomRightRadius} ${style.borderBottomLeftRadius}`);
+  });
+
+  run("max-height constrains the used block size", () => {
+    const node = document.getElementById("max-height-box");
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    assert(close(px(style.maxHeight), 30), `unexpected max-height ${style.maxHeight}`);
+    assert(close(rect.height, 30), `max-height did not constrain used height: ${rect.height}`);
+  });
+
+  run("logical block padding longhands affect outer size and content origin", () => {
+    const hostNode = document.getElementById("block-padding");
+    const host = hostNode.getBoundingClientRect();
+    const child = document.getElementById("block-padding-child").getBoundingClientRect();
+    const style = getComputedStyle(hostNode);
+    assert(close(host.height, 30) && close(child.top - host.top, 8),
+      `unexpected block padding geometry ${host.height}/${child.top - host.top}`);
+    assert(close(px(style.paddingTop), 8) && close(px(style.paddingBottom), 12),
+      `logical block padding did not map to physical edges: ${style.paddingTop} ${style.paddingBottom}`);
+  });
+
+  run("inset shorthand and logical inline-end resolve against the positioned host", () => {
+    const host = document.getElementById("inset-host").getBoundingClientRect();
+    const allNode = document.getElementById("inset-all");
+    const all = allNode.getBoundingClientRect();
+    const endNode = document.getElementById("inline-end");
+    const end = endNode.getBoundingClientRect();
+    const allStyle = getComputedStyle(allNode);
+    const endStyle = getComputedStyle(endNode);
+    assert(close(all.left - host.left, 13) && close(all.top - host.top, 5)
+      && close(host.right - all.right, 7) && close(host.bottom - all.bottom, 11),
+      `unexpected inset box ${all.left - host.left},${all.top - host.top},${host.right - all.right},${host.bottom - all.bottom}`);
+    assert(close(px(allStyle.left), 13) && close(px(allStyle.right), 7)
+      && close(px(allStyle.top), 5) && close(px(allStyle.bottom), 11),
+      `unexpected computed inset edges ${allStyle.top} ${allStyle.right} ${allStyle.bottom} ${allStyle.left}`);
+    assert(close(host.right - end.right, 17) && close(px(endStyle.insetInlineEnd), 17),
+      `unexpected logical inline-end ${host.right - end.right}/${endStyle.insetInlineEnd}`);
+  });
+
+  run("flex-grow distributes the remaining main-axis space", () => {
+    const host = document.getElementById("grow-row").getBoundingClientRect();
+    const fixed = document.getElementById("grow-fixed").getBoundingClientRect();
+    const growNode = document.getElementById("grow-item");
+    const grow = growNode.getBoundingClientRect();
+    assert(getComputedStyle(growNode).flexGrow === "1", "flex-grow did not survive the cascade");
+    assert(close(fixed.width, 20) && close(grow.width, 100) && close(grow.right, host.right),
+      `unexpected flex growth ${fixed.width}/${grow.width}/${host.width}`);
+  });
+
+  run("grid-column places an item in the authored explicit track", () => {
+    const host = document.getElementById("placement-grid").getBoundingClientRect();
+    const node = document.getElementById("grid-placed");
+    const rect = node.getBoundingClientRect();
+    assert(getComputedStyle(node).gridColumn === "2", `unexpected grid-column ${getComputedStyle(node).gridColumn}`);
+    assert(close(rect.left - host.left, 30) && close(rect.width, 70),
+      `unexpected explicit grid placement ${rect.left - host.left}/${rect.width}`);
+  });
+
+  run("vertical-align middle centers table-row cell content", () => {
+    const rowNode = document.getElementById("middle-row");
+    const row = rowNode.getBoundingClientRect();
+    const content = document.getElementById("middle-content").getBoundingClientRect();
+    assert(getComputedStyle(rowNode).verticalAlign === "middle",
+      `unexpected vertical-align ${getComputedStyle(rowNode).verticalAlign}`);
+    assert(close(content.top - row.top, 15),
+      `table-row content was not vertically centered: ${content.top - row.top}`);
+  });
+
+  const failed = state.results.filter(result => result.status !== "PASS");
+  state.harness = failed.length === 0
+    ? { status: 0, message: null, stack: null }
+    : { status: 1, message: `${failed.length} observed CSS primitive assertions failed`, stack: null };
+  state.complete = true;
+</script>

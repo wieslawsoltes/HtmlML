@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Auto-height wrappers retain centered inline loaders in consecutive rows</title>
+<style>
+  body { margin: 0; font: 13px/18px sans-serif; }
+  .auto-wrapper { text-align: left; }
+  .row { display: flex; align-items: center; min-height: 24px; }
+  .values { display: flex; align-items: center; height: 24px; }
+  .value { display: inline-flex; }
+  .loader-host { margin-left: 4px; }
+  .loader {
+    display: block;
+    position: static;
+    height: 100%;
+    font-size: 0;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .loader::after {
+    content: " ";
+    display: inline-block;
+    height: 100%;
+    vertical-align: middle;
+  }
+  .dot {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 100%;
+    background: currentColor;
+    vertical-align: middle;
+  }
+  .dot:not(:last-child) { margin-right: 3px; }
+</style>
+<body>
+  <div id="first-wrapper" class="auto-wrapper">
+    <div id="first-row" class="row">
+      <div class="values"><span id="first-value" class="value">1.24M</span><span id="first-loader-host" class="loader-host"><span id="first-loader" class="loader"><i id="first-dot" class="dot"></i><i class="dot"></i><i class="dot"></i></span></span></div>
+    </div>
+  </div>
+  <div id="second-wrapper" class="auto-wrapper">
+    <div id="second-row" class="row">
+      <div class="values"><span class="value">-1.62%</span><span class="loader-host"><span class="loader"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span></span></div>
+    </div>
+  </div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const result = { name: "auto-height row flow and inline loader centers match CSS geometry" };
+  try {
+    const rect = id => document.getElementById(id).getBoundingClientRect();
+    const firstWrapper = rect("first-wrapper");
+    const firstRow = rect("first-row");
+    const secondWrapper = rect("second-wrapper");
+    const secondRow = rect("second-row");
+    const value = rect("first-value");
+    const host = rect("first-loader-host");
+    const loader = rect("first-loader");
+    const dot = rect("first-dot");
+    const firstDot = document.getElementById("first-dot");
+    const dotMarginRight = parseFloat(getComputedStyle(firstDot).marginRight);
+    const spacingSelectorMatches = firstDot.matches(".dot:not(:last-child)");
+    const failures = [];
+    const close = (actual, expected, label, tolerance = .1) => {
+      if (Math.abs(actual - expected) > tolerance) {
+        failures.push(label + ": expected " + expected + ", got " + actual);
+      }
+    };
+    close(firstWrapper.height, 24, "first auto wrapper height");
+    close(firstRow.height, 24, "first flex row height");
+    close(secondWrapper.height, 24, "second auto wrapper height");
+    close(secondRow.top, firstRow.bottom, "consecutive row flow position");
+    close(loader.width, 18, "three-dot loader width");
+    close(loader.height, 4, "three-dot loader height");
+    close(loader.top + loader.height / 2, firstRow.top + firstRow.height / 2,
+      "loader center against row");
+    close(loader.top + loader.height / 2, value.top + value.height / 2,
+      "loader center against adjacent value", .6);
+    close(dot.width, 4, "individual dot width");
+    close(dot.height, 4, "individual dot height");
+    close(dotMarginRight, 3, ":not(:last-child) dot spacing");
+    if (!spacingSelectorMatches) failures.push(":not(:last-child) selector did not match first dot");
+    close(dot.top + dot.height / 2, firstRow.top + firstRow.height / 2,
+      "individual dot center against row");
+    close(host.top + host.height / 2, firstRow.top + firstRow.height / 2,
+      "loader host center against row");
+    if (failures.length) throw new Error(failures.join("; "));
+    result.status = "PASS";
+    result.message = null;
+    result.stack = null;
+    state.diagnostics = [JSON.stringify({ firstWrapper, firstRow, secondWrapper,
+      secondRow, value, host, loader, dot, dotMarginRight, spacingSelectorMatches })];
+    state.harness = { status: 0, message: null, stack: null };
+  } catch (error) {
+    result.status = "FAIL";
+    result.message = String(error && error.message || error);
+    result.stack = error && error.stack ? String(error.stack) : null;
+    state.harness = { status: 1, message: result.message, stack: result.stack };
+  }
+  state.results.push(result);
+  state.complete = true;
+</script>

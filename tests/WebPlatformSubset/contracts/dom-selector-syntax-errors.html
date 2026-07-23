@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOM selector APIs reject invalid and unsupported selectors</title>
+<body>
+<div id="selector-root"><span class="item"></span></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assertSyntaxError(operation, label) {
+    let error = null;
+    try {
+      operation();
+    } catch (caught) {
+      error = caught;
+    }
+    assert(error !== null, `${label} did not throw`);
+    assert(error instanceof DOMException,
+      `${label} threw ${error && error.constructor && error.constructor.name}`);
+    assert(error.name === "SyntaxError", `${label} error name was ${error.name}`);
+  }
+
+  const root = document.getElementById("selector-root");
+  const item = root.querySelector(".item");
+
+  test("Document selector APIs reject an unknown pseudo-class", () => {
+    assertSyntaxError(() => document.querySelector(":htmlml-unknown-pseudo"),
+      "Document.querySelector");
+    assertSyntaxError(() => document.querySelectorAll(":htmlml-unknown-pseudo"),
+      "Document.querySelectorAll");
+  });
+
+  test("Element selector APIs reject an unknown pseudo-class", () => {
+    assertSyntaxError(() => root.querySelector(":htmlml-unknown-pseudo"),
+      "Element.querySelector");
+    assertSyntaxError(() => root.querySelectorAll(":htmlml-unknown-pseudo"),
+      "Element.querySelectorAll");
+  });
+
+  test("matches and closest reject an unknown pseudo-class", () => {
+    assertSyntaxError(() => item.matches(":htmlml-unknown-pseudo"), "Element.matches");
+    assertSyntaxError(() => item.closest(":htmlml-unknown-pseudo"), "Element.closest");
+  });
+
+  test("malformed selectors and invalid selector lists throw SyntaxError", () => {
+    assertSyntaxError(() => document.querySelector("["), "malformed querySelector");
+    assertSyntaxError(() => root.querySelectorAll("div, :htmlml-unknown-pseudo"),
+      "invalid selector list");
+    assertSyntaxError(() => item.matches(""), "empty matches selector");
+  });
+
+  test("valid non-matching selectors retain ordinary return semantics", () => {
+    assert(document.querySelector("#selector-root") === root,
+      "valid document selector lost its match");
+    assert(root.querySelectorAll(".item").length === 1,
+      "valid element selector list length changed");
+    assert(item.matches("span.item"), "valid matches selector returned false");
+    assert(!item.matches("button.item"), "valid non-match returned true");
+    assert(item.closest("#selector-root") === root, "valid closest selector lost its match");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

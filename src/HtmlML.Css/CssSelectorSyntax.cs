@@ -79,6 +79,29 @@ public sealed record CssSelectorSyntax(IReadOnlyList<CssSelectorPartSyntax> Part
 
 public static class CssSelectorSyntaxParser
 {
+    private static readonly HashSet<string> s_supportedDomPseudoClasses = new(StringComparer.Ordinal)
+    {
+        "root", "scope", "empty",
+        "first-child", "last-child", "only-child",
+        "first-of-type", "last-of-type", "only-of-type",
+        "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type",
+        "not", "is", "where", "has",
+        "hover", "active", "focus", "focus-visible", "focus-within",
+        "disabled", "enabled", "checked", "indeterminate", "default",
+        "required", "optional", "valid", "invalid", "in-range", "out-of-range",
+        "read-only", "read-write", "placeholder-shown", "autofill",
+        "link", "visited", "any-link", "local-link", "target", "target-within",
+        "lang", "dir", "defined", "fullscreen", "modal", "open",
+        "picture-in-picture", "user-valid", "user-invalid", "blank"
+    };
+
+    private static readonly HashSet<string> s_recognizedDomPseudoElements = new(StringComparer.Ordinal)
+    {
+        "before", "after", "first-letter", "first-line", "selection", "marker",
+        "placeholder", "backdrop", "file-selector-button", "cue", "cue-region",
+        "grammar-error", "spelling-error", "target-text"
+    };
+
     public static IEnumerable<string> SplitSelectorList(string selectorText)
     {
         ArgumentNullException.ThrowIfNull(selectorText);
@@ -89,6 +112,11 @@ public static class CssSelectorSyntaxParser
         for (var index = 0; index < selectorText.Length; index++)
         {
             var character = selectorText[index];
+            if (character == '\\' && quote == '\0')
+            {
+                index = SkipEscape(selectorText, index);
+                continue;
+            }
             if (quote != '\0')
             {
                 if (character == quote && (index == 0 || selectorText[index - 1] != '\\'))
@@ -165,6 +193,190 @@ public static class CssSelectorSyntaxParser
         return true;
     }
 
+    /// <summary>
+    /// Returns whether a selector list is both syntactically valid and implemented by
+    /// HtmlML's DOM selector matcher. DOM query APIs must reject unsupported selector
+    /// syntax with a SyntaxError instead of treating it as a non-match; stylesheet
+    /// parsing remains independently forgiving.
+    /// </summary>
+    public static bool IsSupportedDomSelectorList(string selectorText)
+    {
+        if (string.IsNullOrWhiteSpace(selectorText) || !HasBalancedDelimiters(selectorText))
+        {
+            return false;
+        }
+
+        var selectors = SplitSelectorList(selectorText).ToArray();
+        if (selectors.Length == 0 || selectors.Length != CountTopLevelSelectorItems(selectorText))
+        {
+            return false;
+        }
+
+        return selectors.All(static selectorText =>
+            TryParse(selectorText, out var selector) && IsSupportedDomSelector(selector));
+    }
+
+    private static bool IsSupportedDomSelector(CssSelectorSyntax selector)
+    {
+        foreach (var part in selector.Parts)
+        {
+            foreach (var pseudo in part.Simple.Pseudos)
+            {
+                if (pseudo.IsElement)
+                {
+                    if (pseudo.Argument is not null || !s_recognizedDomPseudoElements.Contains(pseudo.Name))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (!s_supportedDomPseudoClasses.Contains(pseudo.Name))
+                {
+                    return false;
+                }
+
+                if (pseudo.Name is "not" or "is" or "where" or "has")
+                {
+                    if (string.IsNullOrWhiteSpace(pseudo.Argument)
+                        || !IsSupportedDomSelectorList(pseudo.Argument))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (pseudo.Name is "nth-child" or "nth-last-child" or "nth-of-type" or "nth-last-of-type")
+                {
+                    if (!IsValidNthExpression(pseudo.Argument))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (pseudo.Name is "lang" or "dir")
+                {
+                    if (string.IsNullOrWhiteSpace(pseudo.Argument))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (pseudo.Argument is not null)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static bool IsValidNthExpression(string? argument)
+    {
+        var expression = argument?.Replace(" ", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+        if (expression is "odd" or "even")
+        {
+            return true;
+        }
+        if (string.IsNullOrEmpty(expression))
+        {
+            return false;
+        }
+
+        var index = 0;
+        if (expression[index] is '+' or '-') index++;
+        var digitsBeforeN = 0;
+        while (index < expression.Length && char.IsAsciiDigit(expression[index]))
+        {
+            digitsBeforeN++;
+            index++;
+        }
+        if (index == expression.Length)
+        {
+            return digitsBeforeN > 0;
+        }
+        if (expression[index] != 'n')
+        {
+            return false;
+        }
+        index++;
+        if (index == expression.Length)
+        {
+            return true;
+        }
+        if (expression[index] is not ('+' or '-'))
+        {
+            return false;
+        }
+        index++;
+        var offsetStart = index;
+        while (index < expression.Length && char.IsAsciiDigit(expression[index])) index++;
+        return index == expression.Length && index > offsetStart;
+    }
+
+    private static int CountTopLevelSelectorItems(string selectorText)
+    {
+        var count = 1;
+        var square = 0;
+        var round = 0;
+        char quote = '\0';
+        for (var index = 0; index < selectorText.Length; index++)
+        {
+            var character = selectorText[index];
+            if (character == '\\' && quote == '\0')
+            {
+                index = SkipEscape(selectorText, index);
+                continue;
+            }
+            if (quote != '\0')
+            {
+                if (character == quote && !IsEscaped(selectorText, index)) quote = '\0';
+                continue;
+            }
+            if (character is '\'' or '"') quote = character;
+            else if (character == '[') square++;
+            else if (character == ']') square--;
+            else if (character == '(') round++;
+            else if (character == ')') round--;
+            else if (character == ',' && square == 0 && round == 0) count++;
+        }
+        return count;
+    }
+
+    private static bool HasBalancedDelimiters(string text)
+    {
+        var round = 0;
+        var square = 0;
+        char quote = '\0';
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] == '\\' && quote == '\0')
+            {
+                index = SkipEscape(text, index);
+                continue;
+            }
+            if (quote != '\0')
+            {
+                if (text[index] == quote && !IsEscaped(text, index)) quote = '\0';
+            }
+            else if (text[index] is '\'' or '"') quote = text[index];
+            else if (text[index] == '(') round++;
+            else if (text[index] == ')' && --round < 0) return false;
+            else if (text[index] == '[') square++;
+            else if (text[index] == ']' && --square < 0) return false;
+        }
+        return quote == '\0' && round == 0 && square == 0;
+    }
+
+    private static bool IsEscaped(string source, int position)
+    {
+        var slashCount = 0;
+        for (var index = position - 1; index >= 0 && source[index] == '\\'; index--) slashCount++;
+        return (slashCount & 1) != 0;
+    }
+
     private static List<SelectorToken> Tokenize(string text)
     {
         var result = new List<SelectorToken>();
@@ -184,6 +396,13 @@ public static class CssSelectorSyntaxParser
         for (var index = 0; index < text.Length; index++)
         {
             var character = text[index];
+            if (character == '\\' && quote == '\0')
+            {
+                var escapeEnd = SkipEscape(text, index);
+                current.Append(text, index, escapeEnd - index + 1);
+                index = escapeEnd;
+                continue;
+            }
             if (quote != '\0')
             {
                 current.Append(character);
@@ -359,10 +578,55 @@ public static class CssSelectorSyntaxParser
             var character = text[index];
             if (character == '\\' && index + 1 < text.Length)
             {
-                builder.Append(text[index + 1]);
-                index += 2;
+                index++;
+                if (text[index] == '\r')
+                {
+                    index++;
+                    if (index < text.Length && text[index] == '\n') index++;
+                    continue;
+                }
+                if (text[index] is '\n' or '\f')
+                {
+                    index++;
+                    continue;
+                }
+                var hexStart = index;
+                while (index < text.Length
+                       && index - hexStart < 6
+                       && Uri.IsHexDigit(text[index]))
+                {
+                    index++;
+                }
+                if (index > hexStart)
+                {
+                    var scalar = Convert.ToInt32(text[hexStart..index], 16);
+                    if (index < text.Length && text[index] == '\r')
+                    {
+                        index++;
+                        if (index < text.Length && text[index] == '\n') index++;
+                    }
+                    else if (index < text.Length && char.IsWhiteSpace(text[index])) index++;
+                    builder.Append(scalar is 0 or > 0x10ffff || scalar is >= 0xd800 and <= 0xdfff
+                        ? "\ufffd"
+                        : char.ConvertFromUtf32(scalar));
+                }
+                else
+                {
+                    builder.Append(text[index]);
+                    index++;
+                }
             }
-            else if (char.IsLetterOrDigit(character) || character is '-' or '_')
+            else if (character == '\\')
+            {
+                builder.Append('\ufffd');
+                index++;
+            }
+            else if (character == '\0')
+            {
+                builder.Append('\ufffd');
+                index++;
+            }
+            else if (char.IsLetterOrDigit(character) || character is '-' or '_' || character >= 0x80)
             {
                 builder.Append(character);
                 index++;
@@ -375,7 +639,36 @@ public static class CssSelectorSyntaxParser
         return builder.ToString();
     }
 
-    private static bool IsIdentifierStart(char character) => char.IsLetter(character) || character is '-' or '_';
+    private static bool IsIdentifierStart(char character)
+        => char.IsLetter(character) || character is '-' or '_' or '\\' || character >= 0x80;
+
+    private static int SkipEscape(string text, int slashIndex)
+    {
+        var index = slashIndex + 1;
+        if (index >= text.Length) return slashIndex;
+        if (text[index] == '\r')
+        {
+            index++;
+            if (index < text.Length && text[index] == '\n') index++;
+            return index - 1;
+        }
+        if (text[index] is '\n' or '\f') return index;
+        var hexStart = index;
+        while (index < text.Length
+               && index - hexStart < 6
+               && Uri.IsHexDigit(text[index]))
+        {
+            index++;
+        }
+        if (index > hexStart && index < text.Length && text[index] == '\r')
+        {
+            index++;
+            if (index < text.Length && text[index] == '\n') index++;
+        }
+        else if (index > hexStart && index < text.Length && char.IsWhiteSpace(text[index])) index++;
+        else if (index == hexStart) index++;
+        return index - 1;
+    }
 
     private readonly record struct SelectorToken(string Text, bool IsCombinator, CssSelectorCombinator Combinator)
     {

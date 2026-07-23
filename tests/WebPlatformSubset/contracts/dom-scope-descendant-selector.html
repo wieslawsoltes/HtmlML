@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element-scoped child and descendant selectors</title>
+<body>
+<div class="collapse" id="outside"><div class="collapse" id="outside-nested"></div></div>
+<div id="scope-root">
+  <div class="direct collapse" id="outer-collapse">
+    <div class="wrapper"><div class="collapse" id="nested-collapse"></div></div>
+  </div>
+  <div class="direct" id="direct-sibling"></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test(":scope descendant chains remain bounded to the query element", () => {
+    const root = document.getElementById("scope-root");
+    const matches = root.querySelectorAll(":scope .collapse .collapse");
+    assert(matches.length === 1, `scoped descendant query returned ${matches.length} elements`);
+    assert(matches[0].id === "nested-collapse", `scoped descendant query returned ${matches[0] && matches[0].id}`);
+  });
+
+  test(":scope child combinators select only direct children", () => {
+    const root = document.getElementById("scope-root");
+    const matches = root.querySelectorAll(":scope > .direct");
+    assert(matches.length === 2, `scoped child query returned ${matches.length} elements`);
+    assert(matches[0].id === "outer-collapse" && matches[1].id === "direct-sibling",
+      `scoped child order was ${Array.from(matches).map(node => node.id).join(",")}`);
+  });
+
+  test("querySelector returns the first scoped descendant match", () => {
+    const root = document.getElementById("scope-root");
+    const match = root.querySelector(":scope .wrapper > .collapse");
+    assert(match && match.id === "nested-collapse", `first scoped match was ${match && match.id}`);
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

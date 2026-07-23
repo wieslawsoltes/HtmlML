@@ -1,0 +1,122 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pointer entry opens and preserves a fixed child submenu through activation</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/resources/testdriver.js"></script>
+<script src="/resources/testdriver-actions.js"></script>
+<script src="/resources/testdriver-vendor.js"></script>
+<style>
+  html,
+  body {
+    margin: 0;
+    width: 400px;
+    height: 160px;
+  }
+
+  #menu-clip {
+    position: fixed;
+    left: 20px;
+    top: 20px;
+    width: 120px;
+    height: 40px;
+    overflow: hidden;
+  }
+
+  #menu-row {
+    width: 120px;
+    height: 40px;
+    background: rgb(11, 24, 26);
+  }
+
+  #submenu {
+    display: none;
+    position: fixed;
+    left: 140px;
+    top: 20px;
+    width: 100px;
+    height: 40px;
+    background: rgb(0, 128, 0);
+  }
+
+  #menu-row.open #submenu {
+    display: block;
+  }
+
+  #submenu-action {
+    width: 100%;
+    height: 100%;
+  }
+
+  #outside {
+    position: fixed;
+    left: 300px;
+    top: 20px;
+    width: 40px;
+    height: 40px;
+  }
+</style>
+<div id="menu-clip">
+  <div id="menu-row">Parent
+    <div id="submenu"><button id="submenu-action">Child</button></div>
+  </div>
+</div>
+<div id="outside">Outside</div>
+<script>
+  const row = document.getElementById("menu-row");
+  const submenu = document.getElementById("submenu");
+  const action = document.getElementById("submenu-action");
+  const outside = document.getElementById("outside");
+  const boundaryOrder = [];
+  let rowLeaveCount = 0;
+  let activationCount = 0;
+
+  for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter"]) {
+    row.addEventListener(type, event => {
+      if (event.target === row) boundaryOrder.push(type);
+    });
+  }
+  row.addEventListener("pointerenter", () => row.classList.add("open"));
+  row.addEventListener("pointerleave", event => {
+    rowLeaveCount++;
+    row.classList.remove("open");
+    window.__lastRowLeaveRelatedTarget = event.relatedTarget;
+  });
+  action.addEventListener("click", () => activationCount++);
+
+  promise_test(async () => {
+    await new test_driver.Actions().pointerMove(0, 0, { origin: row }).send();
+    assert_array_equals(
+      [...boundaryOrder].sort(),
+      ["mouseenter", "mouseover", "pointerenter", "pointerover"],
+      "all four browser pointer/mouse entry boundaries must reach the parent row");
+    assert_less_than(boundaryOrder.indexOf("pointerover"), boundaryOrder.indexOf("pointerenter"),
+      "pointerover must precede pointerenter");
+    assert_less_than(boundaryOrder.indexOf("mouseover"), boundaryOrder.indexOf("mouseenter"),
+      "mouseover must precede mouseenter");
+    assert_equals(getComputedStyle(submenu).display, "block", "pointer entry must open the child submenu");
+
+    const rect = submenu.getBoundingClientRect();
+    assert_equals(rect.left, 140, "submenu left edge");
+    assert_equals(rect.top, 20, "submenu top edge");
+    assert_equals(rect.width, 100, "submenu width");
+    assert_equals(rect.height, 40, "submenu height");
+    assert_equals(getComputedStyle(document.getElementById("menu-clip")).overflow, "hidden",
+      "the portal host must exercise an authored overflow clip");
+    const hit = document.elementFromPoint(190, 40);
+    assert_true(hit === action || action.contains(hit),
+      "a viewport-fixed submenu must escape an untransformed ancestor overflow clip");
+
+    await new test_driver.Actions().pointerMove(0, 0, { origin: action }).send();
+    assert_equals(rowLeaveCount, 0, "crossing into a fixed descendant must not leave the parent row");
+    assert_true(row.classList.contains("open"), "the submenu must remain open while its child is hovered");
+
+    await test_driver.click(action);
+    assert_equals(activationCount, 1, "the child submenu action must receive native activation");
+
+    await new test_driver.Actions().pointerMove(0, 0, { origin: outside }).send();
+    assert_equals(rowLeaveCount, 1, "leaving the menu subtree must close it exactly once");
+    assert_true(window.__lastRowLeaveRelatedTarget === outside, "pointerleave relatedTarget must be the outside node");
+    assert_equals(getComputedStyle(submenu).display, "none", "the child submenu must close after leaving the subtree");
+  }, "hover-opened fixed child submenu preserves boundary ownership and activation");
+</script>

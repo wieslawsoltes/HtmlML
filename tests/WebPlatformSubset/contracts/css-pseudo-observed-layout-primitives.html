@@ -1,0 +1,90 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed generated-box logical inset, margin, background, and visibility</title>
+<link rel="match" href="css-pseudo-observed-layout-primitives-ref.html">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: white; }
+  .stage {
+    position: relative;
+    width: 160px;
+    height: 100px;
+    background: rgb(240, 240, 240);
+  }
+  .stage::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 20px;
+    top: 10px;
+    width: 30px;
+    height: 20px;
+    margin: 5px 0 0 4px;
+    background-color: rgb(0, 160, 0);
+  }
+  .stage::after {
+    content: "";
+    position: absolute;
+    inset: 50px 20px 10px 60px;
+    background: rgb(0, 0, 192);
+  }
+  .hidden {
+    position: relative;
+    width: 160px;
+    height: 40px;
+    background: rgb(255, 255, 0);
+  }
+  .hidden::before {
+    content: "";
+    position: absolute;
+    inset-inline-end: 0;
+    top: 0;
+    width: 80px;
+    height: 40px;
+    visibility: hidden;
+    background: rgb(255, 0, 0);
+  }
+  .pseudo-flex {
+    position: relative;
+    width: 160px;
+    height: 40px;
+    background: white;
+  }
+  .pseudo-flex::before {
+    content: "";
+    position: absolute;
+    left: 10px;
+    top: 5px;
+    width: 20px;
+    height: 20px;
+    margin-top: 5px;
+    margin-left: 13px;
+    color: rgb(0, 160, 0);
+    background: currentColor;
+    opacity: .5;
+  }
+  .pseudo-flex::after {
+    content: "";
+    position: absolute;
+    right: 10px;
+    top: 5px;
+    width: 20px;
+    height: 20px;
+    margin-right: 11px;
+    background: rgb(0, 0, 0);
+  }
+  .pseudo-text {
+    position: relative;
+    width: 160px;
+    height: 30px;
+    background: white;
+  }
+  .pseudo-text::before {
+    content: "M";
+    position: absolute;
+    left: 5px;
+    top: 5px;
+    color: rgb(20, 40, 180);
+    font-size: 20px;
+    line-height: 20px;
+  }
+</style>
+<div class="stage"></div><div class="hidden"></div><div class="pseudo-flex"></div><div class="pseudo-text"></div>

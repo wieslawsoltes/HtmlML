@@ -24,6 +24,16 @@ public sealed class V8TypedInlineStyleWriteTests
         Assert.Equal("block", enabled.Result.GetProperty("computedDisplay").GetString());
         Assert.Equal("blue", enabled.Result.GetProperty("customProperty").GetString());
         Assert.Equal(string.Empty, enabled.Result.GetProperty("removedHeight").GetString());
+        Assert.Equal("3px", enabled.Result.GetProperty("authoredPadding").GetString());
+        Assert.Equal("3px", enabled.Result.GetProperty("computedPaddingTop").GetString());
+        Assert.Equal("3px", enabled.Result.GetProperty("computedPaddingRight").GetString());
+        Assert.Equal("3px", enabled.Result.GetProperty("computedPaddingBottom").GetString());
+        Assert.Equal("7px", enabled.Result.GetProperty("computedPaddingLeft").GetString());
+        Assert.Equal("3px", enabled.Result.GetProperty("authoredBorder").GetString());
+        Assert.Equal("1px", enabled.Result.GetProperty("computedBorderTop").GetString());
+        Assert.Equal("2px", enabled.Result.GetProperty("computedBorderRight").GetString());
+        Assert.Equal("3px", enabled.Result.GetProperty("computedBorderBottom").GetString());
+        Assert.Equal("4px", enabled.Result.GetProperty("computedBorderLeft").GetString());
         Assert.True(enabled.Metrics.GetProperty("typedWrites").GetInt32() > 0);
         Assert.Equal(0, enabled.Metrics.GetProperty("fallbackWrites").GetInt32());
         Assert.Equal(0, disabled.Metrics.GetProperty("typedWrites").GetInt32());
@@ -59,6 +69,51 @@ public sealed class V8TypedInlineStyleWriteTests
             Assert.Equal(string.Empty, result.GetProperty("removedWidth").GetString());
             Assert.Equal(1, result.GetProperty("length").GetInt32());
             Assert.Equal("--accent", result.GetProperty("firstItem").GetString());
+            Assert.Empty(host.JavaScriptExceptionDiagnostics);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
+    [AvaloniaFact]
+    [Trait("Runtime", "V8Native")]
+    public void CssTextPreservesCustomPropertyOverwriteAndCaseSensitivity()
+    {
+        if (!HasNativeV8()) return;
+
+        var root = new CssLayoutPanel { Width = 320, Height = 180 };
+        var window = new Window { Width = 320, Height = 180, Content = root };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        using var host = new AvaloniaBrowserHost(window);
+        using var runtime = new ClearScriptV8Runtime(host);
+        try
+        {
+            runtime.Execute("""
+                const target = document.createElement('div');
+                target.style.cssText =
+                  '--var:value1; --var:value2; --Var:upper; width:12px !important; width:24px';
+                globalThis.__customPropertyCssTextResult = {
+                  lower: target.style.getPropertyValue('--var'),
+                  upper: target.style.getPropertyValue('--Var'),
+                  width: target.style.width,
+                  cssText: target.style.cssText
+                };
+                """, "custom-property-css-text.js");
+            using var resultDocument = JsonDocument.Parse(Convert.ToString(runtime.Engine.Evaluate(
+                "JSON.stringify(globalThis.__customPropertyCssTextResult)")) ?? "{}");
+            var result = resultDocument.RootElement;
+
+            Assert.Equal(
+                "--var: value2; --Var: upper; width: 12px !important",
+                result.GetProperty("cssText").GetString());
+            Assert.Equal("value2", result.GetProperty("lower").GetString());
+            Assert.Equal("upper", result.GetProperty("upper").GetString());
+            Assert.Equal("12px", result.GetProperty("width").GetString());
             Assert.Empty(host.JavaScriptExceptionDiagnostics);
         }
         finally
@@ -123,6 +178,13 @@ public sealed class V8TypedInlineStyleWriteTests
         target.style.width = '32px';
         target.setAttribute('style', 'display: block; width: 40px; --accent: blue');
         target.style.width = '42px';
+        target.style.padding = '3px';
+        const authoredPadding = target.style.padding;
+        target.style.setProperty('padding-left', '7px');
+        target.style.border = '3px';
+        const authoredBorder = target.style.getPropertyValue('border');
+        target.style.borderStyle = 'solid';
+        target.style.borderWidth = '1px 2px 3px 4px';
         const computed = getComputedStyle(target);
         globalThis.__typedInlineStyleWriteResult = {
           cssText: target.style.cssText,
@@ -131,7 +193,17 @@ public sealed class V8TypedInlineStyleWriteTests
           computedWidth: computed.width,
           computedDisplay: computed.display,
           customProperty: target.style.getPropertyValue('--accent'),
-          removedHeight: target.style.getPropertyValue('height')
+          removedHeight: target.style.getPropertyValue('height'),
+          authoredPadding,
+          computedPaddingTop: computed.paddingTop,
+          computedPaddingRight: computed.paddingRight,
+          computedPaddingBottom: computed.paddingBottom,
+          computedPaddingLeft: computed.paddingLeft,
+          authoredBorder,
+          computedBorderTop: computed.borderTopWidth,
+          computedBorderRight: computed.borderRightWidth,
+          computedBorderBottom: computed.borderBottomWidth,
+          computedBorderLeft: computed.borderLeftWidth
         };
         """;
 

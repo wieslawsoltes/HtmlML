@@ -312,7 +312,9 @@ internal sealed class CssStyleEngine
     internal CssComputedStyle GetDocumentElementComputedStyle()
         => _documentElementComputedValues is null
             ? CssComputedStyle.Empty
-            : new CssComputedStyle(new Dictionary<string, string>(_documentElementComputedValues, StringComparer.OrdinalIgnoreCase));
+            : new CssComputedStyle(new Dictionary<string, string>(
+                _documentElementComputedValues,
+                CssPropertyNameComparer.Instance));
 
     public void Invalidate(AvaloniaDomElement? target = null, bool stylesheetsChanged = false)
     {
@@ -1031,7 +1033,7 @@ internal sealed class CssStyleEngine
         var mediaViewport = _document.GetDocumentViewportClientSize();
         var mediaDevicePixelRatio = _document.GetDocumentDevicePixelRatio();
 
-        foreach (var node in _document.HeadChildren.OfType<AvaloniaDomElement>())
+        foreach (var node in _document.StylesheetNodes)
         {
             switch (node.tagName.ToUpperInvariant())
             {
@@ -1374,7 +1376,7 @@ internal sealed class CssStyleEngine
 
         var changedNames = new HashSet<string>(
             appendedRootRules.SelectMany(rule => rule.Declarations).Select(declaration => declaration.Name),
-            StringComparer.OrdinalIgnoreCase);
+            StringComparer.Ordinal);
         if (changedNames.Count == 0)
         {
             return false;
@@ -2710,7 +2712,8 @@ internal sealed class CssStyleEngine
                 or "max-width" or "max-height" or "margin" or "padding" or "overflow"
                 or "box-sizing" or "flex" or "flex-basis" or "flex-direction" or "flex-flow"
                 or "flex-grow" or "flex-shrink" or "flex-wrap" or "grid" or "grid-template-columns"
-                or "grid-template-rows" or "grid-column" or "grid-column-start" or "grid-column-end"
+                or "grid-template-rows" or "grid-area" or "grid-row" or "grid-row-start" or "grid-row-end"
+                or "grid-column" or "grid-column-start" or "grid-column-end"
                 or "align-content" or "align-items" or "align-self"
                 or "justify-content" or "gap" or "order" or "row-gap" or "column-gap"
                 or "z-index" or "white-space" or "vertical-align")
@@ -2740,7 +2743,8 @@ internal sealed class CssStyleEngine
         "display", "position", "top", "right", "bottom", "left", "inset", "width", "height",
         "min-width", "min-height", "max-width", "max-height", "margin", "padding", "overflow",
         "box-sizing", "flex", "flex-basis", "flex-direction", "flex-flow", "flex-grow", "flex-shrink", "flex-wrap", "grid",
-        "grid-template-columns", "grid-template-rows", "grid-column", "grid-column-start", "grid-column-end",
+        "grid-template-columns", "grid-template-rows", "grid-area", "grid-row", "grid-row-start", "grid-row-end",
+        "grid-column", "grid-column-start", "grid-column-end",
         "align-content", "align-items", "align-self", "justify-content",
         "gap", "order", "row-gap", "column-gap", "z-index", "white-space", "vertical-align"
     ];
@@ -2992,10 +2996,13 @@ internal sealed class CssStyleEngine
         var inlineOrder = int.MaxValue / 2;
         foreach (var pair in element.StyleValues)
         {
-            if (!string.IsNullOrWhiteSpace(pair.Value))
+            if (pair.Key.StartsWith("--", StringComparison.Ordinal)
+                || !string.IsNullOrWhiteSpace(pair.Value))
             {
                 SetWinner(winners, CssStyleDeclaration.NormalizePropertyName(pair.Key), pair.Value!,
-                    important: false, specificity: 1000, sourceOrder: inlineOrder++);
+                    important: element.IsInlineStyleImportant(pair.Key),
+                    specificity: 1000,
+                    sourceOrder: inlineOrder++);
             }
         }
 
@@ -3119,7 +3126,7 @@ internal sealed class CssStyleEngine
 
             if (isCustomProperty)
             {
-                customOverrides ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                customOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
                 customOverrides[pair.Key] = resolvedValue;
                 continue;
             }
@@ -3143,6 +3150,7 @@ internal sealed class CssStyleEngine
         // expanding first leaves stale initial longhands such as
         // border-top-color behind.
         CssComputedValueNormalizer.ExpandShorthands(values);
+        ResolveGridPlacementCascadeProxies(values, invalidDeclarationFallbacks);
         ResolveListStyleCascadeProxies(
             values,
             inherited,
@@ -3202,7 +3210,7 @@ internal sealed class CssStyleEngine
                 continue;
             }
 
-            customOverrides ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            customOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
             customOverrides[pair.Key] = resolvedValue;
         }
         return inheritedCustomProperties.WithOverrides(customOverrides);
@@ -3515,7 +3523,7 @@ internal sealed class CssStyleEngine
         {
             if (pair.Key.StartsWith("--", StringComparison.Ordinal))
             {
-                customOverrides ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                customOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
                 customOverrides[pair.Key] = pair.Value.Value;
                 continue;
             }
@@ -3534,6 +3542,7 @@ internal sealed class CssStyleEngine
         ResolveCustomProperties(values, computedValues, invalidDeclarationFallbacks);
         ResolveRelativeFontSize(values, originatingValues);
         CssComputedValueNormalizer.ExpandShorthands(values);
+        ResolveGridPlacementCascadeProxies(values, invalidDeclarationFallbacks);
         ResolveListStyleCascadeProxies(
             values,
             originatingValues,
@@ -3606,7 +3615,7 @@ internal sealed class CssStyleEngine
                 continue;
             }
 
-            customProperties ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            customProperties ??= new Dictionary<string, string>(StringComparer.Ordinal);
             customProperties[pair.Key] = pair.Value;
         }
 
@@ -3615,7 +3624,9 @@ internal sealed class CssStyleEngine
 
     private CssComputedValues ComputeForDocumentElement(out CssDeclaredPropertySet declaredProperties)
     {
-        var winners = new Dictionary<string, CascadeWinner>(CascadeWinnerCapacity, StringComparer.OrdinalIgnoreCase);
+        var winners = new Dictionary<string, CascadeWinner>(
+            CascadeWinnerCapacity,
+            CssPropertyNameComparer.Instance);
         foreach (var rule in _rules)
         {
             if (!rule.Selector.MatchesDocumentElement(_document))
@@ -3633,7 +3644,8 @@ internal sealed class CssStyleEngine
         var inlineOrder = int.MaxValue / 2;
         foreach (var pair in _document.documentElement.StyleValues)
         {
-            if (!string.IsNullOrWhiteSpace(pair.Value))
+            if (pair.Key.StartsWith("--", StringComparison.Ordinal)
+                || !string.IsNullOrWhiteSpace(pair.Value))
             {
                 SetWinner(
                     winners,
@@ -3657,7 +3669,7 @@ internal sealed class CssStyleEngine
         {
             if (pair.Key.StartsWith("--", StringComparison.Ordinal))
             {
-                customProperties ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                customProperties ??= new Dictionary<string, string>(StringComparer.Ordinal);
                 customProperties[pair.Key] = pair.Value.Value;
                 continue;
             }
@@ -3677,6 +3689,7 @@ internal sealed class CssStyleEngine
         ResolveCustomProperties(values, computedValues);
         ResolveRelativeFontSize(values, inherited: null);
         CssComputedValueNormalizer.ExpandShorthands(values);
+        ResolveGridPlacementCascadeProxies(values);
         ResolveListStyleCascadeProxies(values);
         ResolveBorderRadiusCascadeProxies(values);
         ResolveBorderCascadeProxies(values);
@@ -3742,6 +3755,21 @@ internal sealed class CssStyleEngine
         }
         if (declared.Contains("overflow")) declared.UnionWith(new[] { "overflow-x", "overflow-y" });
         if (declared.Contains("gap")) declared.UnionWith(new[] { "row-gap", "column-gap" });
+        if (declared.Contains("grid-area"))
+        {
+            declared.UnionWith(new[]
+            {
+                "grid-row-start", "grid-column-start", "grid-row-end", "grid-column-end"
+            });
+        }
+        if (declared.Contains("grid-row"))
+        {
+            declared.UnionWith(new[] { "grid-row-start", "grid-row-end" });
+        }
+        if (declared.Contains("grid-column"))
+        {
+            declared.UnionWith(new[] { "grid-column-start", "grid-column-end" });
+        }
         if (declared.Contains("flex-flow")) declared.UnionWith(new[] { "flex-direction", "flex-wrap" });
         if (declared.Contains("flex")) declared.UnionWith(new[] { "flex-grow", "flex-shrink", "flex-basis" });
         if (declared.Contains("background")) declared.Add("background-color");
@@ -3784,6 +3812,7 @@ internal sealed class CssStyleEngine
         values["overflow-x"] = "visible";
         values["overflow-y"] = "visible";
         values["visibility"] = "visible";
+        values["direction"] = "ltr";
         values["pointer-events"] = "auto";
         values["opacity"] = "1";
         values["background-color"] = "transparent";
@@ -3842,6 +3871,10 @@ internal sealed class CssStyleEngine
         values["column-gap"] = "0px";
         values["grid-template-columns"] = "none";
         values["grid-template-rows"] = "none";
+        values["grid-area"] = "auto";
+        values["grid-row"] = "auto";
+        values["grid-row-start"] = "auto";
+        values["grid-row-end"] = "auto";
         values["grid-column"] = "auto";
         values["grid-column-start"] = "auto";
         values["grid-column-end"] = "auto";
@@ -3863,6 +3896,10 @@ internal sealed class CssStyleEngine
             "html" or "legend" or "main" or "menu" or "nav" or "ol" or "p" or "pre" or
             "search" or "section" or "ul" => "block",
             "li" or "summary" => "list-item",
+            "input" when string.Equals(
+                element.getAttribute("type")?.Trim(),
+                "hidden",
+                StringComparison.OrdinalIgnoreCase) => "none",
             "img" or "canvas" or "input" or "textarea" or "button" or "select" => "inline-block",
             "table" => "table",
             "tbody" => "table-row-group",
@@ -3935,7 +3972,7 @@ internal sealed class CssStyleEngine
         {
             return new Dictionary<string, CascadeWinner>(
                 CascadeWinnerCapacity,
-                StringComparer.OrdinalIgnoreCase);
+                CssPropertyNameComparer.Instance);
         }
 
         winners.Clear();
@@ -4028,6 +4065,7 @@ internal sealed class CssStyleEngine
 
     private const string BorderCascadeProxyPrefix = "-htmlml-border-cascade:";
     private const string BorderRadiusCascadeProxyPrefix = "-htmlml-border-radius-cascade:";
+    private const string GridPlacementCascadeProxyPrefix = "-htmlml-grid-placement-cascade:";
     private const string ListStyleCascadeProxyPrefix = "-htmlml-list-style-cascade:";
     private const string OutlineCascadeProxyPrefix = "-htmlml-outline-cascade:";
 
@@ -4040,7 +4078,47 @@ internal sealed class CssStyleEngine
         int sourceOrder)
     {
         name = CssStyleDeclaration.NormalizePropertyName(name);
+        if (name == "all")
+        {
+            var keyword = value.Trim().ToLowerInvariant();
+            if (keyword is not ("initial" or "inherit" or "unset"))
+            {
+                return;
+            }
+
+            // `all` participates in the cascade as if the CSS-wide keyword
+            // were declared for every ordinary property. Expand it before
+            // choosing per-property winners so declarations before/after it,
+            // !important, selector specificity, and the later inline origin
+            // retain their normal precedence. CSS explicitly excludes custom
+            // properties and direction from this shorthand.
+            CssCascade.ApplyWinner(
+                winners, name, keyword, important, specificity, sourceOrder);
+            var targets = CssKnownProperties.Names
+                .Concat(winners.Keys)
+                .Where(static property =>
+                    property is not ("all" or "direction" or "unicode-bidi")
+                    && !property.StartsWith("--", StringComparison.Ordinal))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (var property in targets)
+            {
+                CssCascade.ApplyWinner(
+                    winners, property, keyword, important, specificity, sourceOrder);
+            }
+            return;
+        }
         if (TryApplyGapCascadeDeclaration(
+                winners,
+                name,
+                value,
+                important,
+                specificity,
+                sourceOrder))
+        {
+            return;
+        }
+        if (TryApplyGridPlacementCascadeDeclaration(
                 winners,
                 name,
                 value,
@@ -4104,6 +4182,68 @@ internal sealed class CssStyleEngine
         CssCascade.ApplyWinner(winners, name, value, important, specificity, sourceOrder);
     }
 
+    private static bool TryApplyGridPlacementCascadeDeclaration(
+        IDictionary<string, CascadeWinner> winners,
+        string name,
+        string value,
+        bool important,
+        int specificity,
+        int sourceOrder)
+    {
+        if (name is not ("grid-area" or "grid-row" or "grid-column")) return false;
+
+        var normalized = value.Trim();
+        void Apply(string property, string component)
+            => CssCascade.ApplyWinner(
+                winners,
+                property,
+                component,
+                important,
+                specificity,
+                sourceOrder);
+
+        if (normalized.IndexOf("var(", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            Apply(name, normalized);
+            if (name is "grid-area" or "grid-row")
+            {
+                Apply("grid-row-start", $"{GridPlacementCascadeProxyPrefix}0:{name}:{normalized}");
+                Apply("grid-row-end", $"{GridPlacementCascadeProxyPrefix}2:{name}:{normalized}");
+            }
+            if (name is "grid-area" or "grid-column")
+            {
+                Apply("grid-column-start", $"{GridPlacementCascadeProxyPrefix}1:{name}:{normalized}");
+                Apply("grid-column-end", $"{GridPlacementCascadeProxyPrefix}3:{name}:{normalized}");
+            }
+            return true;
+        }
+
+        if (!CssComputedValueNormalizer.TryExpandGridPlacementShorthand(
+                name,
+                normalized,
+                out var rowStart,
+                out var columnStart,
+                out var rowEnd,
+                out var columnEnd))
+        {
+            // Invalid shorthand declarations do not disturb prior longhands.
+            return true;
+        }
+
+        Apply(name, normalized);
+        if (name is "grid-area" or "grid-row")
+        {
+            Apply("grid-row-start", rowStart);
+            Apply("grid-row-end", rowEnd);
+        }
+        if (name is "grid-area" or "grid-column")
+        {
+            Apply("grid-column-start", columnStart);
+            Apply("grid-column-end", columnEnd);
+        }
+        return true;
+    }
+
     private static bool TryApplyListStyleCascadeDeclaration(
         IDictionary<string, CascadeWinner> winners,
         string name,
@@ -4140,6 +4280,69 @@ internal sealed class CssStyleEngine
             specificity,
             sourceOrder);
         return true;
+    }
+
+    private static void ResolveGridPlacementCascadeProxies(
+        CssPropertyValueStore values,
+        IReadOnlyDictionary<string, string>? invalidDeclarationFallbacks = null)
+    {
+        Resolve("grid-row-start", expectedComponent: 0);
+        Resolve("grid-column-start", expectedComponent: 1);
+        Resolve("grid-row-end", expectedComponent: 2);
+        Resolve("grid-column-end", expectedComponent: 3);
+        return;
+
+        void Resolve(string property, int expectedComponent)
+        {
+            if (!values.TryGetValue(property, out var candidate)
+                || !candidate.StartsWith(GridPlacementCascadeProxyPrefix, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var componentSeparator = candidate.IndexOf(':', GridPlacementCascadeProxyPrefix.Length);
+            var nameSeparator = componentSeparator < 0
+                ? -1
+                : candidate.IndexOf(':', componentSeparator + 1);
+            if (componentSeparator < 0
+                || nameSeparator < 0
+                || !int.TryParse(
+                    candidate.AsSpan(
+                        GridPlacementCascadeProxyPrefix.Length,
+                        componentSeparator - GridPlacementCascadeProxyPrefix.Length),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var encodedComponent)
+                || encodedComponent != expectedComponent)
+            {
+                return;
+            }
+
+            var shorthandName = candidate[(componentSeparator + 1)..nameSeparator];
+            var shorthand = candidate[(nameSeparator + 1)..];
+            if (!CssComputedValueNormalizer.TryExpandGridPlacementShorthand(
+                    shorthandName,
+                    shorthand,
+                    out var rowStart,
+                    out var columnStart,
+                    out var rowEnd,
+                    out var columnEnd))
+            {
+                values[property] = invalidDeclarationFallbacks is not null
+                                   && invalidDeclarationFallbacks.TryGetValue(property, out var fallback)
+                    ? fallback
+                    : "auto";
+                return;
+            }
+
+            values[property] = encodedComponent switch
+            {
+                0 => rowStart,
+                1 => columnStart,
+                2 => rowEnd,
+                _ => columnEnd
+            };
+        }
     }
 
     private static void ResolveListStyleCascadeProxies(
@@ -5412,6 +5615,17 @@ internal sealed class CssComplexSelector
               && MatchPart(CssSelectorSubject.ForElement(element), Parts.Count - 1, document, ignorePseudoElements: false)
             : CssSelectorMatcher.Matches(_portableSyntax, element);
 
+    public bool Matches(
+        AvaloniaDomElement element,
+        AvaloniaDomDocument document,
+        AvaloniaDomElement scopeElement)
+        => s_disablePortableMatcher
+            ? Matches(element, document)
+            : CssSelectorMatcher.Matches(
+                _portableSyntax,
+                element,
+                new CssSelectorMatchOptions(ScopeNode: scopeElement));
+
     public bool CouldMatchIgnoringChildList(AvaloniaDomElement element, AvaloniaDomDocument document)
         => s_disablePortableMatcher
             ? PseudoElementName is null
@@ -5893,34 +6107,7 @@ internal readonly struct CssSelectorSubject
 internal static class CssSelectorParser
 {
     public static IEnumerable<string> SplitSelectorList(string selectorText)
-    {
-        var start = 0;
-        var square = 0;
-        var round = 0;
-        char quote = '\0';
-        for (var i = 0; i < selectorText.Length; i++)
-        {
-            var ch = selectorText[i];
-            if (quote != '\0')
-            {
-                if (ch == quote && (i == 0 || selectorText[i - 1] != '\\')) quote = '\0';
-                continue;
-            }
-            if (ch is '\'' or '"') quote = ch;
-            else if (ch == '[') square++;
-            else if (ch == ']') square--;
-            else if (ch == '(') round++;
-            else if (ch == ')') round--;
-            else if (ch == ',' && square == 0 && round == 0)
-            {
-                var part = selectorText[start..i].Trim();
-                if (part.Length > 0) yield return part;
-                start = i + 1;
-            }
-        }
-        var last = selectorText[start..].Trim();
-        if (last.Length > 0) yield return last;
-    }
+        => CssSelectorSyntaxParser.SplitSelectorList(selectorText);
 
     public static bool TryParse(string text, out CssComplexSelector selector)
     {

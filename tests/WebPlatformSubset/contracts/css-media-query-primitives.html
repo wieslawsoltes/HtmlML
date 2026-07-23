@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed component media queries select the expected rules</title>
+<style>
+  #probe { --base: pass; }
+  @media all { #probe { --media-all: pass; } }
+  @media (min-width: 1px) { #probe { --min-width: pass; } }
+  @media (max-width: 10000px) { #probe { --max-width: pass; } }
+  @media (min-height: 1px) { #probe { --min-height: pass; } }
+  @media (max-height: 10000px) { #probe { --max-height: pass; } }
+  @media (orientation: landscape) { #probe { --orientation: pass; } }
+  @media (hover: hover) { #probe { --hover: pass; } }
+  @media (any-hover: hover) { #probe { --any-hover: pass; } }
+  @media (pointer: fine) { #probe { --pointer: pass; } }
+  @media (any-pointer: fine) { #probe { --any-pointer: pass; } }
+  @media (prefers-reduced-motion: no-preference) {
+    #probe { --reduced-motion: pass; }
+  }
+</style>
+<body>
+<div id="probe"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function test(name, callback) {
+    try {
+      callback();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assertSelected(style, property) {
+    const actual = style.getPropertyValue(property).trim();
+    if (actual !== "pass") {
+      throw new Error(property + " did not select its rule; got " + JSON.stringify(actual));
+    }
+  }
+
+  const style = getComputedStyle(document.getElementById("probe"));
+  test("media type and viewport bounds", () => {
+    for (const property of [
+      "--media-all", "--min-width", "--max-width", "--min-height", "--max-height"
+    ]) assertSelected(style, property);
+  });
+  test("orientation query", () => assertSelected(style, "--orientation"));
+  test("hover and pointer capability queries", () => {
+    for (const property of ["--hover", "--any-hover", "--pointer", "--any-pointer"])
+      assertSelected(style, property);
+  });
+  test("reduced motion preference query", () => assertSelected(style, "--reduced-motion"));
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>
+</body>

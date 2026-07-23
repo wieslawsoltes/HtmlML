@@ -1,0 +1,109 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS Grid placement shorthand and longhand CSSOM semantics</title>
+<style>
+  #grid { display: grid; grid-template-columns: 40px 40px 40px; grid-template-rows: 20px 20px 20px; }
+  #stylesheet-item { grid-area: 2 / 3 / 4 / 5; }
+</style>
+<div id="grid">
+  <div id="inline-item"></div>
+  <div id="stylesheet-item"></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function equal(actual, expected, message) {
+    assert(actual === expected, `${message}: expected ${expected}, got ${actual}`);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const item = document.getElementById("inline-item");
+
+  test("a one-line grid-area expands to four computed placement longhands", () => {
+    item.style.gridArea = "2";
+    const style = getComputedStyle(item);
+    equal(style.gridRowStart, "2", "grid-row-start");
+    equal(style.gridRowEnd, "auto", "grid-row-end");
+    equal(style.gridColumnStart, "auto", "grid-column-start");
+    equal(style.gridColumnEnd, "auto", "grid-column-end");
+  });
+
+  test("a four-line stylesheet grid-area preserves placement order", () => {
+    const style = getComputedStyle(document.getElementById("stylesheet-item"));
+    equal(style.gridRowStart, "2", "stylesheet grid-row-start");
+    equal(style.gridColumnStart, "3", "stylesheet grid-column-start");
+    equal(style.gridRowEnd, "4", "stylesheet grid-row-end");
+    equal(style.gridColumnEnd, "5", "stylesheet grid-column-end");
+  });
+
+  test("grid-row and grid-column expand their omitted ends to auto", () => {
+    item.style.cssText = "grid-row: 3; grid-column: 2";
+    const style = getComputedStyle(item);
+    equal(style.gridRowStart, "3", "grid-row-start");
+    equal(style.gridRowEnd, "auto", "grid-row-end");
+    equal(style.gridColumnStart, "2", "grid-column-start");
+    equal(style.gridColumnEnd, "auto", "grid-column-end");
+  });
+
+  test("grid placement longhands retain unitless integer values", () => {
+    item.style.cssText = "";
+    item.style.gridRowStart = 2;
+    item.style.gridRowEnd = 3;
+    item.style.gridColumnStart = 4;
+    item.style.gridColumnEnd = 5;
+    const style = getComputedStyle(item);
+    equal(style.gridRowStart, "2", "unitless grid-row-start");
+    equal(style.gridRowEnd, "3", "unitless grid-row-end");
+    equal(style.gridColumnStart, "4", "unitless grid-column-start");
+    equal(style.gridColumnEnd, "5", "unitless grid-column-end");
+  });
+
+  test("an explicit placement longhand overrides its shorthand component", () => {
+    item.style.cssText = "grid-area: 2 / 3 / 4 / 5; grid-row-start: 6";
+    const style = getComputedStyle(item);
+    equal(style.gridRowStart, "6", "overridden grid-row-start");
+    equal(style.gridColumnStart, "3", "retained grid-column-start");
+    equal(style.gridRowEnd, "4", "retained grid-row-end");
+    equal(style.gridColumnEnd, "5", "retained grid-column-end");
+  });
+
+  test("removing a grid placement shorthand restores auto longhands", () => {
+    item.style.cssText = "";
+    item.style.gridArea = "2 / 3 / 4 / 5";
+    item.style.gridArea = "";
+    const style = getComputedStyle(item);
+    equal(style.gridRowStart, "auto", "cleared grid-row-start");
+    equal(style.gridColumnStart, "auto", "cleared grid-column-start");
+    equal(style.gridRowEnd, "auto", "cleared grid-row-end");
+    equal(style.gridColumnEnd, "auto", "cleared grid-column-end");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

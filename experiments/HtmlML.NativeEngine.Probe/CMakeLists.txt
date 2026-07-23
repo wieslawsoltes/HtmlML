@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(HtmlMLNativeEngineProbe LANGUAGES CXX)
 
+include(CTest)
+
 add_library(htmlml_native_engine SHARED
     native/htmlml_native_engine.cpp
     native/htmlml_native_dom.cpp)
@@ -64,6 +66,14 @@ if(HTMLML_NATIVE_ENGINE_ENABLE_V8)
         target_link_libraries(htmlml_native_engine PRIVATE dl rt)
     endif()
     message(STATUS "HtmlML native engine: V8 enabled (${HTMLML_V8_MONOLITH})")
+
+    if(BUILD_TESTING)
+        add_executable(htmlml_native_engine_tests
+            tests/native_v8_runtime_tests.cpp)
+        target_compile_features(htmlml_native_engine_tests PRIVATE cxx_std_20)
+        target_link_libraries(htmlml_native_engine_tests PRIVATE htmlml_native_engine)
+        add_test(NAME htmlml_native_engine_tests COMMAND htmlml_native_engine_tests)
+    endif()
 else()
     message(STATUS "HtmlML native engine: V8 intentionally disabled")
 endif()

@@ -794,9 +794,13 @@ public sealed class ClearScriptV8Runtime :
                 _enableTypedInlineStyleWrites,
                 _enableCanvasStateDeduplication);
             var createFrameRuntime = (ScriptObject)frameEngine.Script.__htmlMlCreateFrameRuntime;
+            var ownerFrameElement = ((ScriptObject)_engine.Script.__htmlMlWrapHostObject)
+                .InvokeAsFunction(frameElement);
+            ((ScriptObject)_engine.Script.__htmlMlMarkExternalRealmView)
+                .InvokeAsFunction(ownerFrameElement);
             var state = (ScriptObject)createFrameRuntime.InvokeAsFunction(
                 frameDocument.JavaScriptObject,
-                frameElement,
+                ownerFrameElement,
                 frameDocument.Location,
                 _engine.Script);
             var context = new V8FrameBrowsingContext(
@@ -1244,6 +1248,16 @@ public sealed class ClearScriptV8Runtime :
             new Func<object?, int>(style =>
                 style is IHtmlMlComputedStyleTarget computed ? computed.Length : 0));
         engine.AddHostObject(
+            "__htmlMlSupportsComputedStyleProperty",
+            new Func<object?, string, bool>((style, propertyName) =>
+                style is IHtmlMlComputedStylePropertySupportTarget supported
+                && supported.SupportsPropertyName(propertyName)));
+        engine.AddHostObject(
+            "__htmlMlIsComputedStylePropertyLive",
+            new Func<object?, string, bool>((style, propertyName) =>
+                style is IHtmlMlLiveComputedStyleTarget live
+                && live.IsPropertyLive(propertyName)));
+        engine.AddHostObject(
             "__htmlMlGetComputedStyleItem",
             new Func<object?, int, string>((style, index) =>
                 style is IHtmlMlComputedStyleTarget computed
@@ -1442,21 +1456,27 @@ public sealed class ClearScriptV8Runtime :
         string scopeName)
     {
         var eventApply = (ScriptObject)engine.Evaluate(
-            "(function(callback, currentTarget, event) { currentTarget = __htmlMlWrapHostObject(currentTarget); event = __htmlMlWrapHostObject(event); try { return callback.call(currentTarget, event); } finally { if (typeof __htmlMlFlushCanvases === 'function') __htmlMlFlushCanvases(); } })");
+            "(function(callback, currentTarget, hostEvent, sourceEvent) { currentTarget = __htmlMlWrapHostObject(currentTarget); hostEvent = __htmlMlWrapHostObject(hostEvent); sourceEvent = sourceEvent == null && typeof __htmlMlWrapHostEvent === 'function' ? __htmlMlWrapHostEvent(hostEvent) : sourceEvent == null ? hostEvent : sourceEvent; const prepare = function() { if (sourceEvent === hostEvent) return; try { sourceEvent.target = __htmlMlWrapHostObject(hostEvent.target); sourceEvent.currentTarget = __htmlMlWrapHostObject(hostEvent.currentTarget); sourceEvent.eventPhase = Number(hostEvent.eventPhase) || 0; } catch (_) {} }; const sync = function() { if (sourceEvent === hostEvent) return; try { if (sourceEvent.defaultPrevented) hostEvent.preventDefault(); if (sourceEvent.__immediateStopped) hostEvent.stopImmediatePropagation(); else if (sourceEvent.cancelBubble) hostEvent.stopPropagation(); } catch (_) {} }; prepare(); try { return callback.call(currentTarget, sourceEvent); } finally { sync(); if (typeof __htmlMlFlushCanvases === 'function') __htmlMlFlushCanvases(); } })");
         var eventBatchApply = (ScriptObject)engine.Evaluate(
-            "(function(callbacks, currentTarget, event, control) { currentTarget = __htmlMlWrapHostObject(currentTarget); event = __htmlMlWrapHostObject(event); try { callbacks = Array.from(callbacks); for (let index = 0; index < callbacks.length; index++) { control.BeforeInvoke(index); try { callbacks[index].call(currentTarget, event); } catch (error) { control.ReportError(index, String(error && error.stack || error)); } finally { control.AfterInvoke(index); } if (control.ShouldStop) break; } } finally { if (typeof __htmlMlFlushCanvases === 'function') __htmlMlFlushCanvases(); } })");
+            "(function(callbacks, currentTarget, hostEvent, sourceEvent, control) { currentTarget = __htmlMlWrapHostObject(currentTarget); hostEvent = __htmlMlWrapHostObject(hostEvent); sourceEvent = sourceEvent == null && typeof __htmlMlWrapHostEvent === 'function' ? __htmlMlWrapHostEvent(hostEvent) : sourceEvent == null ? hostEvent : sourceEvent; const prepare = function() { if (sourceEvent === hostEvent) return; try { sourceEvent.target = __htmlMlWrapHostObject(hostEvent.target); sourceEvent.currentTarget = __htmlMlWrapHostObject(hostEvent.currentTarget); sourceEvent.eventPhase = Number(hostEvent.eventPhase) || 0; } catch (_) {} }; const sync = function() { if (sourceEvent === hostEvent) return; try { if (sourceEvent.defaultPrevented) hostEvent.preventDefault(); if (sourceEvent.__immediateStopped) hostEvent.stopImmediatePropagation(); else if (sourceEvent.cancelBubble) hostEvent.stopPropagation(); } catch (_) {} }; try { callbacks = Array.from(callbacks); for (let index = 0; index < callbacks.length; index++) { control.BeforeInvoke(index); prepare(); try { callbacks[index].call(currentTarget, sourceEvent); } catch (error) { control.ReportError(index, String(error && error.stack || error)); } finally { sync(); control.AfterInvoke(index); } if (control.ShouldStop) break; } } finally { if (typeof __htmlMlFlushCanvases === 'function') __htmlMlFlushCanvases(); } })");
+        var eventComplete = (ScriptObject)engine.Evaluate(
+            "(function(sourceEvent) { sourceEvent.currentTarget = null; sourceEvent.eventPhase = 0; })");
         var apply = (ScriptObject)engine.Evaluate(
             "(function(callback, currentTarget, args) { try { return callback.apply(currentTarget, Array.from(args)); } finally { if (typeof __htmlMlFlushCanvases === 'function') __htmlMlFlushCanvases(); } })");
-        return new V8ExternalEventListenerAdapter(eventApply, eventBatchApply, apply, scopeName);
+        return new V8ExternalEventListenerAdapter(
+            eventApply, eventBatchApply, eventComplete, apply, scopeName);
     }
 
-    private sealed class V8FrameBrowsingContext : IExternalVirtualBrowsingContext
+    private sealed class V8FrameBrowsingContext :
+        IExternalVirtualBrowsingContext,
+        IExternalVirtualBrowsingContextDocumentView
     {
         private IHtmlMlJavaScriptHost? _host;
         private IHtmlMlJavaScriptDocument? _document;
         private object? _frameElement;
         private V8ExternalEventListenerAdapter? _callbackAdapter;
         private object? _window;
+        private object? _documentView;
         private V8ScriptEngine? _engine;
         private ScriptObject? _state;
         private ScriptObject? _dispatch;
@@ -1487,6 +1507,8 @@ public sealed class ClearScriptV8Runtime :
             _onDisposed = onDisposed;
             _window = state.GetProperty("window")
                       ?? throw new InvalidOperationException("V8 frame window was not created.");
+            _documentView = ((ScriptObject)_window).GetProperty("document")
+                            ?? throw new InvalidOperationException("V8 frame document was not created.");
             _dispatch = (ScriptObject)state.GetProperty("dispatch");
             _refreshNamedProperties = (ScriptObject)state.GetProperty("refreshNamedProperties");
             _describe = (ScriptObject)state.GetProperty("describe");
@@ -1496,6 +1518,9 @@ public sealed class ClearScriptV8Runtime :
         }
 
         public object Window => _window
+            ?? throw new ObjectDisposedException(nameof(V8FrameBrowsingContext));
+
+        public object Document => _documentView
             ?? throw new ObjectDisposedException(nameof(V8FrameBrowsingContext));
 
         public void Execute(string code, string? documentName = null)
@@ -1589,6 +1614,7 @@ public sealed class ClearScriptV8Runtime :
             var engine = _engine;
             _engine = null;
             _window = null;
+            _documentView = null;
             _document = null;
             _frameElement = null;
             _host = null;
@@ -1774,6 +1800,7 @@ public sealed class ClearScriptV8Runtime :
           })();
           const hostToProxy = new WeakMap();
           const proxyToHost = new WeakMap();
+          const externalRealmViewMarker = Symbol.for('HtmlML.externalRealmView');
           const domIdentityToProxy = new Map();
           let nextDomIdentityToken = 1;
           const domIdentityFinalizer = typeof FinalizationRegistry === 'function'
@@ -1788,10 +1815,12 @@ public sealed class ClearScriptV8Runtime :
             'style', 'classList', 'dataset', 'ownerDocument', 'defaultView'
           ]);
           const booleanDomProperties = new Set([
-            'checked', 'selected', 'disabled'
+            'checked', 'selected', 'disabled', 'readOnly'
           ]);
           const domStringMapToProxy = new WeakMap();
           const domTokenListToProxy = new WeakMap();
+          const domImplementationToProxy = new WeakMap();
+          const documentCollectionToProxy = new WeakMap();
           const domTokenListWriteShadowMetrics = {
             hostWrites: 0,
             skippedWrites: 0,
@@ -2016,6 +2045,10 @@ public sealed class ClearScriptV8Runtime :
               });
             }
             function invalidateWriteShadow() { writtenValues.clear(); }
+            function supportsStyleProperty(name) {
+              try { return Boolean(backend.supportsPropertyName(String(name))); }
+              catch (_) { return false; }
+            }
             function setStyleProperty(name, value) {
               const cacheKey = normalizeStylePropertyName(name);
               if (__htmlMlEnableStyleWriteShadow &&
@@ -2079,6 +2112,7 @@ public sealed class ClearScriptV8Runtime :
                 if (typeof property !== 'string' || Reflect.has(target, property)) {
                   return Reflect.get(target, property, receiver);
                 }
+                if (!supportsStyleProperty(property)) return undefined;
                 const value = backend.getPropertyValue(property);
                 if (__htmlMlEnableStyleWriteShadow) {
                   writtenValues.set(
@@ -2096,8 +2130,15 @@ public sealed class ClearScriptV8Runtime :
                 if (typeof property !== 'string' || Reflect.has(target, property)) {
                   return Reflect.set(target, property, value, receiver);
                 }
+                if (!supportsStyleProperty(property)) {
+                  return Reflect.set(target, property, value, receiver);
+                }
                 setStyleProperty(property, value == null ? '' : String(value));
                 return true;
+              },
+              has: function(target, property) {
+                return Reflect.has(target, property)
+                  || (typeof property === 'string' && supportsStyleProperty(property));
               }
             });
             cssStyleDeclarationToProxy.set(backend, declaration);
@@ -2120,20 +2161,26 @@ public sealed class ClearScriptV8Runtime :
             const propertyValues = new Map();
             const getPropertyValue = function(propertyName) {
               propertyName = String(propertyName);
-              if (__htmlMlEnableComputedStyleReadCaching && propertyValues.has(propertyName)) {
+              const isLive = Boolean(__htmlMlIsComputedStylePropertyLive(raw, propertyName));
+              if (__htmlMlEnableComputedStyleReadCaching && !isLive && propertyValues.has(propertyName)) {
                 computedStyleReadCacheMetrics.valueHits++;
                 return propertyValues.get(propertyName);
               }
               computedStyleReadCacheMetrics.valueMisses++;
               const value = String(__htmlMlGetComputedStyleValue(raw, propertyName) || '');
-              if (__htmlMlEnableComputedStyleReadCaching) propertyValues.set(propertyName, value);
+              if (__htmlMlEnableComputedStyleReadCaching && !isLive) propertyValues.set(propertyName, value);
               return value;
             };
             const item = function(index) {
               return String(__htmlMlGetComputedStyleItem(raw, Number(index) || 0) || '');
             };
+            const supportsNamedProperty = function(propertyName) {
+              return typeof propertyName === 'string' &&
+                !propertyName.startsWith('--') &&
+                Boolean(__htmlMlSupportsComputedStyleProperty(raw, propertyName));
+            };
             const proxy = new Proxy({}, {
-              get: function(_, property) {
+              get: function(target, property, receiver) {
                 if (property === 'getPropertyValue') return getPropertyValue;
                 if (property === 'getPropertyPriority') return function() { return ''; };
                 if (property === 'item') return item;
@@ -2145,7 +2192,18 @@ public sealed class ClearScriptV8Runtime :
                     for (let index = 0; index < length; index++) yield item(index);
                   };
                 }
-                return typeof property === 'string' ? getPropertyValue(property) : undefined;
+                if (typeof property !== 'string' || Reflect.has(target, property)) {
+                  return Reflect.get(target, property, receiver);
+                }
+                // getPropertyValue() returns an empty string for unsupported
+                // names, but CSSStyleDeclaration named access only exposes
+                // supported IDL aliases. Custom properties remain method-only.
+                return supportsNamedProperty(property)
+                  ? getPropertyValue(property)
+                  : undefined;
+              },
+              has: function(target, property) {
+                return Reflect.has(target, property) || supportsNamedProperty(property);
               }
             });
             if (__htmlMlEnableComputedStyleReadCaching) computedStyleToProxy.set(raw, proxy);
@@ -2354,9 +2412,145 @@ public sealed class ClearScriptV8Runtime :
             return result;
           };
 
+          function wrapDomImplementation(backend) {
+            if (backend == null || typeof backend !== 'object') return backend;
+            if (domImplementationToProxy.has(backend)) return domImplementationToProxy.get(backend);
+            const implementation = {
+              createHTMLDocument: function(title) {
+                return wrapResult(backend.createHTMLDocument(
+                  title === undefined ? '' : String(title)));
+              },
+              createDocument: function(namespaceUri, qualifiedName, doctype) {
+                return wrapResult(backend.createDocument(
+                  namespaceUri == null ? null : String(namespaceUri),
+                  qualifiedName == null ? '' : String(qualifiedName),
+                  unwrapHost(doctype)));
+              }
+            };
+            try {
+              Object.defineProperty(implementation, Symbol.toStringTag, {
+                value: 'DOMImplementation', configurable: true
+              });
+            } catch (_) {}
+            domImplementationToProxy.set(backend, implementation);
+            return implementation;
+          }
+
+          function hostSequenceLength(sequence) {
+            if (sequence == null) return 0;
+            try {
+              if (typeof sequence.length === 'number') return Math.max(0, Math.trunc(sequence.length));
+            } catch (_) {}
+            try {
+              if (typeof sequence.Length === 'number') return Math.max(0, Math.trunc(sequence.Length));
+            } catch (_) {}
+            try {
+              if (typeof sequence.Count === 'number') return Math.max(0, Math.trunc(sequence.Count));
+            } catch (_) {}
+            return 0;
+          }
+
+          function hostSequenceItem(sequence, index) {
+            index = Math.trunc(Number(index));
+            if (!(index >= 0) || index >= hostSequenceLength(sequence)) return null;
+            try {
+              const value = sequence[index];
+              if (value !== undefined) return value;
+            } catch (_) {}
+            try {
+              if (typeof sequence.GetValue === 'function') return sequence.GetValue(index);
+            } catch (_) {}
+            try {
+              if (typeof sequence.item === 'function') return sequence.item(index);
+            } catch (_) {}
+            return null;
+          }
+
+          function wrapDocumentCollection(rawDocument, property) {
+            let collections = documentCollectionToProxy.get(rawDocument);
+            if (!collections) {
+              collections = new Map();
+              documentCollectionToProxy.set(rawDocument, collections);
+            }
+            if (collections.has(property)) return collections.get(property);
+
+            const read = function() {
+              try { return rawDocument[property]; } catch (_) { return null; }
+            };
+            const item = function(index) {
+              return wrapResult(hostSequenceItem(read(), index));
+            };
+            const namedItem = function(name) {
+              name = String(name);
+              const sequence = read();
+              const length = hostSequenceLength(sequence);
+              for (let index = 0; index < length; index++) {
+                const rawItem = hostSequenceItem(sequence, index);
+                if (rawItem == null) continue;
+                let id = '', itemName = '';
+                try { id = String(rawItem.id || rawItem.getAttribute('id') || ''); } catch (_) {}
+                try { itemName = String(rawItem.getAttribute('name') || rawItem.name || ''); } catch (_) {}
+                if (id === name || itemName === name) return wrapResult(rawItem);
+              }
+              return null;
+            };
+            const collection = new Proxy({}, {
+              get: function(target, key, receiver) {
+                if (key === 'length') return hostSequenceLength(read());
+                if (key === 'item') return item;
+                if (key === 'namedItem') return namedItem;
+                if (key === Symbol.iterator) {
+                  return function*() {
+                    const length = hostSequenceLength(read());
+                    for (let index = 0; index < length; index++) yield item(index);
+                  };
+                }
+                if (key === Symbol.toStringTag) return 'HTMLCollection';
+                if (typeof key === 'string' && /^(?:0|[1-9]\d*)$/.test(key)) {
+                  return item(Number(key));
+                }
+                return Reflect.get(target, key, receiver);
+              },
+              has: function(target, key) {
+                if (key === 'length' || key === 'item' || key === 'namedItem') return true;
+                if (typeof key === 'string' && /^(?:0|[1-9]\d*)$/.test(key)) {
+                  return Number(key) < hostSequenceLength(read());
+                }
+                return Reflect.has(target, key);
+              },
+              ownKeys: function(target) {
+                const keys = [];
+                const length = hostSequenceLength(read());
+                for (let index = 0; index < length; index++) keys.push(String(index));
+                return keys.concat(Reflect.ownKeys(target));
+              },
+              getOwnPropertyDescriptor: function(target, key) {
+                if (typeof key === 'string' && /^(?:0|[1-9]\d*)$/.test(key)
+                    && Number(key) < hostSequenceLength(read())) {
+                  return {
+                    value: item(Number(key)),
+                    writable: false,
+                    enumerable: true,
+                    configurable: true
+                  };
+                }
+                return Reflect.getOwnPropertyDescriptor(target, key);
+              }
+            });
+            collections.set(property, collection);
+            return collection;
+          }
+
           function wrapResult(value) {
             if (value == null || (typeof value !== 'object' && typeof value !== 'function')) return value;
             if (proxyToHost.has(value)) return value;
+            try {
+              // Trusted same-origin iframe objects are already browser-shaped
+              // proxies in their owning realm. Rewrapping a frame Document in
+              // the owner realm would break contentWindow.document ===
+              // contentDocument and route methods through the wrong facade.
+              if (value[externalRealmViewMarker] === true) return value;
+            } catch (_) {}
             if (__htmlMlEnableResultClassificationCache) {
               if (hostToProxy.has(value)) return hostToProxy.get(value);
               if (nonDomHostResults.has(value)) return value;
@@ -2774,7 +2968,11 @@ public sealed class ClearScriptV8Runtime :
 
           function wrapHost(target) {
             if (target == null || typeof target !== 'object') return target;
+            if (target === globalThis) return target;
             if (proxyToHost.has(target)) return target;
+            try {
+              if (target[externalRealmViewMarker] === true) return target;
+            } catch (_) {}
             if (hostToProxy.has(target)) return hostToProxy.get(target);
             // A new host object used to cross the native identity property twice:
             // once to find an existing DOM proxy and again while remembering the
@@ -2807,6 +3005,17 @@ public sealed class ClearScriptV8Runtime :
                 recordDomPropertyAccess(property, 'accesses');
                 if (property === '__htmlMlRawHostObject') return raw;
                 if (property === 'constructor') return constructorForHost(raw);
+                if (property === 'elements') {
+                  try {
+                    if (String(raw.nodeName || '').toUpperCase() !== 'FORM') return undefined;
+                  } catch (_) { return undefined; }
+                }
+                if (property === 'contentDocument') {
+                  try {
+                    const externalDocument = raw.__htmlMlExternalContentDocument;
+                    if (externalDocument != null) return wrapResult(externalDocument);
+                  } catch (_) {}
+                }
                 if (Reflect.has(local, property)) {
                   recordDomPropertyAccess(property, 'expandoHits');
                   return Reflect.get(local, property, receiver);
@@ -2824,6 +3033,15 @@ public sealed class ClearScriptV8Runtime :
                 if (__htmlMlEnableMissingDomPropertyCache && missingProperties.has(property)) {
                   recordDomPropertyAccess(property, 'missingHits');
                   return undefined;
+                }
+                let rawNodeType;
+                try { rawNodeType = Number(raw.nodeType); } catch (_) { rawNodeType = 0; }
+                if (rawNodeType === 9 && property === 'implementation') {
+                  try { return wrapDomImplementation(raw.implementation); } catch (_) { return undefined; }
+                }
+                if (rawNodeType === 9 &&
+                    (property === 'forms' || property === 'images' || property === 'links')) {
+                  return wrapDocumentCollection(raw, property);
                 }
                 let numericProperty = -1;
                 switch (property) {
@@ -2866,6 +3084,14 @@ public sealed class ClearScriptV8Runtime :
                   recordDomPropertyDuration(property, 'rawReadDurationMs', performance.now() - rawReadStarted);
                 }
                 if (typeof value === 'undefined') {
+                  if (typeof property === 'string') {
+                    try {
+                      if (Number(raw.nodeType) === 9 && typeof raw.resolveNamedProperty === 'function') {
+                        const named = raw.resolveNamedProperty(property);
+                        if (named != null) return wrapResult(named);
+                      }
+                    } catch (_) {}
+                  }
                   const prototype = constructorForHost(raw).prototype;
                   if (prototype && property in prototype) {
                     return Reflect.get(prototype, property, receiver);
@@ -2890,6 +3116,15 @@ public sealed class ClearScriptV8Runtime :
                   if (__htmlMlEnableStableDomPropertyCache) stableValues.set(property, wrappedStyle);
                   return wrappedStyle;
                 }
+                if (property === 'value') {
+                  try {
+                    const localName = String(raw.localName || raw.nodeName || '').toLowerCase();
+                    if (localName === 'progress' || localName === 'meter') {
+                      const numeric = Number(value);
+                      return Number.isFinite(numeric) ? numeric : 0;
+                    }
+                  } catch (_) {}
+                }
                 if (property === 'addedNodes' || property === 'removedNodes') {
                   try { return Array.from(value || [], wrapResult); } catch (_) { return []; }
                 }
@@ -2904,13 +3139,19 @@ public sealed class ClearScriptV8Runtime :
                     if (__htmlMlEnableTypedDomRect && property === 'getBoundingClientRect') {
                         const values = new Float64Array(8);
                         return function() {
-                          const handle = getTypedManagedAbiHandle();
-                          if (!(handle > 0 &&
-                                typeof __htmlMlNativeWriteDomRect === 'function' &&
-                                __htmlMlNativeWriteDomRect(handle, 0, values))) {
-                            __htmlMlWriteBoundingClientRect(raw, values);
+                          try {
+                            const handle = getTypedManagedAbiHandle();
+                            if (!(handle > 0 &&
+                                  typeof __htmlMlNativeWriteDomRect === 'function' &&
+                                  __htmlMlNativeWriteDomRect(handle, 0, values))) {
+                              __htmlMlWriteBoundingClientRect(raw, values);
+                            }
+                            return new DOMRectResult(values);
+                          } catch (_) {
+                            // Browser-shaped virtual roots do not own a managed
+                            // control handle. Use their explicit DOMRect method.
+                            return wrapResult(value());
                           }
-                          return new DOMRectResult(values);
                         };
                     }
                     if (__htmlMlEnableTypedDomRect &&
@@ -2918,13 +3159,17 @@ public sealed class ClearScriptV8Runtime :
                         property === 'getClientRects') {
                         const values = new Float64Array(8);
                         return function() {
-                          const handle = getTypedManagedAbiHandle();
-                          const hasRect = handle > 0 && typeof __htmlMlNativeWriteDomRect === 'function'
-                            ? __htmlMlNativeWriteDomRect(handle, 1, values)
-                            : __htmlMlWriteClientRect(raw, values);
-                          return hasRect
-                            ? [new DOMRectResult(values)]
-                            : [];
+                          try {
+                            const handle = getTypedManagedAbiHandle();
+                            const hasRect = handle > 0 && typeof __htmlMlNativeWriteDomRect === 'function'
+                              ? __htmlMlNativeWriteDomRect(handle, 1, values)
+                              : __htmlMlWriteClientRect(raw, values);
+                            return hasRect
+                              ? [new DOMRectResult(values)]
+                              : [];
+                          } catch (_) {
+                            return Array.from(value() || [], wrapResult);
+                          }
                       };
                     }
                     if (__htmlMlEnableCanvasBatching && property === 'getContext') {
@@ -2944,6 +3189,27 @@ public sealed class ClearScriptV8Runtime :
                     }
                     return function() {
                       const args = Array.from(arguments, unwrapHost);
+                      if ((property === 'querySelector' || property === 'querySelectorAll' ||
+                           property === 'matches' || property === 'closest' ||
+                           property === 'webkitMatchesSelector' || property === 'msMatchesSelector') &&
+                          args.length > 0) {
+                        const selector = String(args[0]);
+                        args[0] = selector;
+                        const validator = raw.__htmlMlIsValidSelector;
+                        if (typeof validator === 'function' && !validator(selector)) {
+                          throw new DOMException(
+                            `Failed to execute '${String(property)}': '${selector}' is not a valid selector.`,
+                            'SyntaxError');
+                        }
+                      }
+                      if (property === 'setAttribute' && args.length > 1) {
+                        args[0] = String(args[0]);
+                        args[1] = String(args[1]);
+                      } else if (property === 'setAttributeNS' && args.length > 2) {
+                        args[0] = args[0] == null ? null : String(args[0]);
+                        args[1] = String(args[1]);
+                        args[2] = String(args[2]);
+                      }
                       let result;
                       if (domPropertyAccessMetrics === null) {
                         result = value(...args);
@@ -2957,6 +3223,12 @@ public sealed class ClearScriptV8Runtime :
                             'invokeDurationMs',
                             performance.now() - invocationStarted);
                         }
+                      }
+                      if (
+                          property === 'append' || property === 'prepend' ||
+                          property === 'before' || property === 'after' ||
+                          property === 'replaceChildren' || property === 'remove') {
+                        result = undefined;
                       }
                       const wrappedResult = __htmlMlEnableCanvasBatching && property === 'getContext' && String(args[0] || '').toLowerCase() === '2d'
                         ? wrapCanvasContext(result)
@@ -3031,6 +3303,19 @@ public sealed class ClearScriptV8Runtime :
                   return Reflect.set(local, property, value, receiver);
                 }
                 try {
+                  let prototype = constructorForHost(raw).prototype;
+                  while (prototype) {
+                    const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
+                    if (descriptor) {
+                      if (typeof descriptor.set === 'function') {
+                        descriptor.set.call(receiver, value);
+                        missingProperties.delete(property);
+                        return true;
+                      }
+                      break;
+                    }
+                    prototype = Object.getPrototypeOf(prototype);
+                  }
                   if (!(property in raw)) {
                     missingProperties.delete(property);
                     return Reflect.set(local, property, value, receiver);
@@ -3072,6 +3357,9 @@ public sealed class ClearScriptV8Runtime :
               has: function(local, property) {
                 if (Reflect.has(local, property)) return true;
                 try {
+                  if (property === 'elements' && String(raw.nodeName || '').toUpperCase() !== 'FORM') {
+                    return false;
+                  }
                   if (property in raw) return true;
                   const prototype = constructorForHost(raw).prototype;
                   return prototype ? property in prototype : false;
@@ -3115,13 +3403,102 @@ public sealed class ClearScriptV8Runtime :
             this.timeStamp = performance.now();
           }
           Event.prototype.preventDefault = function() {
+            if (this.__htmlMlHostEvent) {
+              this.__htmlMlHostEvent.preventDefault();
+              return;
+            }
             if (this.cancelable) this.defaultPrevented = true;
           };
-          Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
+          Event.prototype.stopPropagation = function() {
+            if (this.__htmlMlHostEvent) this.__htmlMlHostEvent.stopPropagation();
+            this.cancelBubble = true;
+          };
           Event.prototype.stopImmediatePropagation = function() {
+            if (this.__htmlMlHostEvent) this.__htmlMlHostEvent.stopImmediatePropagation();
             this.cancelBubble = true;
             this.__immediateStopped = true;
           };
+          Event.prototype.composedPath = function() {
+            if (!this.__htmlMlHostEvent || typeof this.__htmlMlHostEvent.composedPath !== 'function') return [];
+            return Array.from(this.__htmlMlHostEvent.composedPath(), wrapHost);
+          };
+          const hostEventFacades = new WeakMap();
+          function wrapHostEvent(hostEvent) {
+            if (!hostEvent || (typeof hostEvent !== 'object' && typeof hostEvent !== 'function')) return hostEvent;
+            let facade = hostEventFacades.get(hostEvent);
+            if (facade) return facade;
+            facade = Object.create(Event.prototype);
+            Object.defineProperties(facade, {
+              __htmlMlHostEvent: { value: hostEvent },
+              type: { get: function() { return String(hostEvent.type || ''); }, configurable: true },
+              target: { get: function() { return wrapHost(hostEvent.target); }, configurable: true },
+              currentTarget: { get: function() { return wrapHost(hostEvent.currentTarget); }, configurable: true },
+              eventPhase: { get: function() { return Number(hostEvent.eventPhase) || 0; }, configurable: true },
+              bubbles: { get: function() { return Boolean(hostEvent.bubbles); }, configurable: true },
+              cancelable: { get: function() { return Boolean(hostEvent.cancelable); }, configurable: true },
+              composed: { get: function() { return Boolean(hostEvent.composed); }, configurable: true },
+              defaultPrevented: { get: function() { return Boolean(hostEvent.defaultPrevented); }, configurable: true },
+              isTrusted: { get: function() { return Boolean(hostEvent.isTrusted); }, configurable: true },
+              timeStamp: { get: function() { return Number(hostEvent.timeStamp) || 0; }, configurable: true },
+              cancelBubble: {
+                get: function() { return Boolean(this.__htmlMlCancelBubble); },
+                set: function(value) {
+                  this.__htmlMlCancelBubble = Boolean(value);
+                  if (value) hostEvent.stopPropagation();
+                },
+                configurable: true
+              }
+            });
+            facade = new Proxy(facade, {
+              get: function(target, property, receiver) {
+                if (property in target) return Reflect.get(target, property, receiver);
+                return wrapHost(hostEvent[property]);
+              },
+              has: function(target, property) {
+                return property in target || property in hostEvent;
+              }
+            });
+            hostEventFacades.set(hostEvent, facade);
+            return facade;
+          }
+          Object.defineProperty(globalThis, '__htmlMlWrapHostEvent', {
+            value: wrapHostEvent, configurable: true
+          });
+
+          function cssEscape(value) {
+            if (arguments.length === 0) throw new TypeError('CSS.escape requires one argument');
+            const string = String(value);
+            const length = string.length;
+            let index = -1;
+            let result = '';
+            const firstCodeUnit = string.charCodeAt(0);
+            while (++index < length) {
+              const codeUnit = string.charCodeAt(index);
+              if (codeUnit === 0x0000) {
+                result += '\ufffd';
+                continue;
+              }
+              if ((codeUnit >= 0x0001 && codeUnit <= 0x001f) || codeUnit === 0x007f ||
+                  (index === 0 && codeUnit >= 0x0030 && codeUnit <= 0x0039) ||
+                  (index === 1 && codeUnit >= 0x0030 && codeUnit <= 0x0039 && firstCodeUnit === 0x002d)) {
+                result += '\\' + codeUnit.toString(16) + ' ';
+                continue;
+              }
+              if (index === 0 && codeUnit === 0x002d && length === 1) {
+                result += '\\' + string.charAt(index);
+                continue;
+              }
+              if (codeUnit >= 0x0080 || codeUnit === 0x002d || codeUnit === 0x005f ||
+                  codeUnit >= 0x0030 && codeUnit <= 0x0039 ||
+                  codeUnit >= 0x0041 && codeUnit <= 0x005a ||
+                  codeUnit >= 0x0061 && codeUnit <= 0x007a) {
+                result += string.charAt(index);
+                continue;
+              }
+              result += '\\' + string.charAt(index);
+            }
+            return result;
+          }
           function DOMException(message, name) {
             this.message = message === undefined ? '' : String(message);
             this.name = name === undefined ? 'Error' : String(name);
@@ -3146,9 +3523,38 @@ public sealed class ClearScriptV8Runtime :
           }
           UIEvent.prototype = Object.create(Event.prototype);
           UIEvent.prototype.constructor = UIEvent;
-          function MouseEvent(type, init) { UIEvent.call(this, type, init); Object.assign(this, init || {}); }
+          function MouseEvent(type, init) {
+            init = init || {};
+            UIEvent.call(this, type, init);
+            this.screenX = Number(init.screenX) || 0;
+            this.screenY = Number(init.screenY) || 0;
+            this.clientX = Number(init.clientX) || 0;
+            this.clientY = Number(init.clientY) || 0;
+            this.pageX = this.clientX;
+            this.pageY = this.clientY;
+            this.offsetX = this.clientX;
+            this.offsetY = this.clientY;
+            this.button = Number(init.button) || 0;
+            this.buttons = Number(init.buttons) || 0;
+            this.ctrlKey = Boolean(init.ctrlKey);
+            this.shiftKey = Boolean(init.shiftKey);
+            this.altKey = Boolean(init.altKey);
+            this.metaKey = Boolean(init.metaKey);
+            this.relatedTarget = init.relatedTarget === undefined ? null : init.relatedTarget;
+            this.movementX = Number(init.movementX) || 0;
+            this.movementY = Number(init.movementY) || 0;
+          }
           MouseEvent.prototype = Object.create(UIEvent.prototype);
           MouseEvent.prototype.constructor = MouseEvent;
+          MouseEvent.prototype.getModifierState = function(key) {
+            switch (String(key || '').toLowerCase()) {
+              case 'alt': return this.altKey;
+              case 'control': case 'ctrl': return this.ctrlKey;
+              case 'meta': return this.metaKey;
+              case 'shift': return this.shiftKey;
+              default: return false;
+            }
+          };
           const PointerEvent = MouseEvent;
           const WheelEvent = MouseEvent;
           function KeyboardEvent(type, init) {
@@ -3481,6 +3887,11 @@ public sealed class ClearScriptV8Runtime :
               frameElement: { value: frameElement || null, configurable: true },
               parent: { value: parentWindow || scope, configurable: true },
               top: { value: parentWindow || scope, configurable: true },
+              name: {
+                value: frameElement ? String(frameElement.getAttribute('name') || '') : '',
+                writable: true,
+                configurable: true
+              },
               location: { value: frameElement ? frameElement.ownerDocument.location : windowBackend.location, configurable: true },
               innerWidth: { get: function() { return frameElement ? frameElement.clientWidth : windowBackend.innerWidth; }, configurable: true },
               innerHeight: { get: function() { return frameElement ? frameElement.clientHeight : windowBackend.innerHeight; }, configurable: true },
@@ -3590,16 +4001,36 @@ public sealed class ClearScriptV8Runtime :
             };
             scope.dispatchEvent = function(event) {
               if (!event || !event.type) throw new TypeError('Event type is required');
-              try { event.target = event.target || scope; event.currentTarget = scope; } catch (_) {}
-              const property = scope['on' + event.type];
-              if (typeof property === 'function') property.call(scope, event);
-              const entries = (listeners.get(String(event.type)) || []).slice();
-              for (const entry of entries) {
-                entry.callback.call(scope, event);
-                if (entry.once) scope.removeEventListener(event.type, entry.callback, entry.capture);
-                if (event.__immediateStopped) break;
+              const hostEvent = !(event instanceof Event)
+                && typeof event.composedPath === 'function'
+                && typeof event.preventDefault === 'function'
+                ? event
+                : null;
+              if (hostEvent) event = wrapHostEvent(hostEvent);
+              const currentTargetDescriptor = hostEvent
+                ? Object.getOwnPropertyDescriptor(event, 'currentTarget')
+                : null;
+              if (hostEvent) {
+                Object.defineProperty(event, 'currentTarget', {
+                  value: scope, writable: true, configurable: true
+                });
               }
-              return !event.defaultPrevented;
+              try { event.target = event.target || scope; event.currentTarget = scope; } catch (_) {}
+              try {
+                const property = scope['on' + event.type];
+                if (typeof property === 'function') property.call(scope, event);
+                const entries = (listeners.get(String(event.type)) || []).slice();
+                for (const entry of entries) {
+                  entry.callback.call(scope, event);
+                  if (entry.once) scope.removeEventListener(event.type, entry.callback, entry.capture);
+                  if (event.__immediateStopped) break;
+                }
+                return !event.defaultPrevented;
+              } finally {
+                if (hostEvent && currentTargetDescriptor) {
+                  Object.defineProperty(event, 'currentTarget', currentTargetDescriptor);
+                }
+              }
             };
             scope.postMessage = function(message) {
               scope.setTimeout(function() { scope.dispatchEvent({ type: 'message', data: message, source: scope, origin: String(scope.location.origin || 'null') }); }, 0);
@@ -3647,13 +4078,24 @@ public sealed class ClearScriptV8Runtime :
               },
               has: function(_, property) { return property === 'clipboard' || property in navigatorBackend; }
             });
-            scope.screen = windowBackend.screen;
+            const screenBackend = windowBackend.screen;
+            function Screen() { throw new TypeError('Illegal constructor'); }
+            Object.defineProperty(Screen.prototype, Symbol.toStringTag, { value: 'Screen' });
+            const screenObject = Object.create(Screen.prototype);
+            for (const property of ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth']) {
+              Object.defineProperty(screenObject, property, {
+                get: function() { return Number(screenBackend[property]); },
+                enumerable: true
+              });
+            }
+            scope.Screen = Screen;
+            scope.screen = screenObject;
             scope.console = console;
             scope.performance = performanceObject;
             scope.atob = function(value) { return __htmlMlBase64Backend.Decode(String(value)); };
             scope.btoa = function(value) { return __htmlMlBase64Backend.Encode(String(value)); };
             scope.crypto = { getRandomValues: function(array) { for (let i = 0; i < array.length; i++) array[i] = Math.floor(Math.random() * 256); return array; } };
-            scope.CSS = { supports: function() { return false; }, escape: function(value) { return String(value).replace(/[^a-zA-Z0-9_-]/g, function(c) { return '\\' + c; }); } };
+            scope.CSS = { supports: function() { return false; }, escape: cssEscape };
             scope.localStorage = scope.sessionStorage = (function() {
               const values = new Map();
               return { getItem: function(k) { k = String(k); return values.has(k) ? values.get(k) : null; }, setItem: function(k,v) { values.set(String(k), String(v)); }, removeItem: function(k) { values.delete(String(k)); }, clear: function() { values.clear(); } };
@@ -4078,7 +4520,58 @@ public sealed class ClearScriptV8Runtime :
             defineDomConstructor('SVGElement', 'Element', null);
             defineDomConstructor('SVGSVGElement', 'SVGElement', 'SVG');
             defineDomConstructor('Window', null, null);
-            function installReflectedAccessor(constructorName, property) {
+            Object.defineProperties(domConstructors.Node, {
+              ELEMENT_NODE: { value: 1, enumerable: true },
+              ATTRIBUTE_NODE: { value: 2, enumerable: true },
+              TEXT_NODE: { value: 3, enumerable: true },
+              CDATA_SECTION_NODE: { value: 4, enumerable: true },
+              PROCESSING_INSTRUCTION_NODE: { value: 7, enumerable: true },
+              COMMENT_NODE: { value: 8, enumerable: true },
+              DOCUMENT_NODE: { value: 9, enumerable: true },
+              DOCUMENT_TYPE_NODE: { value: 10, enumerable: true },
+              DOCUMENT_FRAGMENT_NODE: { value: 11, enumerable: true }
+            });
+            function installDomMethod(constructorName, property) {
+              const ctor = domConstructors[constructorName];
+              Object.defineProperty(ctor.prototype, property, {
+                configurable: true,
+                writable: true,
+                value: function() {
+                  const raw = unwrapHost(this);
+                  const method = raw == null ? null : raw[property];
+                  if (typeof method !== 'function') {
+                    throw new TypeError(`${constructorName}.${property} is not supported by this node`);
+                  }
+                  const args = Array.from(arguments, unwrapHost);
+                  if ((property === 'querySelector' || property === 'querySelectorAll' ||
+                       property === 'matches' || property === 'closest') && args.length > 0) {
+                    const selector = String(args[0]);
+                    args[0] = selector;
+                    const validator = raw.__htmlMlIsValidSelector;
+                    if (typeof validator === 'function' && !validator(selector)) {
+                      throw new DOMException(
+                        `Failed to execute '${String(property)}': '${selector}' is not a valid selector.`,
+                        'SyntaxError');
+                    }
+                  }
+                  const result = wrapResult(method(...args));
+                  if (property === 'removeChild') {
+                    forceDomIdentityRetention(result, false);
+                    scheduleDisconnectedDomProxyRetentionSweep();
+                  }
+                  return result;
+                }
+              });
+            }
+            ['appendChild', 'insertBefore', 'removeChild'].forEach(function(property) {
+              installDomMethod('Node', property);
+            });
+            ['querySelector', 'querySelectorAll', 'matches', 'closest',
+             'getBoundingClientRect', 'getClientRects'].forEach(function(property) {
+              installDomMethod('Element', property);
+            });
+            installDomMethod('HTMLElement', 'click');
+            function installReflectedAccessor(constructorName, property, coerce) {
               const ctor = domConstructors[constructorName];
               Object.defineProperty(ctor.prototype, property, {
                 configurable: true,
@@ -4089,15 +4582,32 @@ public sealed class ClearScriptV8Runtime :
                 },
                 set: function(value) {
                   const raw = unwrapHost(this);
-                  if (raw != null) raw[property] = unwrapHost(value);
+                  if (raw != null) raw[property] = coerce ? coerce(value) : unwrapHost(value);
                 }
               });
             }
+            installReflectedAccessor('Document', 'cookie', function(value) {
+              return String(value);
+            });
+            installReflectedAccessor('HTMLElement', 'tabIndex', function(value) {
+              const number = Number(value);
+              return Number.isFinite(number) ? Math.trunc(number) : 0;
+            });
             installReflectedAccessor('HTMLInputElement', 'value');
-            installReflectedAccessor('HTMLInputElement', 'checked');
+            installReflectedAccessor('HTMLInputElement', 'checked', function(value) {
+              return Boolean(value);
+            });
+            installReflectedAccessor('HTMLInputElement', 'maxLength', function(value) {
+              const number = Number(value);
+              return Number.isFinite(number) ? Math.trunc(number) : -1;
+            });
+            installReflectedAccessor('HTMLInputElement', 'defaultValue');
             installReflectedAccessor('HTMLTextAreaElement', 'value');
+            installReflectedAccessor('HTMLTextAreaElement', 'defaultValue');
             installReflectedAccessor('HTMLSelectElement', 'value');
-            installReflectedAccessor('HTMLOptionElement', 'selected');
+            installReflectedAccessor('HTMLOptionElement', 'selected', function(value) {
+              return Boolean(value);
+            });
             function installAssociatedFormAccessor(constructorName) {
               const ctor = domConstructors[constructorName];
               Object.defineProperty(ctor.prototype, 'form', {
@@ -4149,11 +4659,26 @@ public sealed class ClearScriptV8Runtime :
           globalThis.__htmlMlRequireFrom = requireFrom;
           globalThis.__htmlMlFlushCanvases = flushCanvasBatches;
           globalThis.__htmlMlWrapHostObject = wrapHost;
+          globalThis.__htmlMlMarkExternalRealmView = function(value) {
+            Object.defineProperty(value, externalRealmViewMarker, {
+              value: true,
+              configurable: false,
+              enumerable: false,
+              writable: false
+            });
+            return value;
+          };
           installWindow(globalThis, ownerDocument, null, null);
 
           globalThis.__htmlMlCreateFrameRuntime = function(frameDocument, frameElement, frameLocation, parentWindow) {
             const frame = globalThis;
             installWindow(frame, frameDocument, frameElement, parentWindow);
+            Object.defineProperty(frame.document, externalRealmViewMarker, {
+              value: true,
+              configurable: false,
+              enumerable: false,
+              writable: false
+            });
             const locationView = {};
             function browserFrameHref() {
               const href = String(frameLocation.href || '');

@@ -1,0 +1,352 @@
+{
+  "schema": "htmlml-ecosystem-upstream-sources-v1",
+  "suites": [
+    {
+      "id": "bootstrap",
+      "repository": "https://github.com/twbs/bootstrap.git",
+      "tag": "v5.3.8",
+      "commit": "25aa8cc0b32f0d1a54be575347e6d84b70b1acd7",
+      "license": "MIT",
+      "suiteRoot": "js/tests/unit",
+      "discoveredFiles": [
+        "alert.spec.js",
+        "base-component.spec.js",
+        "button.spec.js",
+        "carousel.spec.js",
+        "collapse.spec.js",
+        "dropdown.spec.js",
+        "jquery.spec.js",
+        "modal.spec.js",
+        "offcanvas.spec.js",
+        "popover.spec.js",
+        "scrollspy.spec.js",
+        "tab.spec.js",
+        "toast.spec.js",
+        "tooltip.spec.js"
+      ],
+      "selected": [
+        {
+          "path": "upstream/bootstrap/js/tests/unit/alert.spec.js",
+          "cases": 18,
+          "sha256": "e6f4bd199c1f37cbe49d30500b58703579d3f3710bf77accd2fa429a27db8f7b"
+        },
+        {
+          "path": "upstream/bootstrap/js/tests/unit/base-component.spec.js",
+          "cases": 14,
+          "sha256": "feaa63ee56c653da3d631eab7e188bc347f27811c295e8742c25a9a37b61e727"
+        },
+        {
+          "path": "upstream/bootstrap/js/tests/unit/button.spec.js",
+          "cases": 13,
+          "sha256": "da8fa5203b6e12fd167c6a2a39ac132c60223c5d3b38648f8ba583103434faa0"
+        },
+        {
+          "path": "upstream/bootstrap/js/tests/unit/collapse.spec.js",
+          "cases": 43,
+          "sha256": "e7d15420dcc390d2f43f2d81cef96a0600c0229bd5e7bb2a311fa3f8da8f975d"
+        },
+        {
+          "path": "upstream/bootstrap/js/tests/unit/toast.spec.js",
+          "cases": 31,
+          "sha256": "889beddcd95086783e93e3e00592bd5d9bbac404e7de57dde990707795690539"
+        },
+        {
+          "path": "upstream/bootstrap/js/tests/unit/tab.spec.js",
+          "cases": 47,
+          "sha256": "50be8813b3801bf45e74c71e9e23f40f99fa1fe309576859cf4c06db46767b40"
+        },
+        {
+          "path": "upstream/bootstrap/js/tests/unit/dropdown.spec.js",
+          "cases": 87,
+          "sha256": "49fc59fdc685ae4d63f91c0e8548db6ccdca85ea30f31d183013358d16044b32"
+        }
+      ],
+      "supportFiles": [
+        {
+          "path": "upstream/bootstrap/js/tests/helpers/fixture.js",
+          "sha256": "ccb7c09d344e08d7588492e85eab46cc0dbca2fdc02a6c249c7550fc9cc4161c"
+        },
+        {
+          "path": "upstream/bootstrap/LICENSE",
+          "sha256": "4620c84ad5ce8602ff65640ed6b7c8b78ebb9e036584f0ebc1ccc88206a4bb51"
+        }
+      ],
+      "harnessBlocked": [
+        "carousel.spec.js",
+        "jquery.spec.js",
+        "modal.spec.js",
+        "offcanvas.spec.js",
+        "popover.spec.js",
+        "scrollspy.spec.js",
+        "tooltip.spec.js"
+      ],
+      "excluded": []
+    },
+    {
+      "id": "jquery",
+      "repository": "https://github.com/jquery/jquery.git",
+      "tag": "4.0.0",
+      "tagObject": "81dae002e60aac181738ab6a00d31cc9c677d942",
+      "commit": "4f2fae08f23b54ce09322e62e73cce6161b8d3cb",
+      "license": "MIT",
+      "suiteRoot": "test/unit",
+      "discoveredFiles": [
+        "ajax.js",
+        "animation.js",
+        "attributes.js",
+        "basic.js",
+        "callbacks.js",
+        "core.js",
+        "css.js",
+        "data.js",
+        "deferred.js",
+        "deprecated.js",
+        "dimensions.js",
+        "effects.js",
+        "event.js",
+        "exports.js",
+        "manipulation.js",
+        "offset.js",
+        "queue.js",
+        "ready.js",
+        "selector.js",
+        "serialize.js",
+        "support.js",
+        "traversing.js",
+        "tween.js",
+        "wrap.js"
+      ],
+      "staticRegistrations": 847,
+      "selected": [
+        {
+          "path": "upstream/jquery/test/unit/callbacks.js",
+          "cases": 51,
+          "sha256": "8b32a1fc476fb9376bf95abf8e65b56c0204c344c139d345cbca76cf525c2cb6"
+        },
+        {
+          "path": "upstream/jquery/test/unit/attributes.js",
+          "cases": 65,
+          "sha256": "6aa2b9d730bd32032c4ca9881d574eb2d87bbc1b0a6f79326870e52d3f59aacc",
+          "inFileHarnessBlocked": [
+            {
+              "name": "Basic TrustedScriptURL support (gh-4948)",
+              "reason": "Requires jQuery's PHP mock server, CSP cleanup endpoint, and child browsing context."
+            }
+          ]
+        },
+        {
+          "path": "upstream/jquery/test/unit/css.js",
+          "cases": 55,
+          "sha256": "4283300b9023b02468a59deb7d69ccfade3080f66861ff12315d5bade4365b31",
+          "inFileHarnessBlocked": [
+            {
+              "name": "show/hide shadow child nodes",
+              "reason": "Requires Shadow DOM, which is outside the current bounded HtmlML component profile."
+            },
+            {
+              "name": "shadow toggle()",
+              "reason": "Requires Shadow DOM, which is outside the current bounded HtmlML component profile."
+            },
+            {
+              "name": "css('width') should work correctly before document ready (trac-14084)",
+              "reason": "Requires jQuery's separately served css/cssWidthBeforeDocReady.html iframe fixture."
+            },
+            {
+              "name": "css('width') should work correctly with browser zooming",
+              "reason": "Requires jQuery's separately served css/cssWidthBrowserZoom.html iframe fixture and browser zoom."
+            },
+            {
+              "name": "Test computeStyleTests for hidden iframe",
+              "reason": "Requires jQuery's separately served css/cssComputeStyleTests.html iframe fixture and child browsing context."
+            }
+          ]
+        }
+      ],
+      "supportFiles": [
+        {
+          "path": "upstream/jquery/LICENSE.txt",
+          "sha256": "d4db9ebe6f29f5168eac45ad713f055623ac5d0dcd5ba92da23d650ae012020d"
+        },
+        {
+          "path": "upstream/jquery/test/data/qunit-fixture.html",
+          "sha256": "ed4d78e8e1f0811ea5fc67537ede203c7c4d326eef3b8262666e53c14df75ca5"
+        },
+        {
+          "path": "upstream/jquery/test/data/testsuite.css",
+          "sha256": "1c35ee3724d63c7bdf254d2dc346b520223214f00cd7a3821f406876f9ec4e49"
+        }
+      ],
+      "harnessBlocked": [
+        "ajax.js",
+        "animation.js",
+        "basic.js",
+        "core.js",
+        "data.js",
+        "deferred.js",
+        "deprecated.js",
+        "dimensions.js",
+        "effects.js",
+        "event.js",
+        "exports.js",
+        "manipulation.js",
+        "offset.js",
+        "queue.js",
+        "ready.js",
+        "selector.js",
+        "serialize.js",
+        "support.js",
+        "traversing.js",
+        "tween.js",
+        "wrap.js"
+      ],
+      "excluded": []
+    },
+    {
+      "id": "react-dom",
+      "repository": "https://github.com/facebook/react.git",
+      "tag": "v19.2.8",
+      "commit": "1dd4ecbdabf826f527fc9a58c05ea70375b7d170",
+      "license": "MIT",
+      "suiteRoot": "packages/react-dom/src/__tests__",
+      "discoveredFiles": [
+        "CSSPropertyOperations-test.js",
+        "DOMPropertyOperations-test.js",
+        "InvalidEventListeners-test.js",
+        "ReactBrowserEventEmitter-test.js",
+        "ReactChildReconciler-test.js",
+        "ReactClassComponentPropResolutionFizz-test.js",
+        "ReactComponent-test.js",
+        "ReactComponentLifeCycle-test.js",
+        "ReactCompositeComponent-test.js",
+        "ReactCompositeComponentDOMMinimalism-test.js",
+        "ReactCompositeComponentNestedState-test.js",
+        "ReactCompositeComponentState-test.js",
+        "ReactDOM-test.js",
+        "ReactDOMAttribute-test.js",
+        "ReactDOMComponent-test.js",
+        "ReactDOMComponentTree-test.js",
+        "ReactDOMConsoleErrorReporting-test.js",
+        "ReactDOMConsoleErrorReportingLegacy-test.js",
+        "ReactDOMEventListener-test.js",
+        "ReactDOMEventPropagation-test.js",
+        "ReactDOMFiber-test.js",
+        "ReactDOMFiberAsync-test.js",
+        "ReactDOMFizzDeferredValue-test.js",
+        "ReactDOMFizzForm-test.js",
+        "ReactDOMFizzServer-test.js",
+        "ReactDOMFizzServerBrowser-test.js",
+        "ReactDOMFizzServerEdge-test.js",
+        "ReactDOMFizzServerNode-test.js",
+        "ReactDOMFizzShellHydration-test.js",
+        "ReactDOMFizzStatic-test.js",
+        "ReactDOMFizzStaticBrowser-test.js",
+        "ReactDOMFizzStaticFloat-test.js",
+        "ReactDOMFizzStaticNode-test.js",
+        "ReactDOMFizzSuppressHydrationWarning-test.js",
+        "ReactDOMFizzSuspenseList-test.js",
+        "ReactDOMFizzViewTransition-test.js",
+        "ReactDOMFloat-test.js",
+        "ReactDOMForm-test.js",
+        "ReactDOMFragmentRefs-test.js",
+        "ReactDOMHooks-test.js",
+        "ReactDOMHostComponentTransitions-test.js",
+        "ReactDOMHydrationDiff-test.js",
+        "ReactDOMIframe-test.js",
+        "ReactDOMImageLoad-test.internal.js",
+        "ReactDOMInReactServer-test.js",
+        "ReactDOMInput-test.js",
+        "ReactDOMInvalidARIAHook-test.js",
+        "ReactDOMLegacyComponentTree-test.internal.js",
+        "ReactDOMLegacyFiber-test.js",
+        "ReactDOMLegacyFloat-test.js",
+        "ReactDOMNativeEventHeuristic-test.js",
+        "ReactDOMNestedEvents-test.js",
+        "ReactDOMOption-test.js",
+        "ReactDOMRoot-test.js",
+        "ReactDOMSVG-test.js",
+        "ReactDOMSafariMicrotaskBug-test.js",
+        "ReactDOMSelect-test.js",
+        "ReactDOMSelection-test.internal.js",
+        "ReactDOMServerIntegrationAttributes-test.js",
+        "ReactDOMServerIntegrationBasic-test.js",
+        "ReactDOMServerIntegrationCheckbox-test.js",
+        "ReactDOMServerIntegrationClassContextType-test.js",
+        "ReactDOMServerIntegrationElements-test.js",
+        "ReactDOMServerIntegrationFragment-test.js",
+        "ReactDOMServerIntegrationHooks-test.js",
+        "ReactDOMServerIntegrationInput-test.js",
+        "ReactDOMServerIntegrationLegacyContext-test.js",
+        "ReactDOMServerIntegrationLegacyContextDisabled-test.internal.js",
+        "ReactDOMServerIntegrationModes-test.js",
+        "ReactDOMServerIntegrationNewContext-test.js",
+        "ReactDOMServerIntegrationObject-test.js",
+        "ReactDOMServerIntegrationReconnecting-test.js",
+        "ReactDOMServerIntegrationRefs-test.js",
+        "ReactDOMServerIntegrationSelect-test.js",
+        "ReactDOMServerIntegrationSpecialTypes-test.js",
+        "ReactDOMServerIntegrationTextarea-test.js",
+        "ReactDOMServerIntegrationUntrustedURL-test.js",
+        "ReactDOMServerIntegrationUserInteraction-test.js",
+        "ReactDOMServerLifecycles-test.js",
+        "ReactDOMServerPartialHydration-test.internal.js",
+        "ReactDOMServerPartialHydrationActivity-test.internal.js",
+        "ReactDOMServerSelectiveHydration-test.internal.js",
+        "ReactDOMServerSelectiveHydrationActivity-test.internal.js",
+        "ReactDOMServerSuspense-test.internal.js",
+        "ReactDOMShorthandCSSPropertyCollision-test.js",
+        "ReactDOMSingletonComponents-test.js",
+        "ReactDOMSrcObject-test.js",
+        "ReactDOMSuspensePlaceholder-test.js",
+        "ReactDOMTestSelectors-test.js",
+        "ReactDOMTextComponent-test.js",
+        "ReactDOMTextarea-test.js",
+        "ReactDOMUseId-test.js",
+        "ReactDOMserverIntegrationProgress-test.js",
+        "ReactEmptyComponent-test.js",
+        "ReactErrorBoundaries-test.internal.js",
+        "ReactErrorBoundariesHooks-test.internal.js",
+        "ReactErrorLoggingRecovery-test.js",
+        "ReactEventIndependence-test.js",
+        "ReactFunctionComponent-test.js",
+        "ReactIdentity-test.js",
+        "ReactLegacyCompositeComponent-test.js",
+        "ReactLegacyContextDisabled-test.internal.js",
+        "ReactLegacyErrorBoundaries-test.internal.js",
+        "ReactLegacyMount-test.js",
+        "ReactLegacyRootWarnings-test.js",
+        "ReactLegacyUpdates-test.js",
+        "ReactMockedComponent-test.js",
+        "ReactMountDestruction-test.js",
+        "ReactMultiChild-test.js",
+        "ReactMultiChildReconcile-test.js",
+        "ReactMultiChildText-test.js",
+        "ReactRenderDocument-test.js",
+        "ReactServerRendering-test.js",
+        "ReactServerRenderingBrowser-test.js",
+        "ReactServerRenderingHydration-test.js",
+        "ReactStartTransitionMultipleRenderers-test.js",
+        "ReactTestUtilsAct-test.js",
+        "ReactTestUtilsActUnmockedScheduler-test.js",
+        "ReactTreeTraversal-test.js",
+        "ReactUpdates-test.js",
+        "ReactWrongReturnPointer-test.js",
+        "escapeTextForBrowser-test.js",
+        "findDOMNodeFB-test.js",
+        "quoteAttributeValueForBrowser-test.js",
+        "refs-destruction-test.js",
+        "refs-test.js",
+        "refsLegacy-test.js",
+        "validateDOMNesting-test.js"
+      ],
+      "staticRegistrations": 2314,
+      "selected": [],
+      "supportFiles": [],
+      "harnessBlocked": {
+        "count": 128,
+        "files": "all discoveredFiles",
+        "reason": "The official Jest sources require React's internal module aliases, feature-flag matrix, scheduler and act helpers, console assertion helpers, JSX transform, and per-test module reset semantics before unchanged execution."
+      },
+      "excluded": []
+    }
+  ]
+}

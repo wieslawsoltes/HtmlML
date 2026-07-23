@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed document load and element scroll lifecycle primitives</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<style>
+  #scroller {
+    width: 120px;
+    height: 40px;
+    overflow: scroll;
+  }
+
+  #content {
+    width: 100px;
+    height: 200px;
+  }
+</style>
+<div id="scroller"><div id="content"></div></div>
+<script>
+  const domContentLoaded = async_test("DOMContentLoaded targets the document after interactive readiness");
+  const windowLoad = async_test("load targets the window after document completion");
+  let domContentLoadedCount = 0;
+  let loadCount = 0;
+
+  document.addEventListener("DOMContentLoaded", domContentLoaded.step_func(event => {
+    domContentLoadedCount++;
+    assert_equals(event.target, document, "DOMContentLoaded target");
+    assert_equals(document.readyState, "interactive", "DOMContentLoaded readyState");
+    assert_equals(domContentLoadedCount, 1, "DOMContentLoaded count");
+    domContentLoaded.done();
+  }));
+
+  window.addEventListener("load", windowLoad.step_func(event => {
+    loadCount++;
+    assert_equals(event.target, window, "load target");
+    assert_equals(document.readyState, "complete", "load readyState");
+    assert_equals(domContentLoadedCount, 1, "load follows DOMContentLoaded");
+    assert_equals(loadCount, 1, "load count");
+    windowLoad.done();
+  }));
+
+  promise_test(async () => {
+    const scroller = document.getElementById("scroller");
+    let scrollCount = 0;
+    let scrollTarget = null;
+    scroller.addEventListener("scroll", event => {
+      scrollCount++;
+      scrollTarget = event.target;
+    });
+    scroller.scrollTop = 32;
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    assert_equals(scroller.scrollTop, 32, "programmatic scrollTop mutation");
+    assert_equals(scrollCount, 1, "scroll event count");
+    assert_equals(scrollTarget, scroller, "scroll event target");
+  }, "programmatic overflow scrolling publishes one element scroll event");
+</script>

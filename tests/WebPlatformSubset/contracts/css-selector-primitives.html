@@ -1,0 +1,119 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed component selectors match and invalidate independently</title>
+<style>
+  :root { --root-match: pass; }
+  * { --universal-match: pass; }
+  div.type-target { --type-match: pass; }
+  .class-target { --class-match: pass; }
+  #id-target { --id-match: pass; }
+  [data-present] { --attribute-presence-match: pass; }
+  [data-kind="target"] { --attribute-equals-match: pass; }
+  .selector-parent .descendant-target { --descendant-match: pass; }
+  .selector-parent > .child-target { --child-match: pass; }
+  .adjacent-source + .adjacent-target { --adjacent-match: pass; }
+  .general-source ~ .general-target { --general-match: pass; }
+  .first-target:first-child { --first-child-match: pass; }
+  .last-target:last-child { --last-child-match: pass; }
+  .empty-target:empty { --empty-match: pass; }
+  #checked-target:checked { --checked-match: pass; }
+  #disabled-target:disabled { --disabled-match: pass; }
+  #focus-target:focus { --focus-match: pass; }
+  #focus-target:focus + #focus-sibling { --focus-sibling-match: pass; }
+</style>
+<body>
+<div id="root-probe"></div>
+<div id="type-target" class="type-target"></div>
+<span id="class-target" class="class-target"></span>
+<span id="id-target"></span>
+<span id="attribute-presence-target" data-present></span>
+<span id="attribute-equals-target" data-kind="target"></span>
+<div class="selector-parent">
+  <span id="descendant-target" class="descendant-target"></span>
+  <span id="child-target" class="child-target"></span>
+</div>
+<span class="adjacent-source"></span><span id="adjacent-target" class="adjacent-target"></span>
+<span class="general-source"></span><i></i><span id="general-target" class="general-target"></span>
+<div><span id="first-target" class="first-target"></span><span></span></div>
+<div><span></span><span id="last-target" class="last-target"></span></div>
+<div id="empty-target" class="empty-target"></div>
+<input id="checked-target" type="checkbox" checked>
+<input id="disabled-target" disabled>
+<input id="focus-target"><span id="focus-sibling"></span>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function test(name, callback) {
+    try {
+      callback();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assertMatch(targetId, property) {
+    const target = document.getElementById(targetId);
+    const actual = getComputedStyle(target).getPropertyValue(property).trim();
+    if (actual !== "pass") {
+      throw new Error(targetId + " did not match " + property + "; got " + JSON.stringify(actual));
+    }
+  }
+
+  test("simple selectors", () => {
+    assertMatch("root-probe", "--root-match");
+    assertMatch("root-probe", "--universal-match");
+    assertMatch("type-target", "--type-match");
+    assertMatch("class-target", "--class-match");
+    assertMatch("id-target", "--id-match");
+    assertMatch("attribute-presence-target", "--attribute-presence-match");
+    assertMatch("attribute-equals-target", "--attribute-equals-match");
+  });
+
+  test("selector combinators", () => {
+    assertMatch("descendant-target", "--descendant-match");
+    assertMatch("child-target", "--child-match");
+    assertMatch("adjacent-target", "--adjacent-match");
+    assertMatch("general-target", "--general-match");
+  });
+
+  test("structural and control-state pseudo-classes", () => {
+    assertMatch("first-target", "--first-child-match");
+    assertMatch("last-target", "--last-child-match");
+    assertMatch("empty-target", "--empty-match");
+    assertMatch("checked-target", "--checked-match");
+    assertMatch("disabled-target", "--disabled-match");
+  });
+
+  test("focus selector invalidates after focus changes", () => {
+    const focus = document.getElementById("focus-target");
+    focus.focus();
+    assertMatch("focus-target", "--focus-match");
+    assertMatch("focus-sibling", "--focus-sibling-match");
+    focus.blur();
+    const oldSubject = getComputedStyle(focus).getPropertyValue("--focus-match").trim();
+    const oldSibling = getComputedStyle(document.getElementById("focus-sibling"))
+      .getPropertyValue("--focus-sibling-match").trim();
+    if (oldSubject || oldSibling) {
+      throw new Error("blur retained stale :focus selector state");
+    }
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>
+</body>

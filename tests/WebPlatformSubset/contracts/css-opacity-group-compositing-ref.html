@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Reference for opacity group compositing</title>
+<style>
+  html,
+  body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: white;
+  }
+
+  .group {
+    position: relative;
+    width: 140px;
+    height: 90px;
+    background: rgb(255, 127, 127);
+  }
+
+  .child {
+    position: absolute;
+    top: 20px;
+    left: 30px;
+    width: 80px;
+    height: 50px;
+    background: rgb(127, 127, 255);
+  }
+</style>
+<div class="group"><div class="child"></div></div>

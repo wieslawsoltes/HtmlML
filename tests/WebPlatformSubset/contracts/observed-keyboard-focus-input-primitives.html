@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed keyboard, focus, beforeinput, and input lifecycle primitives</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/resources/testdriver.js"></script>
+<script src="/resources/testdriver-actions.js"></script>
+<script src="/resources/testdriver-vendor.js"></script>
+<style>
+  html,
+  body {
+    margin: 0;
+    width: 360px;
+    height: 140px;
+  }
+
+  input {
+    display: block;
+    width: 160px;
+    height: 32px;
+    margin: 12px;
+  }
+</style>
+<input id="first" aria-label="First">
+<input id="second" aria-label="Second">
+<script>
+  const first = document.getElementById("first");
+  const second = document.getElementById("second");
+  const observed = [];
+  const types = ["focus", "focusin", "blur", "focusout", "keydown", "keyup",
+                 "beforeinput", "input"];
+
+  for (const node of [first, second]) {
+    for (const type of types) {
+      node.addEventListener(type, event => observed.push({
+        type,
+        id: node.id,
+        target: event.target,
+        key: event.key,
+        code: event.code,
+        keyCode: event.keyCode,
+        data: event.data,
+        inputType: event.inputType,
+        isComposing: event.isComposing
+      }));
+    }
+  }
+
+  const lifecycle = (async () => {
+    await test_driver.click(first);
+    const afterClick = observed.slice();
+    const activeAfterClick = document.activeElement;
+
+    await test_driver.send_keys(first, "Z");
+    const afterText = observed.slice();
+    const valueAfterText = first.value;
+
+    await test_driver.send_keys(first, "\uE004");
+    return {
+      afterClick,
+      activeAfterClick,
+      afterText,
+      valueAfterText,
+      finalEvents: observed.slice(),
+      finalActive: document.activeElement,
+      finalValue: first.value
+    };
+  })();
+
+  const matching = (events, type, id) =>
+    events.filter(event => event.type === type && event.id === id);
+
+  promise_test(async () => {
+    const state = await lifecycle;
+    assert_equals(state.activeAfterClick, first, "primary activation focuses the requested input");
+    assert_equals(matching(state.afterClick, "focus", "first").length, 1, "first focus count");
+    assert_equals(matching(state.afterClick, "focusin", "first").length, 1, "first focusin count");
+    assert_less_than(
+      state.afterClick.findIndex(event => event.type === "focus" && event.id === "first"),
+      state.afterClick.findIndex(event => event.type === "focusin" && event.id === "first"),
+      "focus precedes focusin");
+  }, "primary activation publishes focus and focusin exactly once");
+
+  promise_test(async () => {
+    const state = await lifecycle;
+    const textEvents = state.afterText.slice(state.afterClick.length);
+    assert_array_equals(
+      textEvents.map(event => event.type),
+      ["keydown", "beforeinput", "input", "keyup"],
+      "printable input event order");
+    assert_true(textEvents.every(event => event.id === "first"), "text events stay on the focused input");
+    assert_equals(textEvents[0].key, "Z", "keydown.key");
+    assert_equals(textEvents[0].code, "KeyZ", "keydown.code");
+    assert_equals(textEvents[0].keyCode, 90, "keydown.keyCode");
+    assert_equals(textEvents[1].data, "Z", "beforeinput.data");
+    assert_equals(textEvents[1].inputType, "insertText", "beforeinput.inputType");
+    assert_false(textEvents[1].isComposing, "beforeinput.isComposing");
+    assert_equals(textEvents[2].data, "Z", "input.data");
+    assert_equals(textEvents[2].inputType, "insertText", "input.inputType");
+    assert_equals(state.valueAfterText, "Z", "printable input mutates the control value");
+  }, "printable key input publishes keydown, beforeinput, input, and keyup with value mutation");
+
+  promise_test(async () => {
+    const state = await lifecycle;
+    const tabEvents = state.finalEvents.slice(state.afterText.length);
+    assert_equals(state.finalActive, second, "Tab transfers focus to the next control");
+    assert_equals(state.finalValue, "Z", "focus transfer preserves the edited value");
+    assert_equals(matching(tabEvents, "keydown", "first").length, 1, "Tab keydown targets the old focus");
+    assert_equals(matching(tabEvents, "blur", "first").length, 1, "old focus blur count");
+    assert_equals(matching(tabEvents, "focusout", "first").length, 1, "old focusout count");
+    assert_equals(matching(tabEvents, "focus", "second").length, 1, "new focus count");
+    assert_equals(matching(tabEvents, "focusin", "second").length, 1, "new focusin count");
+    assert_equals(matching(tabEvents, "keyup", "second").length, 1, "Tab keyup targets the new focus");
+    assert_less_than(tabEvents.findIndex(event => event.type === "blur" && event.id === "first"),
+      tabEvents.findIndex(event => event.type === "focusout" && event.id === "first"),
+      "blur precedes focusout");
+    assert_less_than(tabEvents.findIndex(event => event.type === "focus" && event.id === "second"),
+      tabEvents.findIndex(event => event.type === "focusin" && event.id === "second"),
+      "focus precedes focusin");
+  }, "Tab publishes blur/focusout and focus/focusin while transferring activeElement");
+</script>

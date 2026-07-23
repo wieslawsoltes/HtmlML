@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Detached canvas descendants leave the published scene</title>
+<style>
+  html, body { margin: 0; background: #fff; }
+  #chart { width: 320px; height: 160px; border: 4px solid #111; overflow: hidden; }
+  .pane, canvas { display: block; width: 320px; }
+  .pane { height: 80px; }
+</style>
+<div id="chart">
+  <div class="pane" id="target"><canvas id="main" width="320" height="80"></canvas></div>
+  <div class="pane" id="source"><canvas id="obsolete" width="320" height="80"></canvas></div>
+</div>
+<script>
+  const target = document.querySelector("#target");
+  const source = document.querySelector("#source");
+  const main = document.querySelector("#main");
+  const obsolete = document.querySelector("#obsolete");
+
+  const mainContext = main.getContext("2d");
+  mainContext.fillStyle = "#087f23";
+  mainContext.fillRect(0, 0, 320, 80);
+  const obsoleteContext = obsolete.getContext("2d");
+  obsoleteContext.fillStyle = "#d50000";
+  obsoleteContext.fillRect(0, 0, 320, 80);
+
+  source.remove();
+  target.style.height = "160px";
+  main.style.height = "160px";
+  main.height = 160;
+  mainContext.fillStyle = "#087f23";
+  mainContext.fillRect(0, 0, 320, 160);
+
+  if (source.parentNode !== null
+      || obsolete.parentNode !== source
+      || document.querySelector("#obsolete") !== null
+      || target.getBoundingClientRect().height !== 160) {
+    document.documentElement.style.background = "red";
+  }
+</script>

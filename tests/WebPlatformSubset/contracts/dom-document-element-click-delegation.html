@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Document element programmatic click delegation</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("documentElement exposes HTMLElement click activation", () => {
+    const root = document.documentElement;
+    assert(typeof root.click === "function", "documentElement.click is not callable");
+    assert(typeof HTMLElement.prototype.click === "function", "HTMLElement.prototype.click is not callable");
+    assert(HTMLElement.prototype.isPrototypeOf(root), "documentElement does not inherit HTMLElement.prototype");
+  });
+
+  test("a documentElement click bubbles through delegated document listeners", () => {
+    const root = document.documentElement;
+    const observations = [];
+    let received = null;
+    let pathDuringDispatch = null;
+
+    root.addEventListener("click", event => {
+      observations.push("root");
+      received = event;
+      assert(event.target === root, "root listener received the wrong target");
+      assert(event.currentTarget === root, "root listener received the wrong currentTarget");
+    }, { once: true });
+    document.addEventListener("click", event => {
+      observations.push("document");
+      assert(event.target === root, "document listener did not retain the root target");
+      assert(event.currentTarget === document, "document currentTarget was incorrect");
+      pathDuringDispatch = event.composedPath();
+    }, { once: true });
+    window.addEventListener("click", event => {
+      observations.push("window");
+      assert(event.target === root, "window listener did not retain the root target");
+      assert(event.currentTarget === window, "window currentTarget was incorrect");
+    }, { once: true });
+
+    root.click();
+
+    assert(observations.join(",") === "root,document,window",
+      `delegated click order was ${observations.join(",") || "empty"}`);
+    assert(received !== null && received.bubbles === true, "root click did not produce a bubbling event");
+    assert(pathDuringDispatch !== null, "delegated listener did not capture a composed path");
+    assert(pathDuringDispatch.includes(root), "composed path omitted documentElement");
+    assert(pathDuringDispatch.includes(document), "composed path omitted document");
+    assert(pathDuringDispatch.includes(window), "composed path omitted window");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

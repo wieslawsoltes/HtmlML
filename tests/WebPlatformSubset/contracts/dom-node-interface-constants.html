@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOM Node interface constants</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("Node exposes the standard node-type constants used by component guards", () => {
+    assert(Node.ELEMENT_NODE === 1, `ELEMENT_NODE was ${Node.ELEMENT_NODE}`);
+    assert(Node.TEXT_NODE === 3, `TEXT_NODE was ${Node.TEXT_NODE}`);
+    assert(Node.DOCUMENT_NODE === 9, `DOCUMENT_NODE was ${Node.DOCUMENT_NODE}`);
+    assert(Node.DOCUMENT_FRAGMENT_NODE === 11, `DOCUMENT_FRAGMENT_NODE was ${Node.DOCUMENT_FRAGMENT_NODE}`);
+  });
+
+  test("live nodes agree with their interface constants", () => {
+    assert(document.createElement("div").nodeType === Node.ELEMENT_NODE, "element nodeType mismatch");
+    assert(document.createTextNode("text").nodeType === Node.TEXT_NODE, "text nodeType mismatch");
+    assert(document.nodeType === Node.DOCUMENT_NODE, "document nodeType mismatch");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

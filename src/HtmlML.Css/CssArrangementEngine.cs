@@ -79,7 +79,8 @@ public sealed class CssArrangementEngine
 
         var flow = parent.Children
             .Where(child => !noBoxChildren.Contains(child)
-                            && child.Style.Display != CssLayoutDisplay.None
+                            && (child.Style.Display != CssLayoutDisplay.None
+                                || child.IsCollapsibleWhitespace)
                                    && child.Style.Position is CssLayoutPosition.Static or CssLayoutPosition.Relative)
             .Select(static (child, index) => new IndexedNode(child, index))
             .OrderBy(static item => item.Node.Style.Order)
@@ -120,7 +121,8 @@ public sealed class CssArrangementEngine
                     ArrangeBlock(
                         parent.Children
                             .Where(child => !noBoxChildren.Contains(child)
-                                            && child.Style.Display != CssLayoutDisplay.None)
+                                            && (child.Style.Display != CssLayoutDisplay.None
+                                                || child.IsCollapsibleWhitespace))
                             .ToArray(),
                         parent.Style,
                         content,
@@ -147,7 +149,8 @@ public sealed class CssArrangementEngine
                 ArrangeBlock(
                     parent.Children
                         .Where(child => !noBoxChildren.Contains(child)
-                                        && child.Style.Display != CssLayoutDisplay.None)
+                                        && (child.Style.Display != CssLayoutDisplay.None
+                                            || child.IsCollapsibleWhitespace))
                         .ToArray(),
                     parent.Style,
                     content,
@@ -274,8 +277,17 @@ public sealed class CssArrangementEngine
         var canCollapseTopMargin = CanCollapseBlockChildMargin(parentStyle, top: true, content.Size);
         var ownMargin = parentStyle.Margin.Resolve(content.Width, content.Height);
         CssLayoutNode? previous = null;
-        foreach (var child in children)
+        for (var childIndex = 0; childIndex < children.Count; childIndex++)
         {
+            var child = children[childIndex];
+            if (child.IsCollapsibleWhitespace)
+            {
+                if (HasInlineContentOnBothSides(children, childIndex))
+                {
+                    inlineX += child.CollapsedWhitespaceWidth;
+                }
+                continue;
+            }
             if (child.ForcesLineBreak)
             {
                 boxes.Add(child.Id, CreateBox(
@@ -310,6 +322,34 @@ public sealed class CssArrangementEngine
             var height = metrics.OuterHeight ?? child.IntrinsicSize.Height;
             width = Clamp(width, metrics.MinOuterWidth, metrics.MaxOuterWidth);
             height = Clamp(height, metrics.MinOuterHeight, metrics.MaxOuterHeight);
+            var usedMarginLeft = metrics.Margin.Left;
+            var usedMarginRight = metrics.Margin.Right;
+            if (!inline)
+            {
+                var leftIsAuto = child.Style.Margin.Left.IsAuto;
+                var rightIsAuto = child.Style.Margin.Right.IsAuto;
+                if (leftIsAuto || rightIsAuto)
+                {
+                    var remainingInlineSpace = Math.Max(
+                        0,
+                        content.Width - width
+                        - (leftIsAuto ? 0 : usedMarginLeft)
+                        - (rightIsAuto ? 0 : usedMarginRight));
+                    if (leftIsAuto && rightIsAuto)
+                    {
+                        usedMarginLeft = remainingInlineSpace / 2;
+                        usedMarginRight = remainingInlineSpace / 2;
+                    }
+                    else if (leftIsAuto)
+                    {
+                        usedMarginLeft = remainingInlineSpace;
+                    }
+                    else
+                    {
+                        usedMarginRight = remainingInlineSpace;
+                    }
+                }
+            }
             var lineBoxHeight = child.HasZeroLineHeight ? 0 : height;
 
             // The static position for an inline-level out-of-flow box is the
@@ -349,7 +389,7 @@ public sealed class CssArrangementEngine
                 continue;
             }
 
-            var x = inline ? inlineX + metrics.Margin.Left : content.X + metrics.Margin.Left;
+            var x = inline ? inlineX + usedMarginLeft : content.X + usedMarginLeft;
             var collapsedBefore = !inline
                 ? pendingBlockMargin is { } previousBottomMargin
                     ? CollapseVerticalMargins(previousBottomMargin, metrics.Margin.Top)
@@ -373,7 +413,7 @@ public sealed class CssArrangementEngine
 
             if (inline)
             {
-                inlineX += metrics.Margin.Left + width + metrics.Margin.Right;
+                inlineX += usedMarginLeft + width + usedMarginRight;
                 inlineLineHeight = Math.Max(
                     inlineLineHeight,
                     Math.Max(
@@ -922,6 +962,7 @@ public sealed class CssArrangementEngine
         foreach (var line in lines)
         {
             ResolveFlexibleMainSizes(line.Items, mainSize, mainGap);
+            ResolveFlexLineCrossSize(line, style, row);
             if (reverse)
             {
                 line.Items.Reverse();
@@ -986,6 +1027,8 @@ public sealed class CssArrangementEngine
                         (line.CrossSize - cross - item.CrossMarginStart - item.CrossMarginEnd) / 2
                         + item.CrossMarginStart,
                     CssLayoutAlignment.FlexEnd => line.CrossSize - cross - item.CrossMarginEnd,
+                    CssLayoutAlignment.Baseline when row =>
+                        line.FirstBaseline - ResolveFlexItemBaseline(item),
                     _ => item.CrossMarginStart
                 };
 
@@ -1007,6 +1050,44 @@ public sealed class CssArrangementEngine
             crossCursor += line.CrossSize + betweenLines;
         }
     }
+
+    private static void ResolveFlexLineCrossSize(
+        FlexLine line,
+        CssLayoutStyle containerStyle,
+        bool row)
+    {
+        if (!row)
+        {
+            return;
+        }
+
+        var baselineItems = line.Items
+            .Where(item => ResolveFlexItemAlignment(item, containerStyle) == CssLayoutAlignment.Baseline)
+            .ToArray();
+        if (baselineItems.Length == 0)
+        {
+            return;
+        }
+
+        var firstBaseline = baselineItems.Max(item =>
+            item.CrossMarginStart + ResolveFlexItemBaseline(item));
+        var afterBaseline = baselineItems.Max(item =>
+            item.CrossMarginEnd + Math.Max(0, item.Cross - ResolveFlexItemBaseline(item)));
+        line.FirstBaseline = firstBaseline;
+        line.CrossSize = Math.Max(line.CrossSize, firstBaseline + afterBaseline);
+    }
+
+    private static CssLayoutAlignment ResolveFlexItemAlignment(
+        FlexItem item,
+        CssLayoutStyle containerStyle)
+        => item.Node.Style.AlignSelf == CssLayoutAlignment.Auto
+            ? containerStyle.AlignItems
+            : item.Node.Style.AlignSelf;
+
+    private static double ResolveFlexItemBaseline(FlexItem item)
+        => item.Node.FirstBaseline is { } baseline && double.IsFinite(baseline)
+            ? Math.Max(0, baseline)
+            : item.Cross;
 
     private static List<FlexLine> BuildFlexLines(
         IReadOnlyList<FlexItem> items,
@@ -1626,5 +1707,6 @@ public sealed class CssArrangementEngine
     {
         internal List<FlexItem> Items { get; } = [];
         internal double CrossSize { get; set; }
+        internal double FirstBaseline { get; set; }
     }
 }

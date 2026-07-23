@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MouseEvent construction and dispatch</title>
+<body>
+<div id="parent"><button id="target">target</button></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("MouseEvent exposes browser constructor identity and initialized fields", () => {
+    assert(typeof MouseEvent === "function", "MouseEvent is not a constructor");
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      button: 1,
+      buttons: 4,
+      clientX: 12,
+      clientY: 34,
+      ctrlKey: true
+    });
+    assert(event instanceof MouseEvent, "event is not a MouseEvent instance");
+    assert(event instanceof Event, "MouseEvent does not inherit Event");
+    assert(event.type === "click" && event.bubbles && event.cancelable && event.composed,
+      "common EventInit fields were not initialized");
+    assert(event.button === 1 && event.buttons === 4, "mouse button fields were not initialized");
+    assert(event.clientX === 12 && event.clientY === 34, "mouse coordinates were not initialized");
+    assert(event.ctrlKey === true, "mouse modifier state was not initialized");
+  });
+
+  test("a constructed MouseEvent dispatches with target identity and bubbling", () => {
+    const target = document.getElementById("target");
+    const parent = document.getElementById("parent");
+    let observed = null;
+    parent.addEventListener("click", event => { observed = event; });
+    const event = new MouseEvent("click", { bubbles: true });
+    target.dispatchEvent(event);
+    assert(observed === event, "dispatch replaced the constructed MouseEvent object");
+    assert(observed.target === target, "MouseEvent target identity was not assigned");
+    assert(observed.currentTarget === null, "currentTarget was not cleared after dispatch");
+    assert(event.button === 0 && event.buttons === 0, "default mouse button state was not zero");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

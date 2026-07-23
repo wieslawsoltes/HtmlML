@@ -29,6 +29,16 @@ public interface IExternalVirtualBrowsingContext : IHtmlMlJavaScriptRealm
 }
 
 /// <summary>
+/// Optional engine-owned view of a frame Document. Returning this exact realm
+/// object preserves Window.document/contentDocument identity across a trusted
+/// same-origin context group without exposing engine types to the DOM layer.
+/// </summary>
+public interface IExternalVirtualBrowsingContextDocumentView
+{
+    object Document { get; }
+}
+
+/// <summary>
 /// Dispatches trusted DOM events to an externally owned top-level window.
 /// </summary>
 public interface IExternalWindowEventDispatcher

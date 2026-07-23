@@ -117,7 +117,8 @@ public enum CssLayoutAlignment
     Stretch,
     FlexStart,
     FlexEnd,
-    Center
+    Center,
+    Baseline
 }
 
 public enum CssLayoutLengthUnit
@@ -296,6 +297,12 @@ public sealed class CssLayoutNode
     public HtmlMlSize IntrinsicSize { get; init; }
 
     public bool IsText { get; init; }
+
+    /// <summary>
+    /// First typographic baseline measured from the node's border-box start edge.
+    /// A null value asks layout to synthesize the baseline from the border-box end edge.
+    /// </summary>
+    public double? FirstBaseline { get; init; }
 
     public bool IsCollapsibleWhitespace { get; init; }
 

@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Connected iframe initial document and document.write lifecycle</title>
+<body>
+<div id="host"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const host = document.getElementById("host");
+  const wrapper = document.createElement("div");
+  const frame = document.createElement("iframe");
+  wrapper.appendChild(frame);
+  host.appendChild(wrapper);
+  const frameWindow = frame.contentWindow;
+  const frameDocument = frame.contentDocument;
+
+  test("a connected source-less iframe synchronously exposes its initial context", () => {
+    assert(frameWindow, "contentWindow was null");
+    assert(frameDocument, "contentDocument was null");
+    assert(frameWindow.document === frameDocument,
+      "contentWindow.document and contentDocument had different identity");
+    assert(frameDocument.body, "the initial about:blank document had no body");
+  });
+
+  test("the initial document has browser-shaped window and location identity", () => {
+    assert(frameDocument.defaultView === frameWindow,
+      "document.defaultView did not expose the frame window");
+    assert(frameWindow.frameElement === frame,
+      "frameElement did not expose the owning iframe");
+    assert(frameWindow.location.href === "about:blank",
+      `initial frame location was ${JSON.stringify(frameWindow.location.href)}`);
+  });
+
+  test("document open write close replaces the initial body content", () => {
+    frameDocument.open();
+    frameDocument.write(
+      "<!doctype html><html><body><div id='written'>Hi</div>" +
+      "</bo" + "dy></html>");
+    frameDocument.close();
+    assert(frame.contentDocument === frameDocument,
+      "document replacement changed the connected contentDocument identity");
+    assert(frameDocument.querySelector("#written").textContent === "Hi",
+      "written body content was not parsed into the frame document");
+  });
+
+  test("computed style remains readable when the iframe owner is hidden", () => {
+    wrapper.style.display = "none";
+    assert(frameWindow.getComputedStyle(frameDocument.body).direction === "ltr",
+      `hidden frame body direction became ${JSON.stringify(
+        frameWindow.getComputedStyle(frameDocument.body).direction)}`);
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    hasWindow: Boolean(frameWindow),
+    hasDocument: Boolean(frameDocument),
+    href: frameWindow && frameWindow.location.href,
+    written: Boolean(frameDocument && frameDocument.querySelector("#written")),
+    hiddenDirection: frameWindow && frameDocument
+      ? frameWindow.getComputedStyle(frameDocument.body).direction
+      : null
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>
+</body>

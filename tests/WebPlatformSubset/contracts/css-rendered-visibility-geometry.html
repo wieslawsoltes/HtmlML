@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Rendered visibility and client rectangle filtering</title>
+<style>
+  .fixture { width: 40px; height: 20px; }
+  .stylesheet-hidden { display: none; }
+</style>
+<body>
+<button id="class-hidden" class="fixture stylesheet-hidden">class hidden</button>
+<a id="inline-hidden" class="fixture" style="display: none">inline hidden</a>
+<a id="visibility-hidden" class="fixture" style="visibility: hidden">visibility hidden</a>
+<a id="visible" class="fixture">visible</a>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("same-task delegated geometry reads observe a newly inserted stylesheet", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.innerHTML = [
+      "<button id='same-task-trigger'>open</button>",
+      "<div>",
+      "  <button class='same-task-item same-task-hidden'>hidden</button>",
+      "  <button id='same-task-visible' class='same-task-item'>visible</button>",
+      "</div>"
+    ].join("");
+    const style = document.createElement("style");
+    style.textContent = ".same-task-hidden { display: none; }";
+    host.insertBefore(style, host.firstChild);
+
+    const trigger = document.getElementById("same-task-trigger");
+    let selected = null;
+    trigger.addEventListener("click", () => {
+      const items = Array.from(host.querySelectorAll(".same-task-item")).filter(element =>
+        element.getClientRects().length > 0
+        && getComputedStyle(element).getPropertyValue("visibility") === "visible");
+      selected = items[0] || null;
+      selected?.focus();
+    });
+    trigger.click();
+
+    assert(selected?.id === "same-task-visible",
+      "delegated same-task filtering selected a stylesheet-hidden item");
+    assert(document.activeElement === selected,
+      "delegated same-task filtering did not focus the rendered item");
+  });
+
+  test("display none elements have no client rectangles", () => {
+    const classHidden = document.getElementById("class-hidden");
+    const inlineHidden = document.getElementById("inline-hidden");
+    const visible = document.getElementById("visible");
+
+    assert(getComputedStyle(classHidden).display === "none", "stylesheet display:none did not compute");
+    assert(classHidden.getClientRects().length === 0, "stylesheet-hidden element exposed a client rectangle");
+    assert(classHidden.getBoundingClientRect().width === 0 && classHidden.getBoundingClientRect().height === 0,
+      "stylesheet-hidden element exposed non-zero bounding geometry");
+    assert(getComputedStyle(inlineHidden).display === "none", "inline display:none did not compute");
+    assert(inlineHidden.getClientRects().length === 0, "inline-hidden element exposed a client rectangle");
+    assert(visible.getClientRects().length > 0, "rendered element exposed no client rectangle");
+  });
+
+  test("visibility hidden remains laid out but is not visibly eligible", () => {
+    const hidden = document.getElementById("visibility-hidden");
+    assert(hidden.getClientRects().length > 0, "visibility:hidden element lost its layout rectangle");
+    assert(getComputedStyle(hidden).getPropertyValue("visibility") === "hidden",
+      "visibility:hidden did not reach computed style");
+  });
+
+  test("a dynamically inserted style filters newly inserted hidden items", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.innerHTML = [
+      "<button id='dynamic-hidden' class='fixture dynamic-hidden'>hidden</button>",
+      "<button id='dynamic-visible' class='fixture'>visible</button>"
+    ].join("");
+    const style = document.createElement("style");
+    style.textContent = ".dynamic-hidden { display: none; }";
+    host.insertBefore(style, host.firstChild);
+    const hidden = document.getElementById("dynamic-hidden");
+    const visible = document.getElementById("dynamic-visible");
+    assert(getComputedStyle(hidden).display === "none", "dynamic stylesheet did not compute display:none");
+    assert(hidden.getClientRects().length === 0, "dynamically styled hidden item exposed a client rectangle");
+    assert(visible.getClientRects().length > 0, "dynamic visible item exposed no client rectangle");
+  });
+
+  test("stylesheet teardown and reinsertion preserves rendered-item filtering", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+
+    for (let cycle = 0; cycle < 3; cycle++) {
+      host.innerHTML = [
+        "<div class='menu'>",
+        "  <button class='item lifecycle-hidden'>class hidden</button>",
+        "  <a class='item' style='display: none'>inline hidden</a>",
+        "  <a class='item' style='visibility: hidden'>visibility hidden</a>",
+        `  <a id='lifecycle-visible-${cycle}' class='item' href='#visible-${cycle}'>visible</a>`,
+        "</div>"
+      ].join("");
+      const style = document.createElement("style");
+      style.textContent = ".lifecycle-hidden { display: none; }";
+      host.insertBefore(style, host.firstChild);
+
+      const items = Array.from(host.querySelectorAll(".item")).filter(element =>
+        element.getClientRects().length > 0
+        && getComputedStyle(element).getPropertyValue("visibility") === "visible");
+      assert(items.length === 1,
+        `cycle ${cycle} exposed ${items.length} rendered items instead of one`);
+      assert(items[0].id === `lifecycle-visible-${cycle}`,
+        `cycle ${cycle} retained a hidden item in the rendered-item set`);
+      items[0].focus();
+      assert(document.activeElement === items[0],
+        `cycle ${cycle} did not focus the sole rendered item`);
+
+      const classHidden = host.querySelector(".lifecycle-hidden");
+      style.remove();
+      assert(getComputedStyle(classHidden).display !== "none",
+        `cycle ${cycle} retained a removed stylesheet in the cascade`);
+      assert(classHidden.getClientRects().length > 0,
+        `cycle ${cycle} retained removed-stylesheet geometry suppression`);
+
+      host.innerHTML = "";
+    }
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Infinite rotation keyframes preserve display-frame cadence</title>
+<style>
+  @keyframes spin { to { transform: rotate(1turn); } }
+  #spinner {
+    width: 20px;
+    height: 20px;
+    animation: spin 900ms linear infinite;
+  }
+</style>
+<body><div id="spinner"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const finish = (error, diagnostics = []) => {
+    state.diagnostics = diagnostics;
+    state.results.push({
+      name: "infinite rotate keyframes publish dense continuous host frames",
+      status: error ? "FAIL" : "PASS",
+      message: error ? String(error && error.message || error) : null,
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = error
+      ? { status: 1, message: state.results[0].message, stack: state.results[0].stack }
+      : { status: 0, message: null, stack: null };
+    state.complete = true;
+  };
+  const angle = node => {
+    const value = getComputedStyle(node).transform;
+    if (value === "none") return 0;
+    const numbers = (value.match(/-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) || [])
+      .map(Number);
+    let degrees;
+    if (value.includes("rotate(")) degrees = numbers.at(-1);
+    else {
+      if (numbers.length < 4) throw new Error("computed transform is not a matrix: " + value);
+      degrees = Math.atan2(numbers[1], numbers[0]) * 180 / Math.PI;
+    }
+    return (degrees + 360) % 360;
+  };
+
+  try {
+    const spinner = document.getElementById("spinner");
+    const style = getComputedStyle(spinner);
+    const metadata = [style.animationName, style.animationDuration,
+      style.animationTimingFunction, style.animationIterationCount];
+    const expected = ["spin", "900ms", "linear", "infinite"];
+    if (JSON.stringify(metadata) !== JSON.stringify(expected)) {
+      throw new Error("computed animation metadata differs: " + JSON.stringify(metadata));
+    }
+    requestAnimationFrame(start => {
+      const frames = [];
+      const sample = timestamp => {
+        try {
+          frames.push({ elapsed: timestamp - start, angle: angle(spinner) });
+          if (timestamp - start < 1100) {
+            requestAnimationFrame(sample);
+            return;
+          }
+          if (frames.length < 50) {
+            throw new Error("fewer than 50 animation frames: " + frames.length);
+          }
+          const distinct = new Set(frames.map(frame => frame.angle.toFixed(2)));
+          if (distinct.size < 40) {
+            throw new Error("rotation has only " + distinct.size + " distinct angle samples");
+          }
+          let maximumGap = 0;
+          let maximumStep = 0;
+          let wraps = 0;
+          for (let index = 1; index < frames.length; index++) {
+            const gap = frames[index].elapsed - frames[index - 1].elapsed;
+            const step = (frames[index].angle - frames[index - 1].angle + 360) % 360;
+            maximumGap = Math.max(maximumGap, gap);
+            maximumStep = Math.max(maximumStep, step);
+            if (frames[index].angle < frames[index - 1].angle) wraps++;
+            if (step > 15) {
+              throw new Error("rotation jumped or reversed by " + step + " degrees");
+            }
+          }
+          if (maximumGap > 25) {
+            throw new Error("animation frame gap exceeded 25ms: " + maximumGap);
+          }
+          if (wraps < 1) throw new Error("infinite rotation did not wrap during sampling");
+          finish(null, [JSON.stringify({ metadata, frameCount: frames.length,
+            distinctAngles: distinct.size, maximumGap, maximumStep, wraps,
+            first: frames.slice(0, 4), last: frames.slice(-4) })]);
+        } catch (error) { finish(error, [JSON.stringify(frames)]); }
+      };
+      requestAnimationFrame(sample);
+    });
+  } catch (error) { finish(error); }
+</script>

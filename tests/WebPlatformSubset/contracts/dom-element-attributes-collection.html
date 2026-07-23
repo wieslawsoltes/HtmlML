@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element attributes collection primitives</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function equal(actual, expected, message) {
+    if (!Object.is(actual, expected)) throw new Error(`${message}: expected ${expected}, got ${actual}`);
+  }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("attributes exposes ordered name and value records", () => {
+    const element = document.createElement("button");
+    element.setAttribute("id", "action");
+    element.setAttribute("data-state", "ready");
+    const values = Array.from(element.attributes).map(attribute => `${attribute.name}=${attribute.value}`);
+    equal(values.join(","), "id=action,data-state=ready", "attribute records");
+  });
+
+  test("attributes reflects additions and removals on each read", () => {
+    const element = document.createElement("div");
+    element.setAttribute("title", "first");
+    equal(element.attributes.length, 1, "initial attribute length");
+    element.setAttribute("aria-label", "second");
+    equal(element.attributes.length, 2, "expanded attribute length");
+    element.removeAttribute("title");
+    equal(element.attributes.length, 1, "reduced attribute length");
+    equal(element.attributes[0].nodeName, "aria-label", "attribute nodeName");
+    equal(element.attributes[0].nodeValue, "second", "attribute nodeValue");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

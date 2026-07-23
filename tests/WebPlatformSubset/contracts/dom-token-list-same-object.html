@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOMTokenList same-object identity and method shadowing</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("classList returns the same DOMTokenList object for one element", () => {
+    const node = document.createElement("div");
+    assert(node.classList === node.classList, "repeated classList reads must preserve object identity");
+  });
+
+  test("an own method shadow remains observable through later classList reads", () => {
+    const node = document.createElement("div");
+    node.className = "shown";
+    const tokens = node.classList;
+    const originalContains = tokens.contains;
+    let calls = 0;
+    tokens.contains = function(token) {
+      calls++;
+      return originalContains.call(this, token);
+    };
+    assert(node.classList.contains("shown"), "shadowed contains must preserve token behavior");
+    assert(calls === 1, `shadowed contains was called ${calls} times`);
+  });
+
+  test("the same token list stays live across class and tree mutations", () => {
+    const node = document.createElement("div");
+    document.body.appendChild(node);
+    const tokens = node.classList;
+    node.className = "before";
+    assert(tokens.contains("before"), "token list must reflect className writes");
+    node.remove();
+    document.body.appendChild(node);
+    node.setAttribute("class", "after");
+    assert(node.classList === tokens, "detach and reconnect must preserve the token-list object");
+    assert(tokens.contains("after") && !tokens.contains("before"),
+      "retained token list must remain live after reconnection");
+  });
+
+  test("different elements own different token-list objects", () => {
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    assert(first.classList !== second.classList, "token-list identity must be scoped to its element");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

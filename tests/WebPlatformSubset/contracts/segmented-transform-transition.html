@@ -1,0 +1,125 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Segmented indicators interpolate translate and scale on animation frames</title>
+<style>
+  #indicator {
+    position: fixed;
+    left: 10px;
+    top: 20px;
+    width: 100px;
+    height: 4px;
+    transform: translateX(0px) scaleX(.5);
+    transform-origin: left;
+    transition: transform 120ms linear;
+  }
+  #indicator.selected {
+    transform: translateX(80px) scaleX(1);
+  }
+</style>
+<body>
+<div id="indicator"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function matrixOf(node) {
+    const value = getComputedStyle(node).getPropertyValue("transform");
+    if (!value.startsWith("matrix(") || !value.endsWith(")")) {
+      throw new Error("computed transform was not a 2D matrix: " + value);
+    }
+    return value.slice(7, -1).split(",").map(Number);
+  }
+
+  function assertNear(actual, expected, tolerance, message) {
+    if (Math.abs(actual - expected) > tolerance) {
+      throw new Error(message + ": expected " + expected + ", got " + actual);
+    }
+  }
+
+  function finish(error) {
+    state.results.push({
+      name: "segmented indicator publishes temporal translate and scale progression",
+      status: error ? "FAIL" : "PASS",
+      message: error ? String(error && error.message || error) : null,
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = error
+      ? { status: 1, message: state.results[0].message, stack: state.results[0].stack }
+      : { status: 0, message: null, stack: null };
+    state.complete = true;
+  }
+
+  try {
+    const indicator = document.getElementById("indicator");
+    const initial = matrixOf(indicator);
+    assertNear(initial[0], .5, .001, "initial scaleX");
+    assertNear(initial[4], 0, .001, "initial translateX");
+
+    requestAnimationFrame(startTimestamp => {
+      try {
+        indicator.classList.add("selected");
+        const samples = [];
+        const sample = timestamp => {
+          try {
+            const matrix = matrixOf(indicator);
+            const rect = indicator.getBoundingClientRect();
+            samples.push({
+              elapsed: timestamp - startTimestamp,
+              scale: matrix[0],
+              translate: matrix[4],
+              x: rect.x,
+              width: rect.width
+            });
+            if (timestamp - startTimestamp < 140) {
+              requestAnimationFrame(sample);
+              return;
+            }
+
+            const intermediate = samples.filter(value =>
+              value.scale > .501 && value.scale < .999
+              && value.translate > .01 && value.translate < 79.99);
+            if (intermediate.length < 2) {
+              throw new Error("fewer than two strictly intermediate frames: "
+                + JSON.stringify(samples));
+            }
+            for (let index = 1; index < samples.length; index++) {
+              if (samples[index].scale + .001 < samples[index - 1].scale
+                  || samples[index].translate + .01 < samples[index - 1].translate) {
+                throw new Error("transition progress was not monotonic: "
+                  + JSON.stringify(samples));
+              }
+            }
+            const midpoint = intermediate.reduce((best, value) =>
+              Math.abs(value.elapsed - 60) < Math.abs(best.elapsed - 60) ? value : best);
+            assertNear(midpoint.scale, .75, .08,
+              "mid-transition scaleX at " + midpoint.elapsed + "ms; samples="
+                + JSON.stringify(samples));
+            assertNear(midpoint.translate, 40, 13,
+              "mid-transition translateX at " + midpoint.elapsed + "ms; samples="
+                + JSON.stringify(samples));
+
+            const final = samples[samples.length - 1];
+            assertNear(final.scale, 1, .001, "completed scaleX");
+            assertNear(final.translate, 80, .01, "completed translateX");
+            assertNear(final.x, 90, .01, "completed client x");
+            assertNear(final.width, 100, .01, "completed client width");
+            finish(null);
+          } catch (error) {
+            finish(error);
+          }
+        };
+        requestAnimationFrame(sample);
+      } catch (error) {
+        finish(error);
+      }
+    });
+  } catch (error) {
+    finish(error);
+  }
+</script>
+</body>

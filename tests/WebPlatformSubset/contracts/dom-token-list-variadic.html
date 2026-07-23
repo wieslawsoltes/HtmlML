@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOMTokenList variadic mutation</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("classList.add accepts every token argument", () => {
+    const node = document.createElement("div");
+    node.classList.add("one", "two", "three");
+    assert(node.classList.contains("one") && node.classList.contains("two") && node.classList.contains("three"),
+      `variadic add produced '${node.className}'`);
+    assert(node.className === "one two three" && node.getAttribute("class") === "one two three",
+      `class attribute reflection produced '${node.className}' / '${node.getAttribute("class")}'`);
+  });
+
+  test("classList.remove removes every token argument atomically", () => {
+    const node = document.createElement("div");
+    node.className = "one two three keep";
+    node.classList.remove("one", "two", "three");
+    assert(node.className === "keep", `variadic remove produced '${node.className}'`);
+  });
+
+  test("classList.toggle honors an explicit force", () => {
+    const node = document.createElement("div");
+    assert(node.classList.toggle("active", true) === true && node.classList.contains("active"), "forced add");
+    assert(node.classList.toggle("active", false) === false && !node.classList.contains("active"), "forced remove");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

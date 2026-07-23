@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Script raw text does not create style elements</title>
+<style>
+  html, body { display: block; visibility: visible; margin: 0; padding: 0; }
+  #raw-text-target { display: block; width: 40px; height: 10px; }
+</style>
+<body>
+<div id="raw-text-target"></div>
+<script id="data-block" type="application/json">{"fragment":"<style>#raw-text-target{display:none}</style>"}</script>
+<script>
+  const styleLikeJavaScriptString = "<style>body{display:none;visibility:hidden}</style>";
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  test("style-like markup in executable script raw text remains inert", () => {
+    assert(styleLikeJavaScriptString.includes("body{display:none"),
+      "JavaScript string content changed while loading the document");
+    const computed = getComputedStyle(document.body);
+    assert(computed.display === "block", `body display was ${computed.display}`);
+    assert(computed.visibility === "visible", `body visibility was ${computed.visibility}`);
+    assert(document.body.getClientRects().length > 0, "body lost its rendered box");
+  });
+
+  test("non-JavaScript script raw text remains a data block", () => {
+    const dataBlock = document.getElementById("data-block");
+    assert(dataBlock && dataBlock.tagName === "SCRIPT", "inert data script was removed");
+    assert(dataBlock.type === "application/json", `data script type was ${dataBlock && dataBlock.type}`);
+    assert(dataBlock.textContent.includes("#raw-text-target{display:none}"),
+      "data script raw text was reparsed as document markup");
+  });
+
+  test("style-like markup in inert script data does not enter the cascade", () => {
+    const target = document.getElementById("raw-text-target");
+    const computed = getComputedStyle(target);
+    assert(computed.display === "block", `target display was ${computed.display}`);
+    assert(target.offsetWidth === 40 && target.offsetHeight === 10,
+      `target offsets were ${target.offsetWidth}x${target.offsetHeight}`);
+    assert(target.getClientRects().length > 0, "target lost its client rectangle");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

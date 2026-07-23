@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>URL-backed SVG background longhands preserve sizing and layout</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #badge {
+    width: 120px;
+    height: 40px;
+    padding-left: 56px;
+    background-image: url("css/css-backgrounds/background-size/support/50x50-green.svg");
+    background-repeat: no-repeat;
+    background-position: 0 2px;
+    background-size: 48px auto;
+  }
+</style>
+<body>
+<div id="badge">Background artwork must not replace or displace content</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function test(name, callback) {
+    try {
+      callback();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  const badge = document.getElementById("badge");
+  const style = getComputedStyle(badge);
+  const rect = badge.getBoundingClientRect();
+
+  test("URL-backed SVG background longhands survive the cascade", () => {
+    assert(style.backgroundImage.includes("50x50-green.svg"),
+      "background-image was not retained: " + JSON.stringify(style.backgroundImage));
+    assert(style.backgroundRepeat === "no-repeat",
+      "background-repeat was not no-repeat: " + JSON.stringify(style.backgroundRepeat));
+    assert(style.backgroundPosition === "0% 2px"
+        || style.backgroundPosition === "0px 2px"
+        || style.backgroundPosition === "0 2px",
+      "background-position was not 0 2px: " + JSON.stringify(style.backgroundPosition));
+    assert(style.backgroundSize === "48px auto",
+      "background-size was not 48px auto: " + JSON.stringify(style.backgroundSize));
+  });
+
+  test("background artwork does not alter the principal box geometry", () => {
+    assert(rect.width === 176 && rect.height === 40,
+      "background image changed the principal box: " + rect.width + "x" + rect.height);
+    const paddingLeft = style.getPropertyValue("padding-left");
+    assert(paddingLeft === "56px",
+      "the content clearance was not preserved: " + JSON.stringify(paddingLeft));
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>
+</body>

@@ -15,6 +15,7 @@
     <PackageVersion Include="AngleSharp.Css" Version="1.0.0-beta.157" />
     <!-- 3.4.1 stays on SkiaSharp 2.88.9, matching Avalonia 11.3.x. -->
     <PackageVersion Include="SkiaSharp" Version="2.88.9" />
+    <PackageVersion Include="SkiaSharp.HarfBuzz" Version="2.88.9" />
     <PackageVersion Include="Svg.Skia" Version="3.4.1" />
     <PackageVersion Include="Tmds.DBus.Protocol" Version="0.21.3" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />

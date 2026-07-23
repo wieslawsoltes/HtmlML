@@ -51,6 +51,30 @@ public sealed class CssMeasurementEngineTests
     }
 
     [Fact]
+    public void CollapsedWhitespaceBetweenInlineSiblingsContributesOneAdvance()
+    {
+        var root = new CssLayoutNode(1, new CssLayoutStyle { NoWrap = true });
+        root.Add(Inline(2));
+        root.Add(new CssLayoutNode(3, new CssLayoutStyle { Display = CssLayoutDisplay.Inline })
+        {
+            IsText = true,
+            IsCollapsibleWhitespace = true,
+            CollapsedWhitespaceWidth = 5
+        });
+        root.Add(Inline(4));
+        var measurer = new RecordingMeasurer(
+            (2, new HtmlMlSize(20, 10)),
+            (4, new HtmlMlSize(20, 10)));
+
+        var desired = new CssMeasurementEngine().Measure(
+            root,
+            new HtmlMlSize(100, 100),
+            measurer);
+
+        Assert.Equal(new HtmlMlSize(45, 10), desired);
+    }
+
+    [Fact]
     public void PercentageAgainstInfiniteAvailableSizeIsMeasuredAsAuto()
     {
         var root = new CssLayoutNode(1);

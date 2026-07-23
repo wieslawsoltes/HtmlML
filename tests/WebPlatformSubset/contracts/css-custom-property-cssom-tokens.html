@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS custom-property CSSOM tokens and dynamic stylesheet lifecycle</title>
+<div id="fixture"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function trimCssWhitespace(value) {
+    return value.replace(/^[\u0009\u000a\u000c\u000d\u0020]+|[\u0009\u000a\u000c\u000d\u0020]+$/g, "");
+  }
+
+  const fixture = document.getElementById("fixture");
+  fixture.innerHTML =
+    "<style id='dynamic-style'>" +
+    ".custom-property-probe {" +
+    "--basic: value;" +
+    "--quoted: 'quoted value';" +
+    "--Token: upper;" +
+    "--token: lower;" +
+    "--css-space:\f\r\n\t spaced \f\r\n\t;" +
+    "--vertical-tab:\u000bpreserved\u000b;" +
+    "--blank:;" +
+    "}" +
+    "</style>" +
+    "<div id='target' class='custom-property-probe'></div>";
+
+  const target = document.getElementById("target");
+  const dynamicStyle = document.getElementById("dynamic-style");
+
+  test("a STYLE created through HTML fragment parsing contributes custom properties", () => {
+    const computed = getComputedStyle(target);
+    assert(trimCssWhitespace(computed.getPropertyValue("--basic")) === "value",
+      "dynamic stylesheet custom property was not computed");
+    assert(trimCssWhitespace(computed.getPropertyValue("--quoted")) === "'quoted value'",
+      "quoted custom-property tokens were not preserved");
+  });
+
+  test("custom-property names remain case-sensitive in stylesheet and inline CSSOM state", () => {
+    const computed = getComputedStyle(target);
+    assert(trimCssWhitespace(computed.getPropertyValue("--Token")) === "upper",
+      "stylesheet --Token value was not distinct");
+    assert(trimCssWhitespace(computed.getPropertyValue("--token")) === "lower",
+      "stylesheet --token value was not distinct");
+
+    target.style.setProperty("--InlineToken", "inline-upper");
+    target.style.setProperty("--inlinetoken", "inline-lower");
+    assert(target.style.getPropertyValue("--InlineToken") === "inline-upper",
+      "inline --InlineToken value was overwritten");
+    assert(target.style.getPropertyValue("--inlinetoken") === "inline-lower",
+      "inline --inlinetoken value was overwritten");
+  });
+
+  test("computed serialization trims only CSS whitespace", () => {
+    const computed = getComputedStyle(target);
+    assert(trimCssWhitespace(computed.getPropertyValue("--css-space")) === "spaced",
+      "CSS whitespace did not serialize around the token");
+    assert(trimCssWhitespace(computed.getPropertyValue("--vertical-tab")) ===
+      "\u000bpreserved\u000b", "vertical-tab tokens were incorrectly discarded");
+  });
+
+  test("blank and missing custom properties serialize as empty values", () => {
+    const computed = getComputedStyle(target);
+    assert(computed.getPropertyValue("--blank") === "",
+      "blank custom property did not serialize as the empty string");
+    assert(computed.getPropertyValue("--missing") === "",
+      "missing custom property did not serialize as the empty string");
+    assert(computed["--blank"] === undefined,
+      "blank custom property was incorrectly exposed as an IDL named property");
+    assert(computed["--missing"] === undefined,
+      "missing custom property was incorrectly exposed as an IDL named property");
+  });
+
+  test("a STYLE moved from a detached fragment activates after connection", () => {
+    const detached = document.createElement("div");
+    detached.innerHTML =
+      "<style>.detached-style-target { --detached-token: active; }</style>";
+    const movedStyle = detached.firstChild;
+    assert(movedStyle && movedStyle.localName === "style",
+      "detached fragment did not retain its STYLE element");
+    fixture.appendChild(movedStyle);
+    assert(movedStyle.isConnected,
+      "moved STYLE did not become connected");
+    assert(movedStyle.textContent.indexOf("--detached-token") !== -1,
+      "moved STYLE lost its text content");
+    const movedTarget = document.createElement("div");
+    movedTarget.className = "detached-style-target";
+    fixture.appendChild(movedTarget);
+    assert(trimCssWhitespace(
+      getComputedStyle(movedTarget).getPropertyValue("--detached-token")) === "active",
+      "connected STYLE moved from a detached fragment was not activated");
+  });
+
+  test("custom-property mutation invalidates computed values synchronously", () => {
+    dynamicStyle.textContent =
+      ".custom-property-probe { --basic: updated; --vertical-tab:\u000bchanged\u000b; }";
+    const computed = getComputedStyle(target);
+    assert(trimCssWhitespace(computed.getPropertyValue("--basic")) === "updated",
+      "dynamic custom-property value remained stale");
+    assert(trimCssWhitespace(computed.getPropertyValue("--vertical-tab")) ===
+      "\u000bchanged\u000b", "dynamic token-preserving value remained stale");
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    inlineUpper: target.style.getPropertyValue("--InlineToken"),
+    inlineLower: target.style.getPropertyValue("--inlinetoken"),
+    basic: getComputedStyle(target).getPropertyValue("--basic"),
+    verticalTabCodePoints: Array.from(
+      getComputedStyle(target).getPropertyValue("--vertical-tab"),
+      character => character.charCodeAt(0))
+  }));
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

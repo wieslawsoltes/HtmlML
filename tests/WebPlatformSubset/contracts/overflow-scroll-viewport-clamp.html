@@ -1,0 +1,107 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Overflow viewport extent, clipping, and bounded scroll offsets</title>
+<style>
+  html, body { margin: 0; }
+  #scroller {
+    width: 120px;
+    height: 60px;
+    overflow: auto;
+  }
+  #content {
+    position: relative;
+    width: 100px;
+    height: 200px;
+  }
+  #tail {
+    position: absolute;
+    left: 0;
+    top: 160px;
+    width: 100px;
+    height: 40px;
+  }
+</style>
+<div id="scroller"><div id="content"><div id="tail"></div></div></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const result = {
+    name: "overflow viewport stays finite, clips descendants, and clamps every scroll lifecycle"
+  };
+  (async () => {
+  try {
+    const scroller = document.getElementById("scroller");
+    const content = document.getElementById("content");
+    const tail = document.getElementById("tail");
+    const failures = [];
+    const equal = (actual, expected, label) => {
+      if (actual !== expected) failures.push(label + ": expected " + expected + ", got " + actual);
+    };
+    const truthy = (condition, label) => {
+      if (!condition) failures.push(label);
+    };
+    const renderingOpportunity = () => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    let scrollEvents = 0;
+    scroller.addEventListener("scroll", event => {
+      truthy(event.target === scroller, "scroll event target");
+      scrollEvents++;
+    });
+
+    equal(scroller.clientHeight, 60, "finite viewport height");
+    equal(scroller.scrollHeight, 200, "finite content extent");
+    equal(scroller.scrollHeight - scroller.clientHeight, 140, "finite maximum scroll offset");
+    truthy(document.elementFromPoint(10, 170) !== tail,
+      "off-viewport descendant was not clipped from hit testing");
+
+    scroller.scrollTop = 1e6;
+    await renderingOpportunity();
+    equal(scroller.scrollTop, 140, "positive overflow clamps to maximum");
+    equal(scrollEvents, 1, "first clamped mutation dispatches once");
+    truthy(document.elementFromPoint(10, 30) === tail,
+      "bounded scroll did not reveal the clipped descendant");
+
+    scroller.scrollTop = 1e6;
+    await renderingOpportunity();
+    equal(scroller.scrollTop, 140, "repeated overflow remains bounded");
+    equal(scrollEvents, 1, "unchanged saturated offset does not dispatch again");
+
+    scroller.scrollTop = -100;
+    await renderingOpportunity();
+    equal(scroller.scrollTop, 0, "negative overflow clamps to zero");
+    equal(scrollEvents, 2, "reverse clamped mutation dispatches once");
+
+    scroller.scrollTop = 140;
+    content.style.height = "80px";
+    tail.style.top = "40px";
+    document.body.offsetWidth;
+    equal(scroller.scrollHeight, 80, "content shrink updates the extent");
+    equal(scroller.scrollTop, 20, "content shrink clamps an existing offset to the new maximum");
+
+    content.style.height = "200px";
+    tail.style.top = "160px";
+    scroller.scrollTop = 70;
+    equal(scroller.scrollTop, 70, "in-range lifecycle remains usable");
+    equal(scroller.scrollHeight, 200, "content re-expansion restores extent");
+    if (failures.length) throw new Error(failures.join("; "));
+    result.status = "PASS";
+    result.message = null;
+    result.stack = null;
+    state.diagnostics = [JSON.stringify({
+      clientHeight: scroller.clientHeight,
+      scrollHeight: scroller.scrollHeight,
+      scrollTop: scroller.scrollTop,
+      scrollEvents
+    })];
+    state.harness = { status: 0, message: null, stack: null };
+  } catch (error) {
+    result.status = "FAIL";
+    result.message = String(error && error.message || error);
+    result.stack = error && error.stack ? String(error.stack) : null;
+    state.harness = { status: 1, message: result.message, stack: result.stack };
+  }
+  state.results.push(result);
+  state.complete = true;
+  })();
+</script>

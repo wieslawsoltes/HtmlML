@@ -9,6 +9,59 @@ namespace HtmlML.Css;
 /// </summary>
 internal static class CssComputedValueNormalizer
 {
+    internal static bool TryExpandGridPlacementShorthand(
+        string propertyName,
+        string value,
+        out string rowStart,
+        out string columnStart,
+        out string rowEnd,
+        out string columnEnd)
+    {
+        rowStart = columnStart = rowEnd = columnEnd = "auto";
+        var normalizedName = propertyName.Trim().ToLowerInvariant();
+        if (normalizedName is not ("grid-area" or "grid-row" or "grid-column"))
+        {
+            return false;
+        }
+
+        var components = SplitTopLevelSlashComponents(value);
+        var maximumComponents = normalizedName == "grid-area" ? 4 : 2;
+        if (components.Count is 0 || components.Count > maximumComponents
+            || components.Any(string.IsNullOrWhiteSpace))
+        {
+            return false;
+        }
+
+        var singleComponent = components.Count == 1
+            ? components[0].Trim().ToLowerInvariant()
+            : string.Empty;
+        if (singleComponent is "inherit" or "initial" or "unset" or "revert" or "revert-layer")
+        {
+            rowStart = columnStart = rowEnd = columnEnd = singleComponent;
+            return true;
+        }
+
+        if (normalizedName == "grid-area")
+        {
+            rowStart = components[0];
+            columnStart = components.Count > 1 ? components[1] : "auto";
+            rowEnd = components.Count > 2 ? components[2] : "auto";
+            columnEnd = components.Count > 3 ? components[3] : "auto";
+            return true;
+        }
+
+        if (normalizedName == "grid-row")
+        {
+            rowStart = components[0];
+            rowEnd = components.Count > 1 ? components[1] : "auto";
+            return true;
+        }
+
+        columnStart = components[0];
+        columnEnd = components.Count > 1 ? components[1] : "auto";
+        return true;
+    }
+
     internal static void ExpandShorthands(CssPropertyValueStore values)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -36,7 +89,6 @@ internal static class CssComputedValueNormalizer
 
         ExpandFont(values);
         NormalizeLineHeightForAbsoluteFont(values);
-        NormalizeFontRelativeBoxLengths(values);
 
         if (values.TryGetValue("inset", out var inset))
         {
@@ -64,6 +116,12 @@ internal static class CssComputedValueNormalizer
                 values["column-gap"] = tokens.Count > 1 ? tokens[1] : tokens[0];
             }
         }
+
+        // Shorthands must be expanded before simple em values are converted:
+        // the font-relative unit belongs to each computed longhand, and layout
+        // must never silently retain the preceding percentage/length when a
+        // newly authored em value is otherwise valid.
+        NormalizeFontRelativeBoxLengths(values);
 
         if (values.TryGetValue("flex-flow", out var flexFlow))
         {
@@ -213,8 +271,12 @@ internal static class CssComputedValueNormalizer
 
         foreach (var property in new[]
                  {
+                     "top", "right", "bottom", "left",
+                     "width", "height",
+                     "min-width", "min-height", "max-width", "max-height",
                      "margin-top", "margin-right", "margin-bottom", "margin-left",
-                     "padding-top", "padding-right", "padding-bottom", "padding-left"
+                     "padding-top", "padding-right", "padding-bottom", "padding-left",
+                     "row-gap", "column-gap", "flex-basis"
                  })
         {
             if (!values.TryGetValue(property, out var value)) continue;
@@ -232,6 +294,31 @@ internal static class CssComputedValueNormalizer
 
             values[property] = (fontSizePixels * em).ToString("0.###", CultureInfo.InvariantCulture) + "px";
         }
+    }
+
+    private static List<string> SplitTopLevelSlashComponents(string value)
+    {
+        var components = new List<string>(4);
+        var start = 0;
+        var parenthesisDepth = 0;
+        for (var index = 0; index < value.Length; index++)
+        {
+            switch (value[index])
+            {
+                case '(':
+                    parenthesisDepth++;
+                    break;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    break;
+                case '/' when parenthesisDepth == 0:
+                    components.Add(value[start..index].Trim());
+                    start = index + 1;
+                    break;
+            }
+        }
+        components.Add(value[start..].Trim());
+        return components;
     }
 
     private static void ExpandBorderDeclaration(CssPropertyValueStore values, string shorthand, string? side)

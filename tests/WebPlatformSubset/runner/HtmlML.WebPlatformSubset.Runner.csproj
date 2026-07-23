@@ -17,6 +17,7 @@
     <PackageReference Include="Avalonia.Headless" />
     <PackageReference Include="Avalonia.Skia" />
     <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.HarfBuzz" />
   </ItemGroup>
 
   <Import Project="..\..\..\build\HtmlMlClearScriptV8Native.targets" />

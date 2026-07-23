@@ -1,0 +1,108 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Dialog layout preserves its footer, typography, distributed columns, and elevation</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #dialog {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    height: 200px;
+    width: 300px;
+  }
+  #header, #footer { flex: 0 0 auto; height: 60px; }
+  #content { overflow: auto; }
+  #tall-content { height: 200px; }
+  #weekdays { display: flex; justify-content: space-around; width: 262px; }
+  #time-control {
+    display: inline-block;
+    font-size: 14px;
+    line-height: 18px;
+    max-width: 100px;
+  }
+  #time-shell { display: flex; }
+  #time-input { font-size: inherit; line-height: inherit; width: 100%; }
+  #time-icon { flex: 0 0 18px; width: 18px; }
+</style>
+<body>
+<div id="dialog">
+  <div id="header"></div>
+  <div id="content"><div id="tall-content"></div></div>
+  <div id="footer"></div>
+</div>
+<div id="weekdays">
+  <span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span><span>Su</span>
+</div>
+<div id="time-control">
+  <div id="time-shell"><input id="time-input" value="00:00"><span id="time-icon"></span></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  try {
+    const dialog = document.getElementById("dialog");
+    const content = document.getElementById("content");
+    const footer = document.getElementById("footer");
+    const weekdays = [...document.querySelectorAll("#weekdays span")];
+    const input = document.getElementById("time-input");
+    const dialogRect = dialog.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    const footerRect = footer.getBoundingClientRect();
+    const centers = weekdays.map(node => {
+      const rect = node.getBoundingClientRect();
+      return rect.left + rect.width / 2;
+    });
+    const gaps = centers.slice(1).map((center, index) => center - centers[index]);
+    const inputStyle = getComputedStyle(input);
+    const inputRect = input.getBoundingClientRect();
+
+    assert(contentRect.height === 80,
+      "the scrollable flex body did not shrink to leave room for the footer: " + contentRect.height);
+    assert(content.scrollHeight === 200,
+      "the flex body lost its scrollable content extent: " + content.scrollHeight);
+    assert(footerRect.bottom <= dialogRect.bottom,
+      "the footer escaped the dialog boundary");
+    assert(gaps.length === 6 && gaps.every(gap => gap >= 34 && gap <= 42),
+      "space-around did not distribute all seven weekday columns: " + gaps.join(","));
+    assert(inputRect.width >= 70 && inputRect.height >= 18,
+      "the text input lost its replaced intrinsic width: " + inputRect.width + "x" + inputRect.height);
+    assert(inputStyle.fontSize === "14.000000px" || inputStyle.fontSize === "14px",
+      "font-size:inherit did not resolve from the control: " + inputStyle.fontSize);
+    assert(inputStyle.lineHeight === "18.000000px" || inputStyle.lineHeight === "18px",
+      "line-height:inherit did not resolve from the control: " + inputStyle.lineHeight);
+    assert(getComputedStyle(dialog).boxShadow !== "none",
+      "the dialog has no computed outer box shadow");
+
+    state.results.push({
+      name: "dialog footer, calendar distribution, input typography, and elevation remain intact",
+      status: "PASS",
+      message: null,
+      stack: null
+    });
+    state.harness = { status: 0, message: null, stack: null };
+  } catch (error) {
+    state.results.push({
+      name: "dialog footer, calendar distribution, input typography, and elevation remain intact",
+      status: "FAIL",
+      message: String(error && error.message || error),
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = {
+      status: 1,
+      message: state.results[0].message,
+      stack: state.results[0].stack
+    };
+  }
+  state.complete = true;
+</script>
+</body>
