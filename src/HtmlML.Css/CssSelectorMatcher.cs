@@ -43,7 +43,8 @@ public readonly record struct CssSelectorMatchOptions(
     bool IgnorePseudoElements = false,
     bool IgnoreChildListPseudos = false,
     bool IgnoreDynamicPseudos = false,
-    string? PseudoElementName = null);
+    string? PseudoElementName = null,
+    ICssSelectorNode? ScopeNode = null);
 
 public static class CssSelectorMatcher
 {
@@ -195,6 +196,9 @@ public static class CssSelectorMatcher
         => pseudo.Name switch
         {
             "root" => node.IsDocumentElement,
+            "scope" => options.ScopeNode is null
+                ? node.IsDocumentElement
+                : ReferenceEquals(node, options.ScopeNode),
             "empty" => node.ChildElementCount == 0 && string.IsNullOrEmpty(node.TextContent),
             "first-child" => node.PreviousElementSibling is null,
             "last-child" => node.NextElementSibling is null,

@@ -1,0 +1,224 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed DOM, attribute, timer, and storage primitives</title>
+<link id="element-link" rel="preload">
+<style id="element-style">#parsed-div { width: 12px; }</style>
+<body id="parsed-body" class="parsed-class" lang="en" dir="ltr" data-theme="dark" data-widget-options="bounded">
+<h3 id="parsed-heading">Heading</h3>
+<p id="parsed-paragraph">Paragraph <span id="parsed-span">span</span></p>
+<div id="parsed-div" style="height: 13px"><button id="parsed-button" tabindex="3" title="action" name="action" data-tooltip-hotkey="K">Button</button></div>
+<label id="parsed-label" for="parsed-input">Label</label><input id="parsed-input">
+<ul id="parsed-list"><li id="parsed-item">Item</li></ul>
+<table id="parsed-table"><thead id="parsed-head"><tr><th id="parsed-th" colspan="2" rowspan="1">Head</th></tr></thead><tbody id="parsed-tbody"><tr><td>Cell</td></tr></tbody></table>
+<svg id="parsed-svg" width="40" height="30" viewBox="0 0 40 30"><g id="parsed-g"><path id="parsed-path" d="M0 0h10v10z" fill="currentColor"></path><circle id="parsed-circle" cx="20" cy="10" r="4"></circle><rect id="parsed-rect" x="28" y="4" width="8" height="8"></rect></g></svg>
+<canvas id="parsed-canvas" width="32" height="24"></canvas>
+<iframe id="parsed-iframe" title="inert child"></iframe>
+<img id="parsed-image" src="fixture-data.svg" alt="fixture">
+<script id="element-script" type="application/json" defer>{}</script>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  async function asyncTest(name, body) {
+    try {
+      await body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  (async () => {
+    test("HTML and SVG parser constructs the observed generic element families", () => {
+      const ids = [
+        "parsed-body", "parsed-heading", "parsed-paragraph", "parsed-span", "parsed-div",
+        "parsed-button", "parsed-label", "parsed-list", "parsed-item", "parsed-th",
+        "parsed-head", "parsed-tbody", "parsed-svg", "parsed-g", "parsed-path",
+        "parsed-circle", "parsed-rect", "parsed-canvas", "parsed-iframe",
+        "element-style", "element-script", "parsed-image"
+      ];
+      for (const id of ids) {
+        assert(document.getElementById(id), `parser did not construct ${id}`);
+      }
+      assert(document.getElementById("parsed-path").tagName.toLowerCase() === "path", "SVG path tag identity was lost");
+      assert(document.getElementById("parsed-g").contains(document.getElementById("parsed-circle")), "SVG group ancestry was lost");
+      assert(document.getElementById("parsed-tbody").contains(document.querySelector("#parsed-tbody td")), "table body/cell ancestry was lost");
+      assert(document.getElementById("parsed-canvas").getContext("2d"), "parsed canvas did not expose its 2D context");
+      const link = document.createElement("link");
+      link.id = "dynamic-link";
+      document.body.appendChild(link);
+      assert(link.tagName.toLowerCase() === "link" && document.getElementById("dynamic-link") === link,
+        "createElement(link) did not construct a connected link element");
+      const script = document.createElement("script");
+      script.id = "dynamic-script";
+      document.body.appendChild(script);
+      assert(script.tagName.toLowerCase() === "script" && document.getElementById("dynamic-script") === script,
+        "createElement(script) did not construct a connected script element");
+    });
+
+    test("parsed attributes retain identity, dimensions, metadata, and DOM properties", () => {
+      const body = document.getElementById("parsed-body");
+      const button = document.getElementById("parsed-button");
+      const svg = document.getElementById("parsed-svg");
+      const canvas = document.getElementById("parsed-canvas");
+      assert(body.className === "parsed-class" && body.getAttribute("lang") === "en" && body.getAttribute("dir") === "ltr", "body parser attributes were not retained");
+      assert(body.dataset.theme === "dark" && body.dataset.widgetOptions === "bounded", "parsed data attributes did not reach dataset");
+      assert(button.id === "parsed-button" && button.tabIndex === 3
+        && button.getAttribute("title") === "action" && button.getAttribute("name") === "action",
+        "parsed control attributes were not retained or reflected");
+      assert(button.getAttribute("data-tooltip-hotkey") === "K",
+        "parsed data-tooltip-hotkey attribute was not retained");
+      assert(document.getElementById("parsed-div").getAttribute("style") === "height: 13px"
+        && getComputedStyle(document.getElementById("parsed-div")).height === "13px",
+        "parsed style attribute did not reach authored and computed state");
+      assert(svg.getAttribute("width") === "40" && svg.getAttribute("height") === "30", "parsed SVG dimensions were lost");
+      assert(canvas.width === 32 && canvas.height === 24, "parsed canvas dimensions were not reflected as numeric properties");
+      assert(document.getElementById("parsed-th").getAttribute("colspan") === "2"
+        && document.getElementById("parsed-th").getAttribute("rowspan") === "1", "parsed table span attributes were lost");
+      const inertScript = document.getElementById("element-script");
+      assert(inertScript.hasAttribute("defer"), "parsed inert-script defer attribute was not retained");
+      assert(document.getElementById("parsed-image").getAttribute("src") === "fixture-data.svg",
+        "parsed image src attribute was not retained");
+    });
+
+    test("setAttribute and removeAttribute round-trip generic and data attribute names", () => {
+      const node = document.createElement("div");
+      document.body.appendChild(node);
+      const values = {
+        id: "dynamic-id", class: "dynamic-class", title: "dynamic-title", tabindex: "4",
+        name: "dynamic-name", width: "64", height: "48", colspan: "2", rowspan: "1",
+        "data-role": "menuitem", "data-copy-value": "copy", "data-label": "label",
+        "data-icon-cell": "icon", "data-overflow-tooltip-text": "overflow",
+        "data-id": "42", "data-title": "title", "data-disabled": "false",
+        "data-name": "name", "data-qa-id": "qa", "data-tooltip": "tip",
+        "data-webpack": "chunk", "data-day": "22", "data-tooltip-show-on-focus": "true",
+        "data-row-time": "09:00", "data-active": "true", "data-value": "value",
+        "data-tooltip-hotkey": "K", "data-study-input-name": "study",
+        "data-focus-trap": "true", "data-tooltip-delay": "100",
+        "data-submenu-arrow": "true", "data-type": "kind",
+        "data-outside-boundary-for": "dialog", "data-mouse-click-auto-blur": "true",
+        "data-dragg-area": "true", "data-dialog-name": "settings",
+        "data-parent-name": "parent", "data-is-fake-main-panel": "false",
+        "data-icon-checkmark": "true", "data-query-type": "symbol",
+        "data-is-chart-toolbar-component": "true", "data-initialized": "true",
+        "data-allow-watchlist-navigation": "false"
+      };
+      for (const [name, value] of Object.entries(values)) {
+        node.setAttribute(name, value);
+        assert(node.getAttribute(name) === value, `${name} did not round-trip through setAttribute`);
+      }
+      assert(node.id === "dynamic-id" && node.className === "dynamic-class" && node.tabIndex === 4,
+        "id/class/tabindex property reflection did not follow setAttribute");
+      node.removeAttribute("title");
+      assert(!node.hasAttribute("title") && node.getAttribute("title") === null,
+        "removeAttribute(title) did not clear the attribute");
+    });
+
+    test("dataset writes and reads the observed camel-case key shapes", () => {
+      const node = document.createElement("div");
+      const values = {
+        qaId: "qa", status: "ready", id: "7", testIdValueTitle: "value-title",
+        tooltipHotkey: "K", name: "name", entityId: "entity", theme: "dark"
+      };
+      for (const [key, value] of Object.entries(values)) {
+        node.dataset[key] = value;
+        assert(node.dataset[key] === value, `dataset.${key} did not round-trip`);
+      }
+      assert(node.getAttribute("data-test-id-value-title") === "value-title", "camel-case dataset key did not map to a hyphenated attribute");
+    });
+
+    test("removeEventListener prevents later generic custom-event dispatch", () => {
+      const node = document.createElement("div");
+      let count = 0;
+      const listener = () => count++;
+      node.addEventListener("component-update", listener);
+      node.removeEventListener("component-update", listener);
+      node.dispatchEvent(new Event("component-update"));
+      assert(count === 0, `removed listener ran ${count} times`);
+      const customTypes = [
+        "common-tooltip-update", "dialog-open", "dialog-close",
+        "roving-tabindex:main-element", "keyboard-navigation-activation",
+        "active-descendant-focus", "active-descendant-blur", "innerWindowLoad"
+      ];
+      for (const type of customTypes) {
+        let observed = false;
+        node.addEventListener(type, () => observed = true, { once: true });
+        node.dispatchEvent(new Event(type));
+        assert(observed, `generic dispatch lost custom type ${type}`);
+      }
+    });
+
+    test("Storage getItem observes a preceding same-origin write", () => {
+      sessionStorage.setItem("htmlml-observed-runtime", "retained");
+      assert(sessionStorage.getItem("htmlml-observed-runtime") === "retained", "Storage.getItem did not return the written value");
+      sessionStorage.removeItem("htmlml-observed-runtime");
+    });
+
+    await asyncTest("performance clock, timeout, interval, clearTimer, and animation frame advance", async () => {
+      const start = performance.now();
+      assert(Number.isFinite(start), "Performance.now did not return a finite number");
+      let canceledTimeoutRan = false;
+      const canceledTimeout = setTimeout(() => canceledTimeoutRan = true, 0);
+      clearTimeout(canceledTimeout);
+      let intervalCount = 0;
+      const interval = setInterval(() => intervalCount++, 1);
+      const frameTimestamp = await new Promise((resolve, reject) => {
+        const guard = setTimeout(() => reject(new Error("requestAnimationFrame did not fire")), 1000);
+        requestAnimationFrame(timestamp => {
+          clearTimeout(guard);
+          resolve(timestamp);
+        });
+      });
+      await new Promise(resolve => setTimeout(resolve, 12));
+      clearInterval(interval);
+      assert(Number.isFinite(frameTimestamp), "animation-frame timestamp was not finite");
+      assert(performance.now() >= start, "Performance.now moved backwards");
+      assert(!canceledTimeoutRan, "clearTimeout did not suppress the callback");
+      assert(intervalCount > 0, "setInterval did not invoke its callback");
+    });
+
+    const failure = state.results.find(result => result.status !== "PASS");
+    state.harness = failure
+      ? { status: 1, message: failure.message, stack: failure.stack }
+      : { status: 0, message: null, stack: null };
+    state.complete = true;
+  })().catch(error => {
+    state.results.push({
+      name: "observed DOM/runtime contract completes",
+      status: "FAIL",
+      message: String(error && error.message || error),
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = { status: 1, message: state.results.at(-1).message, stack: state.results.at(-1).stack };
+    state.complete = true;
+  });
+</script>
+</body>

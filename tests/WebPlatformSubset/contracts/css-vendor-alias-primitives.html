@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Observed CSS transform and grid gap aliases</title>
+<link rel="match" href="css-vendor-alias-primitives-ref.html">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: white; }
+  .transform-stage { width: 100px; height: 30px; background: rgb(255, 0, 0); }
+  .translated {
+    width: 20px;
+    height: 20px;
+    background: rgb(0, 160, 0);
+    -moz-transform: translateX(30px);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 20px 20px;
+    grid-gap: 10px;
+    width: 50px;
+    height: 20px;
+    background: rgb(255, 0, 0);
+  }
+  .grid > div { width: 20px; height: 20px; background: rgb(0, 0, 192); }
+</style>
+<div class="transform-stage"><div class="translated"></div></div>
+<div class="grid"><div></div><div></div></div>

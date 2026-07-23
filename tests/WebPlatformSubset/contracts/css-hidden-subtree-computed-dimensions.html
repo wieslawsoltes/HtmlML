@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Computed dimensions survive hidden-ancestor box suppression</title>
+<div id="hidden-parent" style="display: none">
+  <input id="text-input" type="text" style="height: 20px">
+  <textarea id="textarea" style="height: 20px"></textarea>
+  <div id="block" style="height: 20px"></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const parent = document.getElementById("hidden-parent");
+  const input = document.getElementById("text-input");
+  const textarea = document.getElementById("textarea");
+  const block = document.getElementById("block");
+
+  test("authored heights remain available beneath a hidden ancestor", () => {
+    assert(input.style.height === "20px",
+      `text input authored height became ${JSON.stringify(input.style.height)}`);
+    assert(textarea.style.height === "20px",
+      `textarea authored height became ${JSON.stringify(textarea.style.height)}`);
+    assert(block.style.height === "20px",
+      `block authored height became ${JSON.stringify(block.style.height)}`);
+  });
+
+  test("computed heights remain specified beneath a hidden ancestor", () => {
+    assert(getComputedStyle(input).height === "20px",
+      `text input computed height became ${JSON.stringify(getComputedStyle(input).height)}`);
+    assert(getComputedStyle(textarea).height === "20px",
+      `textarea computed height became ${JSON.stringify(getComputedStyle(textarea).height)}`);
+    assert(getComputedStyle(block).height === "20px",
+      `block computed height became ${JSON.stringify(getComputedStyle(block).height)}`);
+  });
+
+  function assertSuppressed(element, label) {
+    const rect = element.getBoundingClientRect();
+    assert(element.offsetWidth === 0 && element.offsetHeight === 0,
+      `${label} offsets were ${element.offsetWidth}x${element.offsetHeight}`);
+    assert(rect.width === 0 && rect.height === 0,
+      `${label} rectangle was ${rect.width}x${rect.height}`);
+    assert(element.getClientRects().length === 0,
+      `${label} published ${element.getClientRects().length} client rectangles`);
+  }
+
+  test("a hidden ancestor suppresses every descendant box", () => {
+    assertSuppressed(input, "text input");
+    assertSuppressed(textarea, "textarea");
+    assertSuppressed(block, "block");
+  });
+
+  function assertRevealed(element, label) {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    assert(style.height === "20px",
+      `${label} revealed computed height became ${JSON.stringify(style.height)}`);
+    assert(rect.width > 0 && rect.height > 0,
+      `${label} revealed rectangle was ${rect.width}x${rect.height}`);
+    assert(element.getClientRects().length === 1,
+      `${label} revealed with ${element.getClientRects().length} client rectangles`);
+  }
+
+  test("revealing the ancestor restores boxes without changing computed heights", () => {
+    parent.style.display = "block";
+    assertRevealed(input, "text input");
+    assertRevealed(textarea, "textarea");
+    assertRevealed(block, "block");
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    input: {
+      authoredHeight: input.style.height,
+      computedHeight: getComputedStyle(input).height,
+      width: input.getBoundingClientRect().width,
+      height: input.getBoundingClientRect().height
+    },
+    textarea: {
+      authoredHeight: textarea.style.height,
+      computedHeight: getComputedStyle(textarea).height,
+      width: textarea.getBoundingClientRect().width,
+      height: textarea.getBoundingClientRect().height
+    },
+    block: {
+      authoredHeight: block.style.height,
+      computedHeight: getComputedStyle(block).height,
+      width: block.getBoundingClientRect().width,
+      height: block.getBoundingClientRect().height
+    }
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

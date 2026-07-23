@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element sibling navigation across alternating controls</title>
+<body>
+<div id="host">
+  <button id="toggle-one">one</button>
+  <div id="menu-one" class="menu">one menu</div>
+  <button id="toggle-two">two</button>
+  <div id="menu-two" class="menu">two menu</div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  const toggleOne = document.getElementById("toggle-one");
+  const toggleTwo = document.getElementById("toggle-two");
+  const menuOne = document.getElementById("menu-one");
+  const menuTwo = document.getElementById("menu-two");
+
+  test("nextElementSibling identifies each following element independently", () => {
+    assert(toggleOne.nextElementSibling === menuOne, "first toggle did not resolve its following menu");
+    assert(toggleTwo.nextElementSibling === menuTwo, "second toggle did not resolve its following menu");
+    assert(menuOne.nextElementSibling === toggleTwo, "middle sibling traversal skipped the second toggle");
+  });
+
+  test("previousElementSibling is the inverse relationship", () => {
+    assert(menuOne.previousElementSibling === toggleOne, "first menu did not resolve its preceding toggle");
+    assert(menuTwo.previousElementSibling === toggleTwo, "second menu did not resolve its preceding toggle");
+    assert(toggleTwo.previousElementSibling === menuOne, "middle reverse traversal skipped the first menu");
+  });
+
+  test("sibling identity survives state-class mutations", () => {
+    toggleOne.classList.add("open");
+    menuOne.classList.add("open");
+    assert(toggleTwo.nextElementSibling === menuTwo, "first state mutation changed the second relationship");
+    menuOne.classList.remove("open");
+    toggleOne.classList.remove("open");
+    toggleTwo.classList.add("open");
+    assert(toggleTwo.nextElementSibling === menuTwo, "second state mutation changed its following menu");
+    assert(toggleTwo.nextElementSibling.matches(".menu"), "following menu did not match its selector");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

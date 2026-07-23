@@ -44,6 +44,7 @@ internal sealed class RunArtifact
     public required string WptRevision { get; init; }
     public required string Runtime { get; init; }
     public required string Engine { get; init; }
+    public string? NativeEngineIdentity { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
     public required TimeSpan Duration { get; init; }
     public required string Selection { get; init; }

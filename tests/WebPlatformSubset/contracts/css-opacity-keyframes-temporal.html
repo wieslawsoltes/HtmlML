@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Opacity keyframes publish staggered continuous host-clock frames</title>
+<style>
+  @keyframes dot-pulse {
+    0%, to { opacity: 1; }
+    60% { opacity: .4; }
+    30% { opacity: .2; }
+  }
+  .dot {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    background: currentColor;
+    animation: dot-pulse 1000ms linear infinite;
+  }
+  #a { animation-delay: 100ms; }
+  #b { animation-delay: 300ms; }
+  #c { animation-delay: 450ms; }
+</style>
+<body><i id="a" class="dot"></i><i id="b" class="dot"></i><i id="c" class="dot"></i>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const finish = (error, diagnostics = []) => {
+    state.diagnostics = diagnostics;
+    state.results.push({
+      name: "staggered infinite opacity keyframes expose smooth temporal paint",
+      status: error ? "FAIL" : "PASS",
+      message: error ? String(error && error.message || error) : null,
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = error
+      ? { status: 1, message: state.results[0].message, stack: state.results[0].stack }
+      : { status: 0, message: null, stack: null };
+    state.complete = true;
+  };
+
+  try {
+    const dots = [...document.querySelectorAll(".dot")];
+    const style = getComputedStyle(dots[0]);
+    const metadata = [style.animationName, style.animationDuration,
+      style.animationDelay, style.animationTimingFunction, style.animationIterationCount];
+    const expected = ["dot-pulse", "1000ms", "100ms", "linear", "infinite"];
+    if (JSON.stringify(metadata) !== JSON.stringify(expected)) {
+      throw new Error("computed animation metadata differs: " + JSON.stringify(metadata));
+    }
+    const frames = [];
+    requestAnimationFrame(start => {
+      const sample = timestamp => {
+        try {
+          frames.push({
+            elapsed: timestamp - start,
+            opacity: dots.map(dot => Number(getComputedStyle(dot).opacity))
+          });
+          if (timestamp - start < 1250) {
+            requestAnimationFrame(sample);
+            return;
+          }
+          if (frames.length < 60) {
+            throw new Error("fewer than 60 animation frames: " + frames.length);
+          }
+          for (let dot = 0; dot < 3; dot++) {
+            const distinct = new Set(frames.map(frame => frame.opacity[dot].toFixed(3)));
+            if (distinct.size < 20) {
+              throw new Error("dot " + dot + " has only " + distinct.size
+                + " distinct opacity samples");
+            }
+          }
+          const gaps = frames.slice(1).map((frame, index) => frame.elapsed - frames[index].elapsed);
+          const maximumGap = Math.max(...gaps);
+          if (maximumGap > 25) {
+            throw new Error("animation frame gap exceeded 25ms: " + maximumGap);
+          }
+          const staggered = frames.some(frame =>
+            Math.max(...frame.opacity) - Math.min(...frame.opacity) > .15);
+          if (!staggered) throw new Error("animation delays never produced staggered opacity");
+          finish(null, [JSON.stringify({ metadata, frameCount: frames.length, maximumGap,
+            first: frames.slice(0, 4), last: frames.slice(-4) })]);
+        } catch (error) { finish(error, [JSON.stringify(frames)]); }
+      };
+      requestAnimationFrame(sample);
+    });
+  } catch (error) { finish(error); }
+</script>

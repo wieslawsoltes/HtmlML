@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Transform-origin keywords cascade independently from inline transforms</title>
+<style>
+  .probe { position: fixed; width: 100px; height: 20px; }
+  #leading { transform-origin: left; }
+  #middle { transform-origin: center; }
+  #trailing { width: 20px; transform-origin: right; }
+  #reversed { transform-origin: bottom left; }
+</style>
+<body>
+<div id="leading" class="probe"></div>
+<div id="middle" class="probe"></div>
+<div id="trailing" class="probe"></div>
+<div id="reversed" class="probe"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assertEquals(actual, expected, message) {
+    if (actual !== expected) {
+      throw new Error(message + ": expected " + expected + ", got " + actual);
+    }
+  }
+
+  try {
+    const leading = document.getElementById("leading");
+    const middle = document.getElementById("middle");
+    const trailing = document.getElementById("trailing");
+    const reversed = document.getElementById("reversed");
+
+    // Component renderers commonly animate transform inline while retaining
+    // transform-origin in a class. They are separate CSS properties and must
+    // not suppress one another in the cascade.
+    for (const node of [leading, middle, trailing, reversed]) {
+      node.style.transform = "translateX(20px) scaleX(0.8)";
+    }
+
+    assertEquals(getComputedStyle(leading).transformOrigin, "0px 10px",
+      "left keyword or stylesheet/inline cascade was lost");
+    assertEquals(getComputedStyle(middle).transformOrigin, "50px 10px",
+      "center keyword was not resolved against the border box");
+    assertEquals(getComputedStyle(trailing).transformOrigin, "20px 10px",
+      "right keyword was not resolved against the border box");
+    assertEquals(getComputedStyle(reversed).getPropertyValue("transform-origin"), "0px 20px",
+      "vertical-first two-keyword syntax was not normalized");
+
+    state.results.push({
+      name: "segmented indicator transform origins survive independent inline transforms",
+      status: "PASS",
+      message: null,
+      stack: null
+    });
+    state.harness = { status: 0, message: null, stack: null };
+  } catch (error) {
+    state.results.push({
+      name: "segmented indicator transform origins survive independent inline transforms",
+      status: "FAIL",
+      message: String(error && error.message || error),
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = {
+      status: 1,
+      message: state.results[0].message,
+      stack: state.results[0].stack
+    };
+  }
+  state.complete = true;
+</script>
+</body>

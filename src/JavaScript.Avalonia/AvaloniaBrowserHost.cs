@@ -796,6 +796,7 @@ public class AvaloniaBrowserHost :
     {
         private readonly AvaloniaBrowserHost _host;
         private NavigatorJs? _navigator;
+        private ScreenJs? _screen;
 
         public WindowJs(AvaloniaBrowserHost host) => _host = host;
 
@@ -807,7 +808,7 @@ public class AvaloniaBrowserHost :
         public double innerHeight => GetClientHeight();
         public double outerWidth => GetClientWidth();
         public double outerHeight => GetClientHeight();
-        public ScreenJs screen => new(GetClientWidth(), GetClientHeight());
+        public ScreenJs screen => _screen ??= new(GetClientWidth, GetClientHeight);
         public MediaQueryListJs matchMedia(string query) => new(query, GetClientWidth, GetClientHeight, () => devicePixelRatio);
 
         public int setTimeout(object callback) => setTimeout(callback, 0);
@@ -892,17 +893,23 @@ public class AvaloniaBrowserHost :
 
     public sealed class ScreenJs
     {
+        private readonly Func<double> _width;
+        private readonly Func<double> _height;
+
         public ScreenJs(double width, double height)
+            : this(() => width, () => height)
         {
-            this.width = Math.Max(0, width);
-            this.height = Math.Max(0, height);
-            availWidth = this.width;
-            availHeight = this.height;
         }
-        public double width { get; }
-        public double height { get; }
-        public double availWidth { get; }
-        public double availHeight { get; }
+
+        internal ScreenJs(Func<double> width, Func<double> height)
+        {
+            _width = width;
+            _height = height;
+        }
+        public double width => Math.Max(0, _width());
+        public double height => Math.Max(0, _height());
+        public double availWidth => width;
+        public double availHeight => height;
         public int colorDepth { get; } = 24;
         public int pixelDepth { get; } = 24;
     }

@@ -12,7 +12,7 @@ namespace HtmlML.Css;
 internal sealed class CssCustomPropertyMap : IReadOnlyDictionary<string, string>
 {
     private const int MaximumOverlayDepth = 16;
-    private static readonly StringComparer s_comparer = StringComparer.OrdinalIgnoreCase;
+    private static readonly StringComparer s_comparer = StringComparer.Ordinal;
     private static readonly bool s_disableContentHashFastPath =
         string.Equals(
             Environment.GetEnvironmentVariable("HTMLML_DISABLE_CUSTOM_PROPERTY_HASH"),
@@ -59,6 +59,11 @@ internal sealed class CssCustomPropertyMap : IReadOnlyDictionary<string, string>
             return Empty;
         }
 
+        // Callers may supply a dictionary with an ordinary CSS-property
+        // comparer. Custom-property names are case-sensitive, so retain an
+        // immutable ordinal snapshot rather than inheriting the caller's
+        // comparer or subsequent mutations.
+        values = new Dictionary<string, string>(values, s_comparer);
         var contentHash = 0;
         foreach (var pair in values)
         {
@@ -339,7 +344,7 @@ internal sealed class CssDeclaredPropertySet : IReadOnlySet<string>
             return ContentEquals(set);
         }
 
-        var comparison = new HashSet<string>(other, StringComparer.OrdinalIgnoreCase);
+        var comparison = new HashSet<string>(other, CssPropertyNameComparer.Instance);
         return comparison.Count == Count && this.All(comparison.Contains);
     }
 
@@ -367,5 +372,5 @@ internal sealed class CssDeclaredPropertySet : IReadOnlySet<string>
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    private HashSet<string> AsHashSet() => new(this, StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> AsHashSet() => new(this, CssPropertyNameComparer.Instance);
 }

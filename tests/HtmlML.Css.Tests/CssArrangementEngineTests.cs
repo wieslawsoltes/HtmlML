@@ -52,6 +52,25 @@ public sealed class CssArrangementEngineTests
     }
 
     [Fact]
+    public void CollapsedWhitespaceBetweenInlineSiblingsOffsetsFollowingFragment()
+    {
+        var root = new CssLayoutNode(1);
+        root.Add(Inline(2, 20, 10));
+        root.Add(new CssLayoutNode(3, new CssLayoutStyle { Display = CssLayoutDisplay.Inline })
+        {
+            IsText = true,
+            IsCollapsibleWhitespace = true,
+            CollapsedWhitespaceWidth = 5
+        });
+        root.Add(Inline(4, 20, 10));
+
+        var snapshot = new CssArrangementEngine().Arrange(root, new HtmlMlSize(100, 20));
+
+        Assert.Equal(new HtmlMlRect(0, 0, 20, 10), snapshot[2].BorderBox);
+        Assert.Equal(new HtmlMlRect(25, 0, 20, 10), snapshot[4].BorderBox);
+    }
+
+    [Fact]
     public void FlexGrowJustificationAlignmentAndOrderArePortable()
     {
         var root = new CssLayoutNode(1, new CssLayoutStyle
@@ -74,6 +93,34 @@ public sealed class CssArrangementEngineTests
 
         Assert.Equal(new HtmlMlRect(0, 25, 40, 10), snapshot[3].BorderBox);
         Assert.Equal(new HtmlMlRect(160, 20, 40, 20), snapshot[2].BorderBox);
+    }
+
+    [Fact]
+    public void FlexBaselineAlignsTextAndSynthesizedNonTextBaselines()
+    {
+        var root = new CssLayoutNode(1, new CssLayoutStyle
+        {
+            Display = CssLayoutDisplay.Flex,
+            AlignItems = CssLayoutAlignment.Baseline
+        });
+        root.Add(new CssLayoutNode(2, new CssLayoutStyle
+        {
+            Width = CssLayoutLength.Pixels(30)
+        })
+        {
+            IntrinsicSize = new HtmlMlSize(30, 15),
+            FirstBaseline = 13
+        });
+        root.Add(new CssLayoutNode(3, new CssLayoutStyle
+        {
+            Height = CssLayoutLength.Pixels(7),
+            FlexGrow = 1
+        }));
+
+        var snapshot = new CssArrangementEngine().Arrange(root, new HtmlMlSize(360, 15));
+
+        Assert.Equal(new HtmlMlRect(0, 0, 30, 15), snapshot[2].BorderBox);
+        Assert.Equal(new HtmlMlRect(30, 6, 330, 7), snapshot[3].BorderBox);
     }
 
     [Fact]

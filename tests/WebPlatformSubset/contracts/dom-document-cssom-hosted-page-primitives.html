@@ -1,0 +1,151 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Hosted page Document and CSSOM primitives</title>
+<a id="release-link" href="/release">Release</a>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  test("DOMImplementation creates an isolated usable HTML document", () => {
+    const implementation = document.implementation;
+    assert(implementation === document.implementation,
+      "document.implementation identity was not stable");
+    assert(typeof implementation.createHTMLDocument === "function",
+      "createHTMLDocument was absent");
+    const detached = implementation.createHTMLDocument("Release notes");
+    assert(detached !== document && detached.nodeType === 9,
+      "createHTMLDocument did not return a distinct Document");
+    assert(detached.defaultView === null && detached.location === null,
+      "detached Document unexpectedly belongs to a browsing context");
+    assert(detached.documentElement.tagName === "HTML"
+      && detached.head.tagName === "HEAD"
+      && detached.body.tagName === "BODY",
+      "detached Document did not expose html/head/body structure");
+    assert(detached.head.querySelector("title").textContent === "Release notes",
+      "createHTMLDocument title was not constructed");
+    detached.body.innerHTML = "<form></form><form></form>";
+    const detachedBodyChildren = detached.body.childNodes.length;
+    const detachedForms = detached.getElementsByTagName("form").length;
+    assert(detachedBodyChildren === 2 && detachedForms === 2,
+      `detached body parsing or document-scoped collections leaked: ${detachedBodyChildren}/${detachedForms}`);
+    assert(document.getElementsByTagName("form").length === 0,
+      "detached nodes entered the live document");
+  });
+
+  test("CSSStyleDeclaration exposes kebab-case aliases with shared state", () => {
+    const style = document.createElement("div").style;
+    const cases = [
+      ["transition-timing-function", "transitionTimingFunction", "ease-in-out"],
+      ["transform-origin", "transformOrigin", "25% 75%"],
+      ["background-color", "backgroundColor", "rgb(1, 2, 3)"],
+      ["pointer-events", "pointerEvents", "none"],
+      ["margin-left", "marginLeft", "7px"]
+    ];
+    for (const [cssName, idlName, value] of cases) {
+      assert(cssName in style, `${cssName} was absent from CSSStyleDeclaration`);
+      style[cssName] = value;
+      assert(style[idlName] === value,
+        `${cssName} did not update ${idlName}: ${style[idlName]}`);
+      style[idlName] = "";
+      assert(style[cssName] === "",
+        `${idlName} did not clear ${cssName}: ${style[cssName]}`);
+    }
+  });
+
+  test("live Document exposes Location and the links collection", () => {
+    assert(document.location === window.location,
+      "document.location did not identify the active Window Location");
+    assert(typeof document.location.href === "string"
+      && typeof document.location.pathname === "string"
+      && typeof document.location.search === "string"
+      && typeof document.location.hash === "string",
+      "Document Location components were incomplete");
+    assert(document.links.length === 1
+      && document.links.item(0) === document.getElementById("release-link"),
+      "document.links did not expose the linked anchor in tree order");
+    const cookieDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "cookie");
+    assert(typeof cookieDescriptor?.get === "function"
+      && typeof cookieDescriptor?.set === "function",
+      "Document.prototype.cookie did not expose browser-shaped accessors");
+    let cookieCache = document.cookie;
+    Object.defineProperty(document, "cookie", {
+      get() { return cookieCache; },
+      set(value) {
+        cookieDescriptor.set.call(document, value);
+        cookieCache = cookieDescriptor.get.call(document);
+      },
+      configurable: true
+    });
+    document.cookie = "release_theme=dark; Path=/; SameSite=Lax";
+    document.cookie = "release_seen=1; Path=/";
+    document.cookie = "release_theme=light; Path=/";
+    assert(document.cookie.includes("release_theme=light")
+      && document.cookie.includes("release_seen=1"),
+      "document.cookie did not preserve script-written name/value pairs");
+    delete document.cookie;
+    assert(document.cookie.includes("release_theme=light"),
+      "Document.prototype.cookie did not remain readable after an own wrapper was removed");
+    assert(document.implementation.createHTMLDocument("").cookie === "",
+      "a detached cookie-averse Document exposed live cookies");
+  });
+
+  test("live Document keeps HTML and BODY distinct and exposes the bounded viewport scroller", () => {
+    assert(document.documentElement.tagName === "HTML"
+      && document.head.tagName === "HEAD"
+      && document.body.tagName === "BODY",
+      "live Document did not expose html/head/body structure");
+    assert(document.documentElement !== document.body
+      && document.body.parentNode === document.documentElement
+      && document.head.parentNode === document.documentElement,
+      "HTML and BODY were collapsed or incorrectly parented");
+    assert(document.querySelectorAll("html").length === 1
+      && document.querySelectorAll("body").length === 1,
+      "document queries exposed a synthetic or duplicate root");
+    assert(document.scrollingElement === document.documentElement,
+      "standards-mode scrollingElement was not documentElement");
+
+    const spacer = document.createElement("div");
+    spacer.style.height = "1200px";
+    document.body.appendChild(spacer);
+    const scroller = document.scrollingElement;
+    assert(Number.isFinite(scroller.clientHeight)
+      && Number.isFinite(scroller.scrollHeight)
+      && scroller.scrollHeight > scroller.clientHeight,
+      `root scroll range was not finite and positive: ${scroller.clientHeight}/${scroller.scrollHeight}`);
+    scroller.scrollTop = 23;
+    assert(Math.abs(scroller.scrollTop - 23) < 0.1,
+      `root scrollTop did not project to the viewport owner: ${scroller.scrollTop}`);
+    scroller.scrollTop = 0;
+    spacer.remove();
+  });
+
+  state.harness = {
+    status: state.results.some(result => result.status !== "PASS") ? 1 : 0,
+    message: null,
+    stack: null
+  };
+  state.complete = true;
+</script>

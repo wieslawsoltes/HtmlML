@@ -1,0 +1,116 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Reentrant programmatic click delegation</title>
+<body>
+<div id="fixture">
+  <div id="first"><button id="first-button" data-toggle="component">first</button></div>
+  <div id="second"><button id="second-button" data-toggle="component">second</button></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function record(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL", message: String(error.message || error), stack: error.stack || null
+      });
+    }
+  }
+  function finish() {
+    const failure = state.results.find(result => result.status !== "PASS");
+    state.harness = failure
+      ? { status: 1, message: failure.message, stack: failure.stack }
+      : { status: 0, message: null, stack: null };
+    state.complete = true;
+  }
+
+  const fixture = document.getElementById("fixture");
+  const first = document.getElementById("first");
+  const second = document.getElementById("second");
+  const firstButton = document.getElementById("first-button");
+  const secondButton = document.getElementById("second-button");
+  const listenerOrder = [];
+  const registry = new Map();
+  let destroyCalls = 0;
+  let nestedClick = null;
+
+  function activate(button) {
+    const instance = {
+      container: button.parentElement,
+      button,
+      destroy() {
+        destroyCalls++;
+        button.classList.remove("open");
+      }
+    };
+    registry.set(button, instance);
+    button.classList.add("open");
+    button.dispatchEvent(new Event("component-shown", { bubbles: true }));
+  }
+
+  document.addEventListener("click", event => {
+    listenerOrder.push(`clear:${event.target.id}`);
+    const openToggles = [].concat(...Element.prototype.querySelectorAll.call(
+      document.documentElement,
+      '[data-toggle="component"]:not(.disabled):not(:disabled).open'));
+    for (const toggle of openToggles) {
+      const instance = registry.get(toggle);
+      const path = event.composedPath();
+      if (!instance || path.includes(instance.button)) continue;
+      instance.destroy();
+    }
+  });
+  document.addEventListener("click", event => {
+    listenerOrder.push(`activate:${event.target.id}`);
+    const button = event.target.closest('[data-toggle="component"]');
+    if (!button) return;
+    // Opening an overlay commonly creates Popper-like scroll/resize observers.
+    // Registering unrelated event types must not invalidate the active click's
+    // listener traversal before its bubble phase runs.
+    for (let index = 0; index < 32; index++) {
+      window.addEventListener(`overlay-observer-${index}`, () => {});
+    }
+    nestedClick = {
+      target: event.target,
+      currentTarget: event.currentTarget,
+      path: event.composedPath()
+    };
+    activate(button);
+  }, true);
+
+  first.addEventListener("component-shown", () => {
+    record("the first activation is observable before the nested click", () => {
+      assert(firstButton.classList.contains("open"), "first activation was not committed");
+    });
+    secondButton.click();
+  });
+
+  second.addEventListener("component-shown", () => {
+    setTimeout(() => {
+      record("nested click preserves delegated listener order and cleanup", () => {
+        assert(destroyCalls === 1, `first cleanup ran ${destroyCalls} times instead of once`);
+        assert(!firstButton.classList.contains("open"), "first state remained open");
+        assert(secondButton.classList.contains("open"), "second state did not open");
+        assert(listenerOrder.join(",") === "activate:second-button,clear:second-button",
+          `delegated listener order was ${listenerOrder.join(",")}`);
+      });
+      record("nested click exposes the document target and complete composed path", () => {
+        assert(nestedClick.target === secondButton, "nested click target identity changed");
+        assert(nestedClick.currentTarget === document, "delegated currentTarget was not Document");
+        assert(nestedClick.path.includes(secondButton), "composed path omitted the target");
+        assert(nestedClick.path.includes(second), "composed path omitted the target parent");
+        assert(nestedClick.path.includes(fixture), "composed path omitted an ancestor");
+        assert(nestedClick.path.includes(document), "composed path omitted Document");
+        assert(nestedClick.path.includes(window), "composed path omitted Window");
+      });
+      finish();
+    }, 0);
+  });
+
+  activate(firstButton);
+</script>

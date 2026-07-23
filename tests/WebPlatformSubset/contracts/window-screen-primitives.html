@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Window Screen viewport primitives</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assertScreen(windowObject, context) {
+    const value = windowObject.screen;
+    assert(value === windowObject.screen, `${context} screen identity was not stable`);
+    assert(typeof windowObject.Screen === "function", `${context} Screen constructor was absent`);
+    assert(value instanceof windowObject.Screen, `${context} screen had the wrong prototype`);
+    for (const property of ["width", "height", "availWidth", "availHeight"]) {
+      assert(Number.isFinite(value[property]) && value[property] > 0,
+        `${context} screen.${property} was ${value[property]}`);
+    }
+    assert(value.availWidth <= value.width && value.availHeight <= value.height,
+      `${context} available dimensions exceeded the screen dimensions`);
+    assert(Number.isInteger(value.colorDepth) && value.colorDepth > 0,
+      `${context} colorDepth was ${value.colorDepth}`);
+    assert(Number.isInteger(value.pixelDepth) && value.pixelDepth > 0,
+      `${context} pixelDepth was ${value.pixelDepth}`);
+  }
+
+  test("the top-level Window exposes a stable browser-shaped Screen", () => {
+    assert(screen === window.screen, "bare screen did not resolve to window.screen");
+    assertScreen(window, "top-level");
+  });
+
+  test("a same-origin child browsing context exposes Screen in its own realm", () => {
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    assert(frame.contentWindow && frame.contentDocument, "initial iframe context was absent");
+    assertScreen(frame.contentWindow, "iframe");
+    frame.remove();
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

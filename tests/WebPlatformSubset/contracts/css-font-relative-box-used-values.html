@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Font-relative box lengths resolve independently of layout constraints</title>
+<style>
+  #container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 400px;
+    height: 200px;
+    font-size: 4px;
+  }
+  #bounded {
+    position: absolute;
+    left: 50%;
+    right: 50%;
+    top: 0;
+    height: 20px;
+  }
+  #sized {
+    display: flex;
+    width: 10em;
+    min-height: 2em;
+    padding: 1em;
+    gap: 3em;
+    flex-basis: 9em;
+  }
+</style>
+<body>
+<div id="container">
+  <div id="bounded"></div>
+  <div id="sized"></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function close(actual, expected, message) {
+    assert(Number.isFinite(actual) && Math.abs(actual - expected) <= 0.1,
+      `${message}: expected ${expected}, got ${actual}`);
+  }
+
+  function used(style, property) {
+    return Number.parseFloat(style.getPropertyValue(property));
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const container = document.getElementById("container");
+  const bounded = document.getElementById("bounded");
+  const sized = document.getElementById("sized");
+
+  test("opposing percentage insets retain their own computed used values", () => {
+    const style = getComputedStyle(bounded);
+    close(used(style, "left"), 200, "initial left");
+    close(used(style, "right"), 200, "initial right");
+  });
+
+  test("a dynamic em inset replaces the preceding percentage under constraints", () => {
+    bounded.style.right = "25em";
+    const style = getComputedStyle(bounded);
+    const containerRect = container.getBoundingClientRect();
+    const rect = bounded.getBoundingClientRect();
+    close(used(style, "right"), 100, "computed right");
+    close(rect.left - containerRect.left, 200, "bounded left edge");
+    close(containerRect.right - rect.right, 100, "bounded right edge");
+    close(rect.width, 100, "bounded width");
+  });
+
+  test("inset shorthand em values re-resolve after inherited font mutation", () => {
+    bounded.style.inset = "1em 2em 3em 4em";
+    let style = getComputedStyle(bounded);
+    close(used(style, "top"), 4, "initial top");
+    close(used(style, "right"), 8, "initial right");
+    close(used(style, "bottom"), 12, "initial bottom");
+    close(used(style, "left"), 16, "initial left");
+
+    container.style.fontSize = "8px";
+    style = getComputedStyle(bounded);
+    close(used(style, "top"), 8, "mutated top");
+    close(used(style, "right"), 16, "mutated right");
+    close(used(style, "bottom"), 24, "mutated bottom");
+    close(used(style, "left"), 32, "mutated left");
+    const containerRect = container.getBoundingClientRect();
+    const rect = bounded.getBoundingClientRect();
+    close(rect.left - containerRect.left, 32, "mutated left geometry");
+    close(containerRect.right - rect.right, 16, "mutated right geometry");
+  });
+
+  test("related size padding gap and flex-basis em values expose pixel computed values", () => {
+    const style = getComputedStyle(sized);
+    close(used(style, "width"), 80, "width");
+    close(used(style, "min-height"), 16, "min-height");
+    close(used(style, "padding-left"), 8, "padding-left");
+    close(used(style, "row-gap"), 24, "row-gap");
+    close(used(style, "column-gap"), 24, "column-gap");
+    close(used(style, "flex-basis"), 72, "flex-basis");
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    boundedStyle: {
+      top: getComputedStyle(bounded).top,
+      right: getComputedStyle(bounded).right,
+      bottom: getComputedStyle(bounded).bottom,
+      left: getComputedStyle(bounded).left
+    },
+    sizedStyle: {
+      width: getComputedStyle(sized).width,
+      minHeight: getComputedStyle(sized).minHeight,
+      paddingLeft: getComputedStyle(sized).paddingLeft,
+      gap: getComputedStyle(sized).gap,
+      flexBasis: getComputedStyle(sized).flexBasis
+    }
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>
+</body>

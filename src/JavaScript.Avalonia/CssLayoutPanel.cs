@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Rendering;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -77,6 +78,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
     private bool _overflowRequiresClip;
     private Vector _scrollOffset;
     private Size _scrollExtent;
+    private Size? _documentScrollViewport;
     private IBrush? _borderTopBrush;
     private IBrush? _borderRightBrush;
     private IBrush? _borderBottomBrush;
@@ -277,7 +279,13 @@ public class CssLayoutPanel : Panel, ICustomHitTest
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == CssLayout.DisplayProperty)
+        if (change.Property == CssLayout.DisplayProperty
+            || change.Property == CssLayout.WidthProperty
+            || change.Property == CssLayout.HeightProperty
+            || change.Property == CssLayout.LeftProperty
+            || change.Property == CssLayout.TopProperty
+            || change.Property == CssLayout.RightProperty
+            || change.Property == CssLayout.BottomProperty)
         {
             RefreshCssLayoutRoundingContext();
         }
@@ -530,7 +538,19 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
     internal void SetScrollOffset(Vector value)
     {
-        var next = ClampScrollOffset(value);
+        ApplyScrollOffset(ClampScrollOffset(value));
+    }
+
+    internal void SetDocumentScrollOffset(Vector value, Size viewport)
+    {
+        _documentScrollViewport = new Size(
+            double.IsFinite(viewport.Width) ? Math.Max(0, viewport.Width) : 0,
+            double.IsFinite(viewport.Height) ? Math.Max(0, viewport.Height) : 0);
+        ApplyScrollOffset(ClampScrollOffset(value));
+    }
+
+    private void ApplyScrollOffset(Vector next)
+    {
         if (AreClose(_scrollOffset.X, next.X) && AreClose(_scrollOffset.Y, next.Y))
         {
             return;
@@ -538,6 +558,15 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
         _scrollOffset = next;
         InvalidateArrange();
+        // Arrange invalidation is local in Avalonia. DOM geometry reads flush
+        // from the retained document root, so mark the visual ancestor chain
+        // as well or a same-task getBoundingClientRect() can observe the old
+        // descendant positions after scrollTop changes.
+        for (var current = this.GetVisualParent() as Control; current is not null;
+             current = current.GetVisualParent() as Control)
+        {
+            current.InvalidateArrange();
+        }
         _scrollIndicator?.InvalidateVisual();
     }
 
@@ -571,7 +600,10 @@ public class CssLayoutPanel : Panel, ICustomHitTest
                 Children.Remove(_scrollIndicator);
                 _scrollIndicator = null;
             }
-            _scrollOffset = new Vector(_scrollOffset.X, 0);
+            if (_documentScrollViewport is null)
+            {
+                _scrollOffset = new Vector(_scrollOffset.X, 0);
+            }
             return;
         }
 
@@ -597,11 +629,11 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
     private Vector ClampScrollOffset(Vector value)
     {
-        var viewport = Bounds.Size;
-        var maximumX = CanScrollHorizontally
+        var viewport = _documentScrollViewport ?? Bounds.Size;
+        var maximumX = (CanScrollHorizontally || _documentScrollViewport is not null)
             ? Math.Max(0, _scrollExtent.Width - viewport.Width)
             : 0;
-        var maximumY = CanScrollVertically
+        var maximumY = (CanScrollVertically || _documentScrollViewport is not null)
             ? Math.Max(0, _scrollExtent.Height - viewport.Height)
             : 0;
         return new Vector(
@@ -725,6 +757,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
         InvalidateMeasure();
         InvalidateArrange();
+        CssLayout.InvalidateParent(this);
         InvalidateVisual();
         return true;
     }
@@ -755,7 +788,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
         };
         control.Generated = generated;
         control.Background = generated.Background;
-        control.SetValue(Canvas.ZIndexProperty, -1);
+        control.SetValue(Canvas.ZIndexProperty, generated.ZIndex ?? -1);
         if (!Children.Contains(control))
         {
             Children.Add(control);
@@ -784,7 +817,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             IsHitTestVisible = false
         };
         control.Generated = generated;
-        control.SetValue(Canvas.ZIndexProperty, 1);
+        control.SetValue(Canvas.ZIndexProperty, generated.ZIndex ?? 1);
         if (!Children.Contains(control))
         {
             Children.Add(control);
@@ -1374,7 +1407,9 @@ public class CssLayoutPanel : Panel, ICustomHitTest
            && CssLayout.GetPosition(child) is not (CssPosition.Absolute or CssPosition.Fixed);
 
     private static bool IsCollapsibleWhitespaceText(Control child)
-        => child is TextBlock { Text: { } text } && string.IsNullOrWhiteSpace(text);
+        => child is TextBlock { Text: { } text }
+           && string.IsNullOrWhiteSpace(text)
+           && child is not DomTextBlockControl { CssAllowsLayout: false };
 
     private void RefreshTextNodeWhitespaceBoundaries()
     {
@@ -1521,9 +1556,44 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             inlineHeight = 0;
         }
 
-        foreach (var child in Children)
+        void AccumulateInlineGenerated(CssGeneratedPseudoElement? generated)
         {
-            if (!child.IsVisible)
+            if (generated?.IsInFlow != true
+                || generated.IsFlowBlock
+                || !generated.IsInlineText)
+            {
+                return;
+            }
+
+            var size = generated.ResolveFlowSize(availableWidth, availableHeight);
+            var margin = generated.ResolveMargin(availableWidth, availableHeight);
+            var itemWidth = size.Width + margin.Left + margin.Right;
+            var itemHeight = size.Height + margin.Top + margin.Bottom;
+            if (!CssLayout.GetNoWrap(this)
+                && inlineWidth > 0
+                && double.IsFinite(availableWidth)
+                && inlineWidth + itemWidth > availableWidth)
+            {
+                FlushInlineLine();
+            }
+
+            inlineWidth += itemWidth;
+            inlineHeight = Math.Max(inlineHeight, itemHeight);
+        }
+
+        AccumulateInlineGenerated(_beforePseudoElement);
+        for (var childIndex = 0; childIndex < Children.Count; childIndex++)
+        {
+            var child = Children[childIndex];
+            if (IsCollapsibleWhitespaceText(child))
+            {
+                if (HasInlineContentOnBothSides(Children, childIndex))
+                {
+                    inlineWidth += ResolveCollapsedWhitespaceWidth(child);
+                }
+                continue;
+            }
+            if (!child.IsVisible || child is IDomInfrastructureControl)
             {
                 continue;
             }
@@ -1623,6 +1693,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             }
         }
 
+        AccumulateInlineGenerated(_afterPseudoElement);
         FlushInlineLine();
         if (pendingBlockMargin is { } trailingBlockMargin
             && (!canCollapseBottomMargin
@@ -1658,6 +1729,8 @@ public class CssLayoutPanel : Panel, ICustomHitTest
         var measuredMain = 0d;
         var measuredCross = 0d;
         var measuredLineCount = 0;
+        var lineFirstBaseline = 0d;
+        var lineAfterBaseline = 0d;
 
         var ownPadding = ResolvePadding(this, availableWidth, availableHeight);
         var ownBorder = ResolveBorder(this);
@@ -1686,9 +1759,16 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             lineMain = 0;
             lineCross = 0;
             lineCount = 0;
+            lineFirstBaseline = 0;
+            lineAfterBaseline = 0;
         }
 
-        void AccumulateItem(double itemMain, double itemCross, Thickness margin)
+        void AccumulateItem(
+            double itemMain,
+            double itemCross,
+            Thickness margin,
+            double? firstBaseline,
+            bool baselineAligned)
         {
             var outerMain = FiniteOrZero(itemMain) + (row ? margin.Left + margin.Right : margin.Top + margin.Bottom);
             var outerCross = FiniteOrZero(itemCross) + (row ? margin.Top + margin.Bottom : margin.Left + margin.Right);
@@ -1701,6 +1781,17 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
             lineMain = candidateMain;
             lineCross = Math.Max(lineCross, outerCross);
+            if (row && baselineAligned)
+            {
+                var baseline = firstBaseline is { } value && double.IsFinite(value)
+                    ? Math.Max(0, value)
+                    : FiniteOrZero(itemCross);
+                lineFirstBaseline = Math.Max(lineFirstBaseline, margin.Top + baseline);
+                lineAfterBaseline = Math.Max(
+                    lineAfterBaseline,
+                    margin.Bottom + Math.Max(0, FiniteOrZero(itemCross) - baseline));
+                lineCross = Math.Max(lineCross, lineFirstBaseline + lineAfterBaseline);
+            }
             lineCount++;
         }
 
@@ -1715,7 +1806,9 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             AccumulateItem(
                 row ? itemSize.Width : itemSize.Height,
                 row ? itemSize.Height : itemSize.Width,
-                generated.ResolveMargin(availableWidth, availableHeight));
+                generated.ResolveMargin(availableWidth, availableHeight),
+                generated.FirstBaseline,
+                IsBaselineAlignment(ResolveFlexAlignment(generated.AlignSelf)));
         }
 
         MeasureGenerated(_beforePseudoElement);
@@ -1751,7 +1844,12 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             var basis = ResolveForMeasure(CssLayout.GetFlexBasis(child), row ? availableWidth : availableHeight);
             var itemMain = basis ?? (row ? outerWidth ?? child.DesiredSize.Width : outerHeight ?? child.DesiredSize.Height);
             var itemCross = row ? outerHeight ?? child.DesiredSize.Height : outerWidth ?? child.DesiredSize.Width;
-            AccumulateItem(itemMain, itemCross, margin);
+            AccumulateItem(
+                itemMain,
+                itemCross,
+                margin,
+                ResolveFirstBaseline(child, availableWidth, availableHeight),
+                IsBaselineAlignment(ResolveFlexAlignment(CssLayout.GetAlignSelf(child))));
         }
         MeasureGenerated(_afterPseudoElement);
 
@@ -2510,10 +2608,41 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
     private static void ApplyCssLayoutRounding(CssLayoutPanel panel, bool parentIsFlexFormattingContext)
     {
-        var useLayoutRounding = !parentIsFlexFormattingContext;
+        // CSS used geometry retains subpixel precision even in a block formatting
+        // context. Keep integral block boxes on Avalonia's normal snapped path, but
+        // do not round an explicitly fractional or percentage-sized principal box.
+        var useLayoutRounding = !parentIsFlexFormattingContext
+                                && !RequiresSubpixelGeometry(panel);
         if (panel.UseLayoutRounding != useLayoutRounding)
         {
             panel.UseLayoutRounding = useLayoutRounding;
+        }
+
+        static bool RequiresSubpixelGeometry(Control control)
+        {
+            // Table cells and their inline-block references must stay on the
+            // same snapping policy until the table track allocator publishes
+            // a shared subpixel grid. Mixing policies makes equal authored
+            // widths rasterize differently.
+            if (CssLayout.GetDisplay(control) is not (CssDisplay.Block
+                or CssDisplay.ListItem
+                or CssDisplay.Grid))
+            {
+                return false;
+            }
+
+            static bool Requires(CssLength? length)
+                => length is { IsAuto: false } value
+                   && (value.Unit == CssLengthUnit.Pixel
+                           && Math.Abs(value.Value - Math.Round(value.Value)) > 0.000001
+                       || Math.Abs(value.PixelOffset - Math.Round(value.PixelOffset)) > 0.000001);
+
+            return Requires(CssLayout.GetWidth(control))
+                   || Requires(CssLayout.GetHeight(control))
+                   || Requires(CssLayout.GetLeft(control))
+                   || Requires(CssLayout.GetTop(control))
+                   || Requires(CssLayout.GetRight(control))
+                   || Requires(CssLayout.GetBottom(control));
         }
     }
 
@@ -2589,14 +2718,20 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
     private static void ArrangeChild(Control child, Rect rect)
     {
-        // Avalonia commits Bounds.Position after the child's ArrangeOverride.
-        // Publish the current pass's slot first so positioned descendants can
-        // resolve an ancestor containing block without observing stale bounds.
+        // CSS layout has already resolved the margin and produced this
+        // border-box rectangle. Avalonia's ArrangeCore independently deflates
+        // an arrange slot by Control.Margin, so pass the inverse slot or an
+        // ordinary block margin is applied a second time.
         if (child is CssLayoutPanel panel)
         {
             panel._layoutSlotPosition = rect.Position;
         }
-        child.Arrange(rect);
+        var margin = child.Margin;
+        child.Arrange(new Rect(
+            rect.X - margin.Left,
+            rect.Y - margin.Top,
+            Math.Max(0, rect.Width + margin.Left + margin.Right),
+            Math.Max(0, rect.Height + margin.Top + margin.Bottom)));
     }
 
     private static void ArrangeFlexChildBorderBox(Control child, Rect borderBox)
@@ -2910,11 +3045,61 @@ public class CssLayoutPanel : Panel, ICustomHitTest
         var percentageHeightBasis = HasIndefinitePercentageHeightBasis(this)
             ? double.PositiveInfinity
             : content.Height;
+        var floatBandY = flowY;
+        var floatBandHeight = 0d;
+        var leftFloatEdge = content.X;
+        var rightFloatEdge = content.Right;
+        var hasFloatBand = false;
 
-        Control? previousFlowChild = null;
-        foreach (var child in Children)
+        void ArrangeInlineGenerated(CssGeneratedPseudoElement? generated)
         {
-            if (!child.IsVisible)
+            if (generated?.IsInFlow != true
+                || generated.IsFlowBlock
+                || !generated.IsInlineText)
+            {
+                return;
+            }
+
+            var size = generated.ResolveFlowSize(content.Width, content.Height);
+            var margin = generated.ResolveMargin(content.Width, content.Height);
+            var itemWidth = size.Width + margin.Left + margin.Right;
+            if (!CssLayout.GetNoWrap(this)
+                && inlineX > content.X
+                && inlineX + itemWidth > content.Right)
+            {
+                flowY += inlineLineHeight;
+                inlineX = content.X;
+                inlineLineHeight = 0;
+            }
+
+            generated.SetArrangedFlowRect(new Rect(
+                inlineX + margin.Left,
+                flowY + margin.Top,
+                size.Width,
+                size.Height));
+            inlineX += itemWidth;
+            inlineLineHeight = Math.Max(
+                inlineLineHeight,
+                size.Height + margin.Top + margin.Bottom);
+            _generatedBackgroundSize = default;
+        }
+
+        _beforePseudoElement?.ClearArrangedFlowRect();
+        _afterPseudoElement?.ClearArrangedFlowRect();
+        ArrangeInlineGenerated(_beforePseudoElement);
+        Control? previousFlowChild = null;
+        for (var childIndex = 0; childIndex < Children.Count; childIndex++)
+        {
+            var child = Children[childIndex];
+            if (IsCollapsibleWhitespaceText(child))
+            {
+                if (HasInlineContentOnBothSides(Children, childIndex))
+                {
+                    inlineX += ResolveCollapsedWhitespaceWidth(child);
+                }
+                continue;
+            }
+            if (!child.IsVisible || child is IDomInfrastructureControl)
             {
                 continue;
             }
@@ -2962,7 +3147,101 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             var arrangedHeight = ToOuterSize(child, height, padding.Top + padding.Bottom + border.Top + border.Bottom) ?? child.DesiredSize.Height;
             arrangedWidth = Constrain(arrangedWidth, minWidth, maxWidth);
             arrangedHeight = Constrain(arrangedHeight, minHeight, maxHeight);
+            var usedMarginLeft = margin.Left;
+            var usedMarginRight = margin.Right;
+            if (!inlineLevel)
+            {
+                var leftIsAuto = CssLayout.GetMarginLeft(child) is { IsAuto: true };
+                var rightIsAuto = CssLayout.GetMarginRight(child) is { IsAuto: true };
+                if (leftIsAuto || rightIsAuto)
+                {
+                    var remainingInlineSpace = Math.Max(
+                        0,
+                        content.Width - arrangedWidth
+                        - (leftIsAuto ? 0 : usedMarginLeft)
+                        - (rightIsAuto ? 0 : usedMarginRight));
+                    if (leftIsAuto && rightIsAuto)
+                    {
+                        usedMarginLeft = remainingInlineSpace / 2;
+                        usedMarginRight = remainingInlineSpace / 2;
+                    }
+                    else if (leftIsAuto)
+                    {
+                        usedMarginLeft = remainingInlineSpace;
+                    }
+                    else
+                    {
+                        usedMarginRight = remainingInlineSpace;
+                    }
+                }
+            }
             var lineBoxHeight = ResolveLineBoxHeight(child, arrangedHeight);
+            var floating = positioned ? CssFloat.None : CssLayout.GetFloat(child);
+
+            // This bounded float formatting path owns consecutive left/right
+            // block floats on an otherwise empty line. Broader float intrusion,
+            // clear, shape-outside, and bidi behavior remain outside this slice.
+            if (floating != CssFloat.None)
+            {
+                if (inlineX > content.X)
+                {
+                    flowY += inlineLineHeight;
+                    inlineX = content.X;
+                    inlineLineHeight = 0;
+                }
+                if (!hasFloatBand)
+                {
+                    floatBandY = flowY;
+                    floatBandHeight = 0;
+                    leftFloatEdge = content.X;
+                    rightFloatEdge = content.Right;
+                    hasFloatBand = true;
+                }
+
+                var outerWidth = margin.Left + arrangedWidth + margin.Right;
+                var outerHeight = margin.Top + lineBoxHeight + margin.Bottom;
+                if (rightFloatEdge - leftFloatEdge + 0.01 < outerWidth
+                    && floatBandHeight > 0)
+                {
+                    floatBandY += floatBandHeight;
+                    floatBandHeight = 0;
+                    leftFloatEdge = content.X;
+                    rightFloatEdge = content.Right;
+                }
+
+                var floatX = floating == CssFloat.Left
+                    ? leftFloatEdge + margin.Left
+                    : rightFloatEdge - margin.Right - arrangedWidth;
+                var floatY = floatBandY + margin.Top;
+                if (position == CssPosition.Relative)
+                {
+                    floatX += CssLayout.Resolve(CssLayout.GetLeft(child), content.Width) ?? 0;
+                    floatY += ResolveRelativeInset(CssLayout.GetTop(child), percentageHeightBasis);
+                }
+                ArrangeChild(child, new Rect(floatX, floatY, arrangedWidth, arrangedHeight));
+                if (floating == CssFloat.Left)
+                {
+                    leftFloatEdge += outerWidth;
+                }
+                else
+                {
+                    rightFloatEdge -= outerWidth;
+                }
+                floatBandHeight = Math.Max(floatBandHeight, outerHeight);
+                previousFlowChild = child;
+                continue;
+            }
+
+            // End the bounded consecutive-float slice by keeping later normal
+            // flow below its occupied band. Text intrusion around floats is a
+            // separate compatibility capability.
+            if (hasFloatBand)
+            {
+                flowY = Math.Max(flowY, floatBandY + floatBandHeight);
+                inlineX = content.X;
+                inlineLineHeight = 0;
+                hasFloatBand = false;
+            }
 
             // An out-of-flow inline-level positioned box records the current
             // line's hypothetical insertion point. Its own used width must
@@ -3001,7 +3280,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
                 continue;
             }
 
-            var x = inlineLevel ? inlineX + margin.Left : content.X + margin.Left;
+            var x = inlineLevel ? inlineX + usedMarginLeft : content.X + usedMarginLeft;
             var collapsedBefore = !inlineLevel
                 ? pendingBlockMargin is { } previousBottomMargin
                     ? CollapseVerticalMargins(previousBottomMargin, margin.Top)
@@ -3019,21 +3298,19 @@ public class CssLayoutPanel : Panel, ICustomHitTest
                 y += ResolveRelativeInset(CssLayout.GetTop(child), percentageHeightBasis);
             }
 
-            // Avalonia clips a descendant subtree differently from browsers
-            // when a content-box child (including scrollbar padding) is larger
-            // than an overflow-hidden containing block. Keep the logical outer
-            // size for flow, but use the clipped viewport as its visual slot;
-            // the child's own content-box calculation still receives the
-            // declared content size.
-            var visualWidth = ClipToBounds ? Math.Min(arrangedWidth, content.Width) : arrangedWidth;
-            var visualHeight = ClipToBounds ? Math.Min(arrangedHeight, content.Height) : arrangedHeight;
+            // Overflow clips paint and hit testing at the containing block; it
+            // does not resize an overflowing descendant's layout box. Keeping
+            // the full used size here is also what gives scrollWidth/Height a
+            // stable extent and lets client geometry move with scrollTop.
+            var visualWidth = arrangedWidth;
+            var visualHeight = arrangedHeight;
             var visualY = child is TextBlock
                 ? y + ((lineBoxHeight - visualHeight) / 2d)
                 : y;
             ArrangeChild(child, new Rect(x, visualY, visualWidth, visualHeight));
             if (inlineLevel)
             {
-                inlineX += margin.Left + arrangedWidth + margin.Right;
+                inlineX += usedMarginLeft + arrangedWidth + usedMarginRight;
                 inlineLineHeight = Math.Max(
                     inlineLineHeight,
                     Math.Max(
@@ -3047,6 +3324,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             }
             previousFlowChild = child;
         }
+        ArrangeInlineGenerated(_afterPseudoElement);
     }
 
     private bool CanCollapseBlockChildMargin(bool top, double widthReference, double heightReference)
@@ -3147,6 +3425,7 @@ public class CssLayoutPanel : Panel, ICustomHitTest
         foreach (var line in lines)
         {
             ResolveFlexibleMainSizes(line.Items, mainSize, mainGap);
+            ResolveFlexLineBaseline(line, row);
             if (reverse) line.Items.Reverse();
         }
 
@@ -3210,6 +3489,8 @@ public class CssLayoutPanel : Panel, ICustomHitTest
                 {
                     "center" => (line.CrossSize - itemCross - item.CrossMarginStart - item.CrossMarginEnd) / 2 + item.CrossMarginStart,
                     "flex-end" or "end" => line.CrossSize - itemCross - item.CrossMarginEnd,
+                    "baseline" or "first baseline" or "last baseline" when row =>
+                        line.FirstBaseline - ResolveFlexItemBaseline(item),
                     _ => item.CrossMarginStart
                 };
 
@@ -3239,6 +3520,46 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             crossCursor += line.CrossSize + betweenLines;
         }
     }
+
+    private string? ResolveFlexAlignment(string? alignSelf)
+    {
+        var align = alignSelf?.Trim().ToLowerInvariant();
+        if (align is null or "" or "auto" or "normal")
+        {
+            align = CssLayout.GetAlignItems(this)?.Trim().ToLowerInvariant();
+        }
+        return align is "normal" ? "stretch" : align;
+    }
+
+    private static bool IsBaselineAlignment(string? alignment)
+        => alignment is "baseline" or "first baseline" or "last baseline";
+
+    private void ResolveFlexLineBaseline(FlexLine line, bool row)
+    {
+        if (!row)
+        {
+            return;
+        }
+
+        var baselineItems = line.Items
+            .Where(item => IsBaselineAlignment(ResolveFlexAlignment(item.AlignSelf)))
+            .ToArray();
+        if (baselineItems.Length == 0)
+        {
+            return;
+        }
+
+        line.FirstBaseline = baselineItems.Max(item =>
+            item.CrossMarginStart + ResolveFlexItemBaseline(item));
+        var afterBaseline = baselineItems.Max(item =>
+            item.CrossMarginEnd + Math.Max(0, item.Cross - ResolveFlexItemBaseline(item)));
+        line.CrossSize = Math.Max(line.CrossSize, line.FirstBaseline + afterBaseline);
+    }
+
+    private static double ResolveFlexItemBaseline(FlexItem item)
+        => item.FirstBaseline is { } baseline && double.IsFinite(baseline)
+            ? Math.Max(0, baseline)
+            : item.Cross;
 
     private static List<FlexLine> BuildFlexLines(
         IReadOnlyList<FlexItem> items,
@@ -3402,7 +3723,8 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             MainMarginStartIsAuto = (row ? CssLayout.GetMarginLeft(child) : CssLayout.GetMarginTop(child)) is { IsAuto: true },
             MainMarginEndIsAuto = (row ? CssLayout.GetMarginRight(child) : CssLayout.GetMarginBottom(child)) is { IsAuto: true },
             CrossMarginStart = row ? margin.Top : margin.Left,
-            CrossMarginEnd = row ? margin.Bottom : margin.Right
+            CrossMarginEnd = row ? margin.Bottom : margin.Right,
+            FirstBaseline = ResolveFirstBaseline(child, content.Width, content.Height)
         };
     }
 
@@ -3424,7 +3746,8 @@ public class CssLayoutPanel : Panel, ICustomHitTest
             MainMarginEnd = row ? margin.Right : margin.Bottom,
             CrossMarginStart = row ? margin.Top : margin.Left,
             CrossMarginEnd = row ? margin.Bottom : margin.Right,
-            AlignSelf = generated.AlignSelf
+            AlignSelf = generated.AlignSelf,
+            FirstBaseline = generated.FirstBaseline
         };
     }
 
@@ -3501,6 +3824,60 @@ public class CssLayoutPanel : Panel, ICustomHitTest
 
     private static bool IsScrollableOverflow(string? value)
         => value is "hidden" or "auto" or "scroll";
+
+    internal static double? ResolveFirstBaseline(
+        Control control,
+        double widthReference,
+        double heightReference)
+    {
+        if (control is TextBlock text)
+        {
+            var baseline = text.TextLayout.Baseline;
+            if (CssLayout.GetLineHeight(text) is { } lineHeight
+                && double.IsFinite(lineHeight)
+                && lineHeight > text.FontSize)
+            {
+                // CSS distributes positive line-height leading equally above
+                // and below the font's em box. Avalonia's TextLayout baseline
+                // reports the glyph-run baseline without that CSS half-leading.
+                baseline += (lineHeight - text.FontSize) / 2;
+            }
+            var adjustment = TextBlock.GetBaselineOffset(text);
+            if (double.IsFinite(adjustment))
+            {
+                baseline += adjustment;
+            }
+            return double.IsFinite(baseline) ? Math.Max(0, baseline) : null;
+        }
+
+        if (control is not Panel panel)
+        {
+            return null;
+        }
+
+        var border = ResolveBorder(control);
+        var padding = ResolvePadding(control, widthReference, heightReference);
+        foreach (var child in panel.Children)
+        {
+            if (!child.IsVisible
+                || child is IDomInfrastructureControl
+                || CssLayout.GetPosition(child) is CssPosition.Absolute or CssPosition.Fixed)
+            {
+                continue;
+            }
+
+            var childBaseline = ResolveFirstBaseline(child, widthReference, heightReference);
+            if (!childBaseline.HasValue)
+            {
+                continue;
+            }
+
+            var margin = ResolveMargin(child, widthReference, heightReference);
+            return border.Top + padding.Top + margin.Top + childBaseline.Value;
+        }
+
+        return null;
+    }
 
     private void ArrangeAbsolute(Control child, Rect content, Point? staticPosition = null)
     {
@@ -3591,12 +3968,14 @@ public class CssLayoutPanel : Panel, ICustomHitTest
         public bool MainMarginEndIsAuto { get; set; }
         public double CrossMarginStart { get; set; }
         public double CrossMarginEnd { get; set; }
+        public double? FirstBaseline { get; set; }
     }
 
     private sealed class FlexLine
     {
         public List<FlexItem> Items { get; } = [];
         public double CrossSize { get; set; }
+        public double FirstBaseline { get; set; }
     }
 
     private static double FiniteOrInfinity(double value)
@@ -3738,7 +4117,7 @@ internal sealed class CssGeneratedPseudoElement
     [
         "content", "position", "visibility", "display", "background-color", "opacity",
         "color", "font-family", "font-size", "font-style", "font-weight", "line-height",
-        "left", "right", "top", "bottom", "width", "height", "transform",
+        "left", "right", "top", "bottom", "width", "height", "transform", "z-index",
         "border-radius", "border-top-left-radius",
         "margin-top", "margin-right", "margin-bottom", "margin-left",
         "align-self", "order", "flex-grow", "flex-shrink"
@@ -3765,13 +4144,16 @@ internal sealed class CssGeneratedPseudoElement
     public CssLength? MarginLeft { get; private init; }
     public string? AlignSelf { get; private init; }
     public int Order { get; private init; }
+    public int? ZIndex { get; private init; }
     public double FlexGrow { get; private init; }
     public double FlexShrink { get; private init; } = 1;
     public bool IsPaintVisible { get; private init; } = true;
     public bool IsInFlow { get; private init; }
     public bool IsFlowBlock { get; private init; }
+    public bool IsInlineText { get; private init; }
     public Size IntrinsicSize { get; private init; }
     public bool HasText => _formattedText is not null;
+    public double? FirstBaseline { get; private init; }
 
     public double ResolveLeft(double reference) => Math.Max(0, CssLayout.Resolve(Left, reference) ?? 0);
     public double ResolveRight(double reference) => Math.Max(0, CssLayout.Resolve(Right, reference) ?? 0);
@@ -3934,6 +4316,9 @@ internal sealed class CssGeneratedPseudoElement
         var flowBlock = !absolute
                         && values.TryGetValue("display", out var displayValue)
                         && string.Equals(displayValue.Trim(), "block", StringComparison.OrdinalIgnoreCase);
+        var inlineText = !absolute
+                         && (!values.TryGetValue("display", out var inlineDisplayValue)
+                             || string.Equals(inlineDisplayValue.Trim(), "inline", StringComparison.OrdinalIgnoreCase));
         var inFlow = !absolute;
 
         IBrush? background = null;
@@ -3984,6 +4369,16 @@ internal sealed class CssGeneratedPseudoElement
         {
             int.TryParse(orderValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out order);
         }
+        int? zIndex = null;
+        if (values.TryGetValue("z-index", out var zIndexValue)
+            && int.TryParse(
+                zIndexValue,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var parsedZIndex))
+        {
+            zIndex = parsedZIndex;
+        }
         var flexGrow = ParseNonNegativeNumber(values.GetValueOrDefault("flex-grow"), 0);
         var flexShrink = ParseNonNegativeNumber(values.GetValueOrDefault("flex-shrink"), 1);
         var formattedText = CreateFormattedLiteralText(values, content, opacity);
@@ -4006,12 +4401,15 @@ internal sealed class CssGeneratedPseudoElement
             MarginLeft = Length(values, "margin-left"),
             AlignSelf = values.GetValueOrDefault("align-self"),
             Order = order,
+            ZIndex = zIndex,
             FlexGrow = flexGrow,
             FlexShrink = flexShrink,
             IsPaintVisible = paintVisible,
             IsInFlow = inFlow,
             IsFlowBlock = flowBlock,
+            IsInlineText = inlineText,
             _formattedText = formattedText,
+            FirstBaseline = formattedText?.Baseline,
             IntrinsicSize = formattedText is null
                 ? default
                 : new Size(formattedText.WidthIncludingTrailingWhitespace, formattedText.Height)
@@ -4622,6 +5020,7 @@ internal sealed class DomLineBreakControl : CssLayoutPanel;
 internal sealed class DomTextBlockControl : TextBlock
 {
     private double _fontWidthScale = 1d;
+    private double _wordSpacing;
     private string _whiteSpacePresentationText = string.Empty;
     private bool _collapsesWhiteSpace = true;
     private bool _cssAllowsLayout = true;
@@ -4649,6 +5048,24 @@ internal sealed class DomTextBlockControl : TextBlock
             InvalidateVisual();
         }
     }
+
+    internal double WordSpacing
+    {
+        get => _wordSpacing;
+        set
+        {
+            var normalized = double.IsFinite(value) ? value : 0;
+            if (Math.Abs(_wordSpacing - normalized) < 0.0001)
+            {
+                return;
+            }
+            _wordSpacing = normalized;
+            InvalidateMeasure();
+            InvalidateVisual();
+        }
+    }
+
+    internal bool CssAllowsLayout => _cssAllowsLayout;
 
     internal void SetWhiteSpacePresentation(string text, bool collapsesWhiteSpace)
     {
@@ -4686,7 +5103,10 @@ internal sealed class DomTextBlockControl : TextBlock
         // retain fractional glyph advances for inline layout, so use the
         // underlying TextLayout width while preserving Avalonia's line height.
         return new Size(
-            TextLayout.WidthIncludingTrailingWhitespace * _fontWidthScale,
+            Math.Max(
+                0,
+                TextLayout.WidthIncludingTrailingWhitespace * _fontWidthScale
+                + ResolveWordSpacingAdvance()),
             measured.Height);
     }
 
@@ -4703,7 +5123,8 @@ internal sealed class DomTextBlockControl : TextBlock
 
     protected override void RenderTextLayout(DrawingContext context, Point origin)
     {
-        if (Math.Abs(_fontWidthScale - 1d) < 0.0001)
+        if (!UsesCustomWordSpacing
+            && Math.Abs(_fontWidthScale - 1d) < 0.0001)
         {
             base.RenderTextLayout(context, origin);
             return;
@@ -4711,9 +5132,80 @@ internal sealed class DomTextBlockControl : TextBlock
 
         using (context.PushTransform(Matrix.CreateScale(_fontWidthScale, 1d)))
         {
-            base.RenderTextLayout(context, new Point(origin.X / _fontWidthScale, origin.Y));
+            var scaledOrigin = new Point(origin.X / _fontWidthScale, origin.Y);
+            if (UsesCustomWordSpacing)
+            {
+                DrawWordSpacedText(
+                    context,
+                    scaledOrigin,
+                    _wordSpacing / _fontWidthScale);
+            }
+            else
+            {
+                base.RenderTextLayout(context, scaledOrigin);
+            }
         }
     }
+
+    private bool UsesCustomWordSpacing
+        => Math.Abs(_wordSpacing) >= 0.0001
+           && TextWrapping == TextWrapping.NoWrap
+           && FlowDirection == FlowDirection.LeftToRight
+           && (Text?.Any(IsWordSeparator) ?? false);
+
+    private double ResolveWordSpacingAdvance()
+        => UsesCustomWordSpacing
+            ? (Text?.Count(IsWordSeparator) ?? 0) * _wordSpacing
+            : 0;
+
+    private void DrawWordSpacedText(
+        DrawingContext context,
+        Point origin,
+        double unscaledWordSpacing)
+    {
+        var text = Text ?? string.Empty;
+        var x = origin.X;
+        for (var start = 0; start < text.Length;)
+        {
+            var separator = IsWordSeparator(text[start]);
+            var end = start + 1;
+            while (end < text.Length && IsWordSeparator(text[end]) == separator)
+            {
+                end++;
+            }
+
+            var segment = text[start..end];
+            var layout = CreateSegmentLayout(segment);
+            layout.Draw(context, new Point(x, origin.Y));
+            x += layout.WidthIncludingTrailingWhitespace;
+            if (separator)
+            {
+                x += segment.Length * unscaledWordSpacing;
+            }
+            start = end;
+        }
+    }
+
+    private TextLayout CreateSegmentLayout(string text)
+        => new(
+            text,
+            new Typeface(FontFamily, FontStyle, FontWeight, FontStretch),
+            FontSize,
+            Foreground ?? Brushes.Black,
+            TextAlignment.Left,
+            TextWrapping.NoWrap,
+            TextTrimming.None,
+            TextDecorations,
+            FlowDirection,
+            double.PositiveInfinity,
+            double.PositiveInfinity,
+            LineHeight,
+            LetterSpacing,
+            1,
+            null);
+
+    private static bool IsWordSeparator(char value)
+        => value is ' ' or '\u00a0';
 
     private Size UnscaleWidth(Size size)
         => new(double.IsFinite(size.Width) ? size.Width / _fontWidthScale : size.Width, size.Height);
@@ -4819,12 +5311,22 @@ internal sealed class DomTextInputControl : TextBox, ICustomHitTest
                              + Math.Max(0, Padding.Right)
                              + Math.Max(0, BorderThickness.Left)
                              + Math.Max(0, BorderThickness.Right);
+        var preferredHeight = Math.Max(0, CssLayout.GetLineHeight(this) ?? FontSize * 1.2)
+                              + Math.Max(0, Padding.Top)
+                              + Math.Max(0, Padding.Bottom)
+                              + Math.Max(0, BorderThickness.Top)
+                              + Math.Max(0, BorderThickness.Bottom);
         var width = Math.Max(measured.Width, preferredWidth);
+        var height = Math.Max(measured.Height, preferredHeight);
         if (double.IsFinite(availableSize.Width))
         {
             width = Math.Min(width, Math.Max(0, availableSize.Width));
         }
-        return new Size(width, measured.Height);
+        if (double.IsFinite(availableSize.Height))
+        {
+            height = Math.Min(height, Math.Max(0, availableSize.Height));
+        }
+        return new Size(width, height);
     }
 
     public bool HitTest(Point point)
@@ -5082,6 +5584,13 @@ public enum CssPosition
     Fixed
 }
 
+public enum CssFloat
+{
+    None,
+    Left,
+    Right
+}
+
 public enum CssDisplay
 {
     Block,
@@ -5229,6 +5738,8 @@ public static class CssLayout
         AvaloniaProperty.RegisterAttached<CssLayoutPanel, Control, CssDisplay>("Display");
     public static readonly AttachedProperty<CssPosition> PositionProperty =
         AvaloniaProperty.RegisterAttached<CssLayoutPanel, Control, CssPosition>("Position");
+    public static readonly AttachedProperty<CssFloat> FloatProperty =
+        AvaloniaProperty.RegisterAttached<CssLayoutPanel, Control, CssFloat>("Float");
     public static readonly AttachedProperty<CssBoxSizing> BoxSizingProperty =
         AvaloniaProperty.RegisterAttached<CssLayoutPanel, Control, CssBoxSizing>("BoxSizing");
     public static readonly AttachedProperty<bool> FixedTableLayoutProperty =
@@ -5325,6 +5836,8 @@ public static class CssLayout
     public static void SetDisplay(Control control, CssDisplay value) => control.SetValue(DisplayProperty, value);
     public static CssPosition GetPosition(Control control) => control.GetValue(PositionProperty);
     public static void SetPosition(Control control, CssPosition value) => control.SetValue(PositionProperty, value);
+    public static CssFloat GetFloat(Control control) => control.GetValue(FloatProperty);
+    public static void SetFloat(Control control, CssFloat value) => control.SetValue(FloatProperty, value);
     public static CssBoxSizing GetBoxSizing(Control control) => control.GetValue(BoxSizingProperty);
     public static void SetBoxSizing(Control control, CssBoxSizing value) => control.SetValue(BoxSizingProperty, value);
     public static bool GetFixedTableLayout(Control control) => control.GetValue(FixedTableLayoutProperty);
@@ -5422,6 +5935,14 @@ public static class CssLayout
         if (normalized.Equals("absolute", StringComparison.OrdinalIgnoreCase)) return CssPosition.Absolute;
         if (normalized.Equals("fixed", StringComparison.OrdinalIgnoreCase)) return CssPosition.Fixed;
         return CssPosition.Static;
+    }
+
+    public static CssFloat ParseFloat(string? value)
+    {
+        var normalized = value.AsSpan().Trim();
+        if (normalized.Equals("left", StringComparison.OrdinalIgnoreCase)) return CssFloat.Left;
+        if (normalized.Equals("right", StringComparison.OrdinalIgnoreCase)) return CssFloat.Right;
+        return CssFloat.None;
     }
 
     public static CssDisplay ParseDisplay(string? value)

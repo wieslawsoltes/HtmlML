@@ -118,7 +118,7 @@ public class DomEvent
     }
 }
 
-public sealed class DomSyntheticEvent : DomEvent
+public sealed class DomSyntheticEvent : DomEvent, IExternalSyntheticEventSource
 {
     internal DomSyntheticEvent(
         string type,
@@ -126,14 +126,23 @@ public sealed class DomSyntheticEvent : DomEvent
         bool cancelable,
         double timeStamp,
         object? detail,
-        DefaultPreventedAccessor? accessor)
+        DefaultPreventedAccessor? accessor,
+        object? sourceEvent = null)
         : base(type, bubbles, cancelable, initiallyHandled: false, timeStamp, isTrusted: false)
     {
         this.detail = detail;
         _accessor = accessor;
+        SourceEvent = sourceEvent;
     }
 
     public object? detail { get; }
+
+    /// <summary>
+    /// Opaque engine-owned Event object supplied to dispatchEvent. Adapters may
+    /// deliver it back to listeners so ordinary expando/accessor properties and
+    /// JavaScript object identity survive the backend-neutral dispatch path.
+    /// </summary>
+    public object? SourceEvent { get; }
 
     private readonly DefaultPreventedAccessor? _accessor;
 
@@ -141,6 +150,27 @@ public sealed class DomSyntheticEvent : DomEvent
     {
         _accessor?.SetDefaultPrevented(defaultPrevented);
     }
+}
+
+public sealed class DomTransitionEvent : DomEvent
+{
+    internal DomTransitionEvent(
+        string type,
+        string propertyName,
+        double elapsedTime,
+        double timeStamp)
+        : base(type, bubbles: true, cancelable: false, initiallyHandled: false,
+            timeStamp, isTrusted: true)
+    {
+        this.propertyName = propertyName;
+        this.elapsedTime = elapsedTime;
+    }
+
+    public string propertyName { get; }
+
+    public double elapsedTime { get; }
+
+    public string pseudoElement => string.Empty;
 }
 
 public sealed class DefaultPreventedAccessor

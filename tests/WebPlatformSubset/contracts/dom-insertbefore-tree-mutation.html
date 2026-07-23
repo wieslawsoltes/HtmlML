@@ -1,0 +1,133 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Node.insertBefore tree-mutation invariants</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function childIds(parent) {
+    return Array.from(parent.children).map(child => child.id).join(",");
+  }
+
+  test("insertBefore(node, node) is an identity-preserving no-op", () => {
+    const parent = document.createElement("div");
+    const first = document.createElement("span");
+    const node = document.createElement("span");
+    const last = document.createElement("span");
+    first.id = "first";
+    node.id = "node";
+    last.id = "last";
+    parent.appendChild(first);
+    parent.appendChild(node);
+    parent.appendChild(last);
+    document.body.appendChild(parent);
+
+    const returned = parent.insertBefore(node, node);
+
+    assert(returned === node, "insertBefore did not return the inserted node");
+    assert(node.parentNode === parent, "self-reference detached the node");
+    assert(childIds(parent) === "first,node,last",
+      `self-reference changed sibling order to ${childIds(parent)}`);
+  });
+
+  test("insertBefore reorders an existing child in both directions", () => {
+    const parent = document.createElement("div");
+    const a = document.createElement("span");
+    const b = document.createElement("span");
+    const c = document.createElement("span");
+    a.id = "a";
+    b.id = "b";
+    c.id = "c";
+    parent.appendChild(a);
+    parent.appendChild(b);
+    parent.appendChild(c);
+    document.body.appendChild(parent);
+
+    parent.insertBefore(a, c);
+    assert(childIds(parent) === "b,a,c",
+      `forward reorder produced ${childIds(parent)}`);
+    parent.insertBefore(c, b);
+    assert(childIds(parent) === "c,b,a",
+      `backward reorder produced ${childIds(parent)}`);
+    assert(a.parentNode === parent && b.parentNode === parent && c.parentNode === parent,
+      "same-parent reorder corrupted parentNode identity");
+  });
+
+  test("insertBefore atomically reparents before an existing child", () => {
+    const source = document.createElement("div");
+    const target = document.createElement("div");
+    const moved = document.createElement("span");
+    const reference = document.createElement("span");
+    moved.id = "moved";
+    reference.id = "reference";
+    source.appendChild(moved);
+    target.appendChild(reference);
+    document.body.appendChild(source);
+    document.body.appendChild(target);
+
+    target.insertBefore(moved, reference);
+
+    assert(source.children.length === 0, "old parent retained the moved child");
+    assert(moved.parentNode === target, "moved child did not acquire the target parent");
+    assert(childIds(target) === "moved,reference",
+      `target order was ${childIds(target)}`);
+  });
+
+  test("a rejected reference does not detach or reorder the node", () => {
+    const parent = document.createElement("div");
+    const other = document.createElement("div");
+    const first = document.createElement("span");
+    const moved = document.createElement("span");
+    const foreign = document.createElement("span");
+    first.id = "first";
+    moved.id = "moved";
+    foreign.id = "foreign";
+    parent.appendChild(first);
+    parent.appendChild(moved);
+    other.appendChild(foreign);
+    document.body.appendChild(parent);
+    document.body.appendChild(other);
+
+    let threw = false;
+    try {
+      parent.insertBefore(moved, foreign);
+    } catch (_error) {
+      threw = true;
+    }
+
+    assert(threw, "insertBefore accepted a reference from another parent");
+    assert(moved.parentNode === parent, "failed insertion detached the moved node");
+    assert(childIds(parent) === "first,moved",
+      `failed insertion changed sibling order to ${childIds(parent)}`);
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

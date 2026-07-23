@@ -60,6 +60,23 @@ public sealed class CssStylesheetCompilerTests
     }
 
     [Fact]
+    public void CompilerPreservesCaseSensitiveCustomPropertyNamesAndCssTokenWhitespace()
+    {
+        var result = CssStylesheetCompiler.Compile(
+            ".probe { --Token: upper; --token: lower; --vertical:\vkept\v; color: var(--Token); }");
+
+        var declarations = Assert.Single(result.Rules).Declarations;
+        Assert.Contains(declarations, declaration =>
+            declaration.Name == "--Token" && declaration.Value == "upper");
+        Assert.Contains(declarations, declaration =>
+            declaration.Name == "--token" && declaration.Value == "lower");
+        Assert.Contains(declarations, declaration =>
+            declaration.Name == "--vertical" && declaration.Value == "\vkept\v");
+        Assert.Contains(declarations, declaration =>
+            declaration.Name == "color" && declaration.Value == "var(--Token)");
+    }
+
+    [Fact]
     public void CompilerAcceptsUnitlessZeroRotateWithoutAcceptingNonZeroUnitlessAngles()
     {
         var result = CssStylesheetCompiler.Compile("""
@@ -94,6 +111,23 @@ public sealed class CssStylesheetCompilerTests
         var declarations = Assert.Single(result.Rules).Declarations;
         Assert.Contains(declarations, declaration =>
             declaration.Name == "background" && declaration.Value == "currentColor");
+    }
+
+    [Fact]
+    public void CompilerPreservesAllUnsetForPerPropertyCascadeExpansion()
+    {
+        var result = CssStylesheetCompiler.Compile(
+            ".control { padding: 11px; } .control { all: unset; display: flex; }");
+
+        Assert.Equal(2, result.Rules.Count);
+        Assert.All(result.Rules[0].Declarations, declaration =>
+            Assert.StartsWith("padding-", declaration.Name, StringComparison.Ordinal));
+        var declarations = result.Rules[1].Declarations;
+        var allIndex = declarations.ToList().FindIndex(declaration => declaration.Name == "all");
+        var displayIndex = declarations.ToList().FindIndex(declaration => declaration.Name == "display");
+        Assert.Equal(0, allIndex);
+        Assert.True(displayIndex > allIndex);
+        Assert.Equal("unset", declarations[allIndex].Value);
     }
 
     [Fact]

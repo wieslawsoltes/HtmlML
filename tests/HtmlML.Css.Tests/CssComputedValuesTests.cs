@@ -23,7 +23,8 @@ public sealed class CssComputedValuesTests
             ["--local"] = "yes"
         });
         Assert.Equal(3, child.Count);
-        Assert.Equal("blue", child["--ACCENT"]);
+        Assert.Equal("blue", child["--accent"]);
+        Assert.False(child.ContainsKey("--ACCENT"));
         Assert.Equal("4px", child["--gap"]);
         Assert.Equal("yes", child["--local"]);
         Assert.True(child.ContainsKey("--accent"));
@@ -104,7 +105,8 @@ public sealed class CssComputedValuesTests
         Assert.True(declared.ContentEquals(equal));
         Assert.True(declared.OrdinaryContentEquals(equal));
         Assert.True(declared.SetEquals(equal));
-        Assert.True(declared.SetEquals(new[] { "COLOR", "VENDOR-MODE", "--ACCENT" }));
+        Assert.True(declared.SetEquals(new[] { "COLOR", "VENDOR-MODE", "--accent" }));
+        Assert.False(declared.SetEquals(new[] { "COLOR", "VENDOR-MODE", "--ACCENT" }));
         Assert.True(declared.IsSubsetOf(new[] { "color", "vendor-mode", "--accent", "extra" }));
         Assert.True(declared.IsSupersetOf(new[] { "color" }));
         Assert.True(declared.IsProperSubsetOf(new[] { "color", "vendor-mode", "--accent", "extra" }));

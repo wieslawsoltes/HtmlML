@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Node structural and identity equality</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  function createTree() {
+    const root = document.createElement("section");
+    root.setAttribute("data-neutral", "value");
+    const child = document.createElement("span");
+    child.textContent = "content";
+    root.appendChild(child);
+    return root;
+  }
+
+  test("isSameNode reports object identity", () => {
+    const node = createTree();
+    assert(node.isSameNode(node), "node was not identical to itself");
+    assert(!node.isSameNode(node.cloneNode(true)), "clone unexpectedly had node identity");
+    assert(!node.isSameNode(null), "null unexpectedly had node identity");
+  });
+
+  test("isEqualNode compares equal independent trees structurally", () => {
+    const first = createTree();
+    const second = createTree();
+    assert(first !== second, "fixture trees unexpectedly shared identity");
+    assert(first.isEqualNode(second), "equivalent independent trees were not equal");
+    assert(first.isEqualNode(first.cloneNode(true)), "deep clone was not structurally equal");
+  });
+
+  test("isEqualNode observes attributes, text, and child structure", () => {
+    const baseline = createTree();
+    const changedAttribute = createTree();
+    changedAttribute.setAttribute("data-neutral", "changed");
+    assert(!baseline.isEqualNode(changedAttribute), "attribute mutation did not affect equality");
+    const changedText = createTree();
+    changedText.firstChild.textContent = "changed";
+    assert(!baseline.isEqualNode(changedText), "text mutation did not affect equality");
+    const changedChildren = createTree();
+    changedChildren.appendChild(document.createElement("i"));
+    assert(!baseline.isEqualNode(changedChildren), "child mutation did not affect equality");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

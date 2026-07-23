@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Document root viewport geometry</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("documentElement exposes finite viewport geometry", () => {
+    const root = document.documentElement;
+    const rect = root.getBoundingClientRect();
+    assert(Number.isFinite(rect.left) && Number.isFinite(rect.top), "root origin is not finite");
+    assert(rect.width === root.clientWidth && rect.height === root.clientHeight,
+      `root rect ${rect.width}x${rect.height} differed from client ${root.clientWidth}x${root.clientHeight}`);
+    assert(rect.right === rect.left + rect.width && rect.bottom === rect.top + rect.height,
+      "root rectangle edges are inconsistent");
+  });
+
+  test("Element prototype geometry methods are generically callable on the root", () => {
+    assert(typeof Element.prototype.getBoundingClientRect === "function", "prototype rect method is missing");
+    const rect = Element.prototype.getBoundingClientRect.call(document.documentElement);
+    assert(rect.width === document.documentElement.clientWidth, "generic root rect width");
+    assert(Element.prototype.getClientRects.call(document.documentElement).length === 1,
+      "generic root client rect list");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

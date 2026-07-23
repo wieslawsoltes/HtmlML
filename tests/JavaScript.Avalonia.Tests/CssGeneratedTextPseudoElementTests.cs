@@ -123,11 +123,80 @@ public sealed class CssGeneratedTextPseudoElementTests
         }
     }
 
+    [AvaloniaFact]
+    public void InlineGeneratedWhitespaceContributesAdvanceBeforeFollowingFragment()
+    {
+        var root = new CssLayoutPanel { Width = 500, Height = 60 };
+        var window = new Window { Width = 500, Height = 60, Content = root };
+        using var host = new AvaloniaBrowserHost(window, enableTargetOnlyInlineStyles: true);
+        var document = host.Document;
+        var style = HostTestUtilities.GetElement(document.createElement("style"));
+        style.textContent = """
+            html, body { margin: 0; }
+            .item { display: inline; }
+            #status > .item:not(:last-child)::after { content: " "; }
+            #reference { position: absolute; visibility: hidden; }
+            """;
+        document.head.appendChild(style);
+        var status = Append(document, "p", "status");
+        var first = Append(document, "span", "first", status);
+        first.textContent = "All's well — market is open.";
+        var second = Append(document, "span", "second", status);
+        second.className = "item";
+        second.textContent = "It'll close soon.";
+        var reference = Append(document, "span", "reference");
+        reference.className = "item";
+        reference.textContent = "All's well — market is open.";
+
+        try
+        {
+            window.Show();
+            document.EnsureStylesCurrent();
+            Dispatcher.UIThread.RunJobs();
+
+            var initialFirst = first.getBoundingClientRect();
+            var initialReference = reference.getBoundingClientRect();
+            Assert.InRange(
+                Math.Abs(initialFirst.width - initialReference.width),
+                0,
+                1);
+
+            first.className = "item";
+            document.EnsureStylesCurrent();
+            Dispatcher.UIThread.RunJobs();
+
+            var firstRect = first.getBoundingClientRect();
+            var secondRect = second.getBoundingClientRect();
+            var referenceRect = reference.getBoundingClientRect();
+            var pseudo = Assert.IsType<CssGeneratedPseudoElement>(
+                Assert.IsType<CssLayoutPanel>(first.Control).AfterPseudoElement);
+            Assert.True(pseudo.IntrinsicSize.Width >= 2);
+            Assert.True(
+                firstRect.width - referenceRect.width >= 2,
+                $"first={firstRect.width}; reference={referenceRect.width}; pseudo={pseudo.IntrinsicSize.Width}");
+            Assert.Equal(firstRect.right, secondRect.left, 6);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
     private static AvaloniaDomElement Append(AvaloniaDomDocument document, string id)
     {
-        var element = HostTestUtilities.GetElement(document.createElement("div"));
+        return Append(document, "div", id);
+    }
+
+    private static AvaloniaDomElement Append(
+        AvaloniaDomDocument document,
+        string tag,
+        string id,
+        AvaloniaDomElement? parent = null)
+    {
+        var element = HostTestUtilities.GetElement(document.createElement(tag));
         element.id = id;
-        HostTestUtilities.GetElement(document.body).appendChild(element);
+        (parent ?? HostTestUtilities.GetElement(document.body)).appendChild(element);
         return element;
     }
 

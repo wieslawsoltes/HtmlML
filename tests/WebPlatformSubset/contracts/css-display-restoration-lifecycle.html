@@ -1,0 +1,118 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS display restoration and rendered-box lifecycle</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .cascade-hidden { display: none; }
+  .tiny-rendered { height: 1px; }
+</style>
+<body>
+<div id="host"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const host = document.getElementById("host");
+
+  test("clearing inline display none restores each tag's default display", () => {
+    const block = document.createElement("div");
+    const inline = document.createElement("span");
+    const item = document.createElement("li");
+    for (const element of [block, inline, item]) {
+      element.style.display = "none";
+      host.appendChild(element);
+      assert(getComputedStyle(element).display === "none", `${element.tagName} did not hide`);
+      element.style.display = "";
+    }
+    assert(getComputedStyle(block).display === "block", "DIV did not restore block display");
+    assert(getComputedStyle(inline).display === "inline", "SPAN did not restore inline display");
+    assert(getComputedStyle(item).display === "list-item", "LI did not restore list-item display");
+    assert(inline.getClientRects().length > 0, "empty restored inline exposed no client rectangle");
+  });
+
+  test("stylesheet-hidden elements remain hidden across detach and reattachment", () => {
+    const element = document.createElement("div");
+    element.className = "cascade-hidden";
+    host.appendChild(element);
+    assert(getComputedStyle(element).display === "none", "connected cascade did not hide element");
+    assert(element.getClientRects().length === 0, "cascade-hidden element exposed a rectangle");
+    element.remove();
+    element.style.display = "";
+    host.appendChild(element);
+    assert(getComputedStyle(element).display === "none", "reattachment lost stylesheet display:none");
+    assert(element.getClientRects().length === 0, "reattached hidden element exposed a rectangle");
+  });
+
+  test("a one-pixel block remains rendered for offset and client geometry", () => {
+    const element = document.createElement("div");
+    element.className = "tiny-rendered";
+    host.appendChild(element);
+    assert(getComputedStyle(element).display === "block", "tiny block did not compute as block");
+    assert(element.offsetHeight === 1, `tiny block offsetHeight was ${element.offsetHeight}`);
+    assert(element.getBoundingClientRect().height === 1,
+      `tiny block client height was ${element.getBoundingClientRect().height}`);
+    assert(element.getClientRects().length > 0, "tiny block exposed no client rectangle");
+  });
+
+  test("inline display changes synchronously remove and restore rendered boxes", () => {
+    const element = document.createElement("div");
+    element.style.width = "10px";
+    element.style.height = "10px";
+    host.appendChild(element);
+    assert(element.getClientRects().length > 0, "initial visible box exposed no rectangle");
+    element.style.display = "none";
+    assert(getComputedStyle(element).display === "none", "inline display:none did not compute");
+    assert(element.offsetWidth === 0 && element.offsetHeight === 0,
+      "display:none retained offset dimensions");
+    assert(element.getClientRects().length === 0, "display:none retained client rectangles");
+    element.style.display = "block";
+    assert(getComputedStyle(element).display === "block", "inline block display did not restore");
+    assert(element.offsetWidth === 10 && element.offsetHeight === 10,
+      `restored offsets were ${element.offsetWidth}x${element.offsetHeight}`);
+    assert(element.getClientRects().length > 0, "restored block exposed no client rectangle");
+  });
+
+  test("an ancestor display transition suppresses and restores descendant boxes", () => {
+    const parent = document.createElement("div");
+    const child = document.createElement("span");
+    child.textContent = "visible";
+    parent.appendChild(child);
+    host.appendChild(parent);
+    assert(child.getClientRects().length > 0, "initial descendant exposed no rectangle");
+    parent.style.display = "none";
+    assert(getComputedStyle(child).display === "inline",
+      "ancestor hiding incorrectly changed the descendant computed display");
+    assert(child.offsetWidth === 0 && child.offsetHeight === 0,
+      "ancestor-hidden descendant retained offset dimensions");
+    assert(child.getClientRects().length === 0,
+      "ancestor-hidden descendant retained client rectangles");
+    parent.style.display = "block";
+    assert(child.getClientRects().length > 0,
+      "descendant rectangles did not return after ancestor restoration");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

@@ -85,6 +85,23 @@ public sealed class DomEventTests
         Assert.False(domEvent.isTrusted);
     }
 
+    [Fact]
+    public void SyntheticEventRetainsOpaqueSourceEventForAdapterIdentity()
+    {
+        var sourceEvent = new object();
+        var domEvent = new DomSyntheticEvent(
+            "carousel",
+            bubbles: true,
+            cancelable: true,
+            timeStamp: 11,
+            detail: null,
+            accessor: null,
+            sourceEvent);
+
+        var source = Assert.IsAssignableFrom<IExternalSyntheticEventSource>(domEvent);
+        Assert.Same(sourceEvent, source.SourceEvent);
+    }
+
     private sealed class RecordingDomEvent : DomEvent
     {
         public RecordingDomEvent(bool cancelable)

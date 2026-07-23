@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Event expando identity across dispatch</title>
+<button id="target">target</button>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("dispatch preserves Event identity and assigned expando data", () => {
+    const target = document.getElementById("target");
+    const event = new Event("platform-event-expando", { bubbles: true, cancelable: true });
+    event.sequence = 17;
+    event.payload = { label: "neutral" };
+    let received = null;
+    target.addEventListener("platform-event-expando", current => { received = current; });
+    target.dispatchEvent(event);
+    assert(received === event, "listener did not receive the dispatched Event object");
+    assert(received.sequence === 17, `assigned expando was ${received.sequence}`);
+    assert(received.payload === event.payload && received.payload.label === "neutral",
+      "assigned object expando lost identity or content");
+    assert(received.target === target, "event target was not set on the original Event");
+  });
+
+  test("dispatch preserves accessor properties and cancellation state", () => {
+    const target = document.getElementById("target");
+    const event = new Event("platform-event-accessor", { cancelable: true });
+    const marker = { value: 23 };
+    Object.defineProperty(event, "relatedData", {
+      configurable: true,
+      get() { return marker; }
+    });
+    let received = null;
+    target.addEventListener("platform-event-accessor", current => {
+      received = current;
+      current.preventDefault();
+    });
+    const dispatched = target.dispatchEvent(event);
+    assert(received === event, "accessor event identity changed during dispatch");
+    assert(received.relatedData === marker, "accessor property was not visible to the listener");
+    assert(dispatched === false, "canceled dispatch did not return false");
+    assert(event.defaultPrevented === true, "cancellation was not reflected on the original Event");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

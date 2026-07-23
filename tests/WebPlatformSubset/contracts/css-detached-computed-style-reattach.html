@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Detached computed style does not poison reattachment cascade</title>
+<style>
+  .cascade-hidden { display: none; }
+</style>
+<div id="host"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const host = document.getElementById("host");
+  const element = document.createElement("div");
+  element.className = "cascade-hidden";
+
+  test("a connected element receives its stylesheet display", () => {
+    host.appendChild(element);
+    assert(element.style.display === "",
+      `connected inline display became ${JSON.stringify(element.style.display)}`);
+    assert(getComputedStyle(element).display === "none",
+      `connected display became ${JSON.stringify(
+        getComputedStyle(element).display)}`);
+  });
+
+  test("detached computed style is empty without authoring an inline override", () => {
+    element.remove();
+    assert(getComputedStyle(element).display === "",
+      `detached display became ${JSON.stringify(
+        getComputedStyle(element).display)}`);
+    element.style.display = "";
+    assert(element.style.display === "",
+      `detached inline display became ${JSON.stringify(element.style.display)}`);
+  });
+
+  test("reattachment recascades after a detached computed-style read", () => {
+    host.appendChild(element);
+    assert(getComputedStyle(element).display === "none",
+      `reattached display became ${JSON.stringify(
+        getComputedStyle(element).display)}`);
+    assert(element.getClientRects().length === 0,
+      `reattached hidden element published ${
+        element.getClientRects().length} client rectangles`);
+  });
+
+  test("the lifecycle is stable for an inline element too", () => {
+    const inline = document.createElement("span");
+    inline.className = "cascade-hidden";
+    host.appendChild(inline);
+    assert(getComputedStyle(inline).display === "none",
+      "connected inline element did not receive display:none");
+    inline.remove();
+    assert(getComputedStyle(inline).display === "",
+      "detached inline element retained connected display");
+    host.appendChild(inline);
+    assert(getComputedStyle(inline).display === "none",
+      "reattached inline element lost stylesheet display:none");
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    inlineDisplay: element.style.display,
+    computedDisplay: getComputedStyle(element).display,
+    clientRects: element.getClientRects().length
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

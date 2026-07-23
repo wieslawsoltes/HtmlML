@@ -12,6 +12,7 @@ using Xunit;
 
 namespace JavaScript.Avalonia.Tests;
 
+[Collection(AvaloniaRasterAuthorityCollection.Name)]
 public sealed class CssInvalidationOptimizationTests
 {
     [AvaloniaFact]
@@ -2010,12 +2011,98 @@ public sealed class CssInvalidationOptimizationTests
             Assert.True(viewport.scrollHeight > viewport.clientHeight);
             var first = Assert.IsType<AvaloniaDomElement>(viewport.firstElementChild);
             var firstTop = first.getBoundingClientRect().top;
+            var firstOffsetTop = first.offsetTop;
+            var scrollEvents = new CountingEventListener();
+            viewport.__htmlMlAddExternalEventListener(
+                "scroll",
+                scrollEvents,
+                capture: false,
+                once: false,
+                passive: false);
 
             viewport.scrollTop = 60;
             Dispatcher.UIThread.RunJobs();
 
             Assert.Equal(60, viewport.scrollTop);
             Assert.Equal(firstTop - 60, first.getBoundingClientRect().top);
+            Assert.Equal(firstOffsetTop, first.offsetTop);
+            Assert.Equal(1, scrollEvents.InvocationCount);
+
+            viewport.scrollTop = 60;
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal(1, scrollEvents.InvocationCount);
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void OverflowViewportClipsHitTestingAndReclampsAfterExtentMutation()
+    {
+        var (host, window) = CreateTargetOnlyHost();
+        using (host)
+        {
+            var document = host.Document;
+            var body = HostTestUtilities.GetElement(document.body);
+            body.style.cssText = "margin: 0; background: white";
+            var viewport = HostTestUtilities.GetElement(document.createElement("div"));
+            viewport.style.cssText = "width: 120px; height: 60px; overflow: auto; background: white";
+            var content = HostTestUtilities.GetElement(document.createElement("div"));
+            content.style.cssText = "position: relative; width: 120px; height: 200px";
+            var tail = HostTestUtilities.GetElement(document.createElement("div"));
+            tail.style.cssText = "position: absolute; left: 0; top: 160px; width: 120px; height: 40px";
+            content.appendChild(tail);
+            viewport.appendChild(content);
+            body.appendChild(viewport);
+            var scrollEvents = new CountingEventListener();
+            viewport.__htmlMlAddExternalEventListener(
+                "scroll",
+                scrollEvents,
+                capture: false,
+                once: false,
+                passive: false);
+            document.EnsureStylesCurrent();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal(60, viewport.clientHeight);
+            Assert.Equal(200, viewport.scrollHeight);
+            Assert.NotSame(tail, document.elementFromPoint(10, 170));
+            Dispatcher.UIThread.RunJobs();
+            var scrollPanel = Assert.IsType<CssLayoutPanel>(viewport.Control);
+            var indicator = Assert.Single(scrollPanel.Children.OfType<DomScrollIndicatorControl>());
+            using var initialFrame = new RenderTargetBitmap(
+                new PixelSize(120, 60),
+                new Vector(96, 96));
+            initialFrame.Render(indicator);
+            var initialThumb = ReadPixel(initialFrame, 117, 6);
+            var initialTrackEnd = ReadPixel(initialFrame, 117, 50);
+            Assert.True(initialThumb.A > initialTrackEnd.A + 100);
+
+            viewport.scrollTop = 1e6;
+            Assert.Equal(140, viewport.scrollTop);
+            Assert.Equal(1, scrollEvents.InvocationCount);
+            Assert.Same(tail, document.elementFromPoint(10, 30));
+            Dispatcher.UIThread.RunJobs();
+            using var scrolledFrame = new RenderTargetBitmap(
+                new PixelSize(120, 60),
+                new Vector(96, 96));
+            scrolledFrame.Render(indicator);
+            var scrolledTrackStart = ReadPixel(scrolledFrame, 117, 6);
+            var scrolledThumb = ReadPixel(scrolledFrame, 117, 50);
+            Assert.True(scrolledThumb.A > scrolledTrackStart.A + 100);
+
+            viewport.scrollTop = 1e6;
+            Assert.Equal(1, scrollEvents.InvocationCount);
+
+            content.style.setProperty("height", "80px");
+            _ = body.offsetWidth;
+            Assert.Equal(80, viewport.scrollHeight);
+            Assert.Equal(20, viewport.scrollTop);
+
+            content.style.setProperty("height", "200px");
+            viewport.scrollTop = 70;
+            Assert.Equal(70, viewport.scrollTop);
+            Assert.Equal(200, viewport.scrollHeight);
             window.Close();
         }
     }

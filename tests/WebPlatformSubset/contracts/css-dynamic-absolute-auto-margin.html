@@ -1,0 +1,124 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Dynamic absolute containing block and automatic block margins</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #fixture {
+    position: absolute;
+    top: -10000px;
+    left: -10000px;
+    width: 1000px;
+    height: 1000px;
+  }
+  #control-parent { position: relative; width: 100px; }
+  #control-child { width: 50px; margin-left: auto; margin-right: auto; }
+</style>
+<div id="fixture">
+  <div id="dynamic-parent">
+    <p id="dynamic-child">Text-bearing block <a href="#target">with inline content</a></p>
+    <p>Following sibling</p>
+  </div>
+  <div id="control-parent"><div id="control-child"></div></div>
+</div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function near(actual, expected, message, tolerance = 0.01) {
+    assert(
+      Math.abs(actual - expected) <= tolerance,
+      `${message}: expected ${expected}, got ${actual}`
+    );
+  }
+
+  function pixels(value) {
+    return Number.parseFloat(value);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const parent = document.getElementById("dynamic-parent");
+  const child = document.getElementById("dynamic-child");
+
+  parent.style.width = "1px";
+  parent.style.marginRight = 0;
+  void getComputedStyle(parent).marginRight;
+  parent.style.position = "absolute";
+  parent.style.top = 0;
+  parent.style.left = 0;
+  parent.style.width = "100px";
+  child.style.width = "50px";
+  child.style.margin = "auto";
+  state.diagnostics.push(JSON.stringify({
+    parentNodeId: child.parentElement && child.parentElement.id,
+    parentPosition: getComputedStyle(parent).position,
+    parentWidth: getComputedStyle(parent).width,
+    parentRectWidth: parent.getBoundingClientRect().width,
+    childDisplay: getComputedStyle(child).display,
+    childWidth: getComputedStyle(child).width,
+    childRectWidth: child.getBoundingClientRect().width,
+    childMargin: getComputedStyle(child).margin,
+    childMarginLeft: getComputedStyle(child).marginLeft,
+    childMarginRight: getComputedStyle(child).marginRight
+  }));
+
+  test("dynamic absolute containing block distributes opposing auto margins", () => {
+    const style = getComputedStyle(child);
+    near(pixels(style.marginLeft), 25, "computed margin-left");
+    near(pixels(style.marginRight), 25, "computed margin-right");
+  });
+
+  test("distributed margins position a text-bearing block inside the containing block", () => {
+    const parentRect = parent.getBoundingClientRect();
+    const childRect = child.getBoundingClientRect();
+    near(parentRect.width, 100, "parent width");
+    near(childRect.width, 50, "child width");
+    near(childRect.left - parentRect.left, 25, "child inline offset");
+  });
+
+  test("automatic margins recompute after containing-block width mutation", () => {
+    parent.style.width = "120px";
+    near(pixels(getComputedStyle(child).marginLeft), 35, "expanded margin-left");
+    near(child.getBoundingClientRect().left - parent.getBoundingClientRect().left, 35, "expanded offset");
+    parent.style.width = "100px";
+    near(pixels(getComputedStyle(child).marginLeft), 25, "restored margin-left");
+  });
+
+  test("the simpler relative empty-block control remains centered", () => {
+    const controlParent = document.getElementById("control-parent");
+    const controlChild = document.getElementById("control-child");
+    near(pixels(getComputedStyle(controlChild).marginLeft), 25, "control margin-left");
+    near(
+      controlChild.getBoundingClientRect().left - controlParent.getBoundingClientRect().left,
+      25,
+      "control offset"
+    );
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

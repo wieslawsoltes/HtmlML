@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Reference for observed generated-box logical inset, margin, background, and visibility</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: white; }
+  .stage {
+    position: relative;
+    width: 160px;
+    height: 100px;
+    background: rgb(240, 240, 240);
+  }
+  .first {
+    position: absolute;
+    left: 24px;
+    top: 15px;
+    width: 30px;
+    height: 20px;
+    background: rgb(0, 160, 0);
+  }
+  .second {
+    position: absolute;
+    left: 60px;
+    top: 50px;
+    width: 80px;
+    height: 40px;
+    background: rgb(0, 0, 192);
+  }
+  .hidden {
+    width: 160px;
+    height: 40px;
+    background: rgb(255, 255, 0);
+  }
+  .pseudo-flex {
+    position: relative;
+    width: 160px;
+    height: 40px;
+    background: white;
+  }
+  .pseudo-box {
+    position: absolute;
+    left: 23px;
+    top: 10px;
+    width: 20px;
+    height: 20px;
+    background: rgb(0, 160, 0);
+    opacity: .5;
+  }
+  .right-box {
+    position: absolute;
+    right: 21px;
+    top: 5px;
+    width: 20px;
+    height: 20px;
+    background: rgb(0, 0, 0);
+  }
+  .pseudo-text {
+    position: relative;
+    width: 160px;
+    height: 30px;
+    background: white;
+  }
+  .reference-text {
+    position: absolute;
+    left: 5px;
+    top: 5px;
+    color: rgb(20, 40, 180);
+    font-size: 20px;
+    line-height: 20px;
+  }
+</style>
+<div class="stage"><div class="first"></div><div class="second"></div></div><div class="hidden"></div><div class="pseudo-flex"><div class="pseudo-box"></div><div class="right-box"></div></div><div class="pseudo-text"><span class="reference-text">M</span></div>

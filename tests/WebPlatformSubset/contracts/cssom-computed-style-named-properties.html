@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Computed CSSStyleDeclaration named-property semantics</title>
+<style>
+  #target {
+    color: rgb(1, 2, 3);
+    --present-token: value;
+  }
+</style>
+<div id="target"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const computed = getComputedStyle(document.getElementById("target"));
+
+  test("getPropertyValue returns an empty string for an unknown property", () => {
+    assert(computed.getPropertyValue("x-fake") === "",
+      `unknown getPropertyValue became ${JSON.stringify(
+        computed.getPropertyValue("x-fake"))}`);
+  });
+
+  test("unknown names are not exposed as CSSStyleDeclaration named properties", () => {
+    assert(computed.xFake === undefined,
+      `unknown camel-case property became ${JSON.stringify(computed.xFake)}`);
+    assert(computed["x-fake"] === undefined,
+      `unknown kebab-case property became ${JSON.stringify(computed["x-fake"])}`);
+    assert(!("xFake" in computed),
+      "unknown camel-case property was reported by the in operator");
+  });
+
+  test("supported names remain exposed through camel-case and kebab-case access", () => {
+    assert(computed.color === "rgb(1, 2, 3)",
+      `color named property became ${JSON.stringify(computed.color)}`);
+    assert(computed["font-size"] === computed.getPropertyValue("font-size"),
+      "font-size bracket access diverged from getPropertyValue");
+    assert("color" in computed, "supported color property was absent");
+  });
+
+  test("custom properties remain method-only token streams", () => {
+    assert(computed.getPropertyValue("--present-token").trim() === "value",
+      `custom property token stream became ${JSON.stringify(
+        computed.getPropertyValue("--present-token"))}`);
+    assert(computed["--present-token"] === undefined,
+      `custom property became a named property: ${JSON.stringify(
+        computed["--present-token"])}`);
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    unknownMethod: computed.getPropertyValue("x-fake"),
+    unknownNamed: computed.xFake,
+    color: computed.color,
+    customMethod: computed.getPropertyValue("--present-token"),
+    customNamed: computed["--present-token"]
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Rotation transitions preserve display-frame cadence</title>
+<style>
+  #rotor {
+    width: 20px;
+    height: 20px;
+    transform: rotate(-180deg);
+    transition: transform 300ms linear;
+  }
+  #rotor.open { transform: rotate(0deg); }
+</style>
+<body><div id="rotor"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const finish = (error, diagnostics = []) => {
+    state.diagnostics = diagnostics;
+    state.results.push({
+      name: "rotation transition publishes dense monotonic host frames",
+      status: error ? "FAIL" : "PASS",
+      message: error ? String(error && error.message || error) : null,
+      stack: error && error.stack ? String(error.stack) : null
+    });
+    state.harness = error
+      ? { status: 1, message: state.results[0].message, stack: state.results[0].stack }
+      : { status: 0, message: null, stack: null };
+    state.complete = true;
+  };
+  const angle = node => {
+    const value = getComputedStyle(node).transform;
+    if (value === "none") return 0;
+    const matrix = (value.match(/-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) || []).map(Number);
+    if (value.includes("rotate(")) return matrix.at(-1);
+    if (matrix.length < 4) throw new Error("computed transform is not a matrix: " + value);
+    return Math.atan2(matrix[1], matrix[0]) * 180 / Math.PI;
+  };
+  try {
+    const rotor = document.getElementById("rotor");
+    requestAnimationFrame(start => {
+      rotor.classList.add("open");
+      const frames = [];
+      const sample = timestamp => {
+        try {
+          frames.push({
+            elapsed: timestamp - start,
+            angle: angle(rotor),
+            className: rotor.className,
+            matchesOpen: rotor.matches(".open")
+          });
+          if (timestamp - start < 340) {
+            requestAnimationFrame(sample);
+            return;
+          }
+          const intermediate = frames.filter(frame => frame.angle > -179 && frame.angle < -1);
+          if (intermediate.length < 14) {
+            throw new Error("fewer than 14 intermediate rotation frames: " + JSON.stringify(frames));
+          }
+          let maximumGap = 0;
+          let maximumStep = 0;
+          for (let index = 1; index < frames.length; index++) {
+            maximumGap = Math.max(maximumGap, frames[index].elapsed - frames[index - 1].elapsed);
+            maximumStep = Math.max(maximumStep, frames[index].angle - frames[index - 1].angle);
+            if (frames[index].angle + .2 < frames[index - 1].angle) {
+              throw new Error("rotation reversed between consecutive frames: " + JSON.stringify(frames));
+            }
+          }
+          if (maximumGap > 25) throw new Error("rotation frame gap exceeded 25ms: " + maximumGap);
+          if (maximumStep > 20) throw new Error("rotation jumped more than 20 degrees: " + maximumStep);
+          if (Math.abs(frames.at(-1).angle) > .2) {
+            throw new Error("rotation did not finish at zero: " + frames.at(-1).angle);
+          }
+          finish(null, [JSON.stringify({ frameCount: frames.length, maximumGap, maximumStep, frames })]);
+        } catch (error) { finish(error, [JSON.stringify(frames)]); }
+      };
+      requestAnimationFrame(sample);
+    });
+  } catch (error) { finish(error); }
+</script>

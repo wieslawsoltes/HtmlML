@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSSOM border assignment expands, serializes, and invalidates layout</title>
+<div id="target"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const target = document.getElementById("target");
+  target.style.width = "100px";
+  target.style.height = "20px";
+
+  test("border shorthand and style assignment expose four computed widths", () => {
+    target.style.border = "3px";
+    assert(target.style.getPropertyValue("border").includes("3px"),
+      `authored border shorthand was not retained: ${target.style.cssText}`);
+    target.style.borderStyle = "solid";
+    const style = getComputedStyle(target);
+    assert(target.style.borderStyle === "solid",
+      `authored border style became ${JSON.stringify(target.style.borderStyle)}`);
+    assert(style.borderTopWidth === "3px" && style.borderRightWidth === "3px"
+      && style.borderBottomWidth === "3px" && style.borderLeftWidth === "3px",
+      `unexpected computed border widths ${style.borderTopWidth} ` +
+      `${style.borderRightWidth} ${style.borderBottomWidth} ${style.borderLeftWidth}`);
+  });
+
+  test("content-box computed dimensions exclude borders while geometry includes them", () => {
+    const style = getComputedStyle(target);
+    const rect = target.getBoundingClientRect();
+    assert(style.width === "100px" && style.height === "20px",
+      `computed content dimensions became ${style.width}x${style.height}`);
+    assert(Math.abs(rect.width - 106) < 0.01 && Math.abs(rect.height - 26) < 0.01,
+      `border-box geometry became ${rect.width}x${rect.height}`);
+  });
+
+  test("border-width shorthand maps one to four values onto physical edges", () => {
+    target.style.borderWidth = "1px 2px 3px 4px";
+    const style = getComputedStyle(target);
+    assert(style.borderTopWidth === "1px" && style.borderRightWidth === "2px"
+      && style.borderBottomWidth === "3px" && style.borderLeftWidth === "4px",
+      `unexpected expanded widths ${style.borderTopWidth} ${style.borderRightWidth} ` +
+      `${style.borderBottomWidth} ${style.borderLeftWidth}`);
+  });
+
+  test("physical side shorthand overrides width and color synchronously", () => {
+    target.style.borderTop = "5px solid red";
+    const style = getComputedStyle(target);
+    const rect = target.getBoundingClientRect();
+    assert(style.borderTopWidth === "5px",
+      `border-top width became ${style.borderTopWidth}`);
+    assert(style.borderTopColor === "rgb(255, 0, 0)",
+      `border-top color became ${style.borderTopColor}`);
+    assert(Math.abs(rect.width - 106) < 0.01 && Math.abs(rect.height - 28) < 0.01,
+      `side override left stale geometry ${rect.width}x${rect.height}`);
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    cssText: target.style.cssText,
+    width: target.getBoundingClientRect().width,
+    height: target.getBoundingClientRect().height
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

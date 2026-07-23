@@ -1,0 +1,119 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>IntersectionObserver bounded scroll-root geometry</title>
+<style>
+  html, body { margin: 0; }
+  #root { position: relative; width: 240px; height: 100px; overflow-y: auto; }
+  section { display: block; width: 240px; height: 120px; }
+</style>
+<div id="root"><section id="first"></section><section id="second"></section></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const result = { name: "IntersectionObserver follows descendants through bounded scrolling" };
+  const observations = [];
+  let observer = null;
+  let beforeSecondTop = NaN;
+  let afterSecondTop = NaN;
+  let beforeSecondOffset = NaN;
+  let afterSecondOffset = NaN;
+  let scrollStarted = false;
+  let checks = 0;
+
+  function finish(error) {
+    if (state.complete) return;
+    if (observer) observer.disconnect();
+    if (error) {
+      result.status = "FAIL";
+      result.message = String(error.message || error);
+      result.stack = error.stack || null;
+      state.harness = { status: 1, message: result.message, stack: result.stack };
+    } else {
+      result.status = "PASS";
+      result.message = null;
+      result.stack = null;
+      state.harness = { status: 0, message: null, stack: null };
+    }
+    state.results.push(result);
+    state.diagnostics = [JSON.stringify({
+      observations, beforeSecondTop, afterSecondTop, beforeSecondOffset, afterSecondOffset
+    })];
+    state.complete = true;
+  }
+
+  try {
+    if (typeof IntersectionObserver !== "function") {
+      throw new Error("IntersectionObserver constructor is missing");
+    }
+    const root = document.getElementById("root");
+    const first = document.getElementById("first");
+    const second = document.getElementById("second");
+    if (first.getClientRects().length === 0 || second.getClientRects().length === 0) {
+      throw new Error("visible observer targets exposed no client rectangles");
+    }
+    const firstVisibility = getComputedStyle(first).getPropertyValue("visibility");
+    if (firstVisibility !== "visible") {
+      throw new Error(`default computed visibility was ${JSON.stringify(firstVisibility)}`);
+    }
+    beforeSecondTop = second.getBoundingClientRect().top;
+    beforeSecondOffset = second.offsetTop;
+    observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        observations.push({
+          id: entry.target.id,
+          isIntersecting: entry.isIntersecting,
+          ratio: entry.intersectionRatio,
+          top: entry.boundingClientRect.top,
+          rootTop: entry.rootBounds && entry.rootBounds.top
+        });
+      }
+    }, { root, rootMargin: "0px", threshold: [0, 0.5, 1] });
+    if (observer.root !== root) throw new Error("observer root identity was not retained");
+    if (observer.rootMargin !== "0px 0px 0px 0px") {
+      throw new Error(`normalized rootMargin was ${observer.rootMargin}`);
+    }
+    if (Array.from(observer.thresholds).join(",") !== "0,0.5,1") {
+      throw new Error(`normalized thresholds were ${Array.from(observer.thresholds).join(",")}`);
+    }
+    observer.observe(first);
+    observer.observe(second);
+
+    const poll = () => {
+      if (state.complete) return;
+      try {
+        checks++;
+        const firstVisible = observations.some(entry => entry.id === "first" && entry.isIntersecting);
+        if (firstVisible && !scrollStarted) {
+          scrollStarted = true;
+          root.scrollTop = 130;
+          afterSecondTop = second.getBoundingClientRect().top;
+          afterSecondOffset = second.offsetTop;
+          if (!(afterSecondTop < beforeSecondTop - 100)) {
+            throw new Error(`descendant client geometry did not follow scroll (${beforeSecondTop} -> ${afterSecondTop})`);
+          }
+          if (afterSecondOffset !== beforeSecondOffset) {
+            throw new Error(`offsetTop changed with scrolling (${beforeSecondOffset} -> ${afterSecondOffset})`);
+          }
+        }
+        const secondVisible = scrollStarted
+          && observations.some(entry => entry.id === "second" && entry.isIntersecting);
+        const firstHidden = scrollStarted
+          && observations.some(entry => entry.id === "first" && !entry.isIntersecting);
+        if (secondVisible && firstHidden) {
+          finish(null);
+          return;
+        }
+        if (checks >= 120) {
+          throw new Error(`observer did not publish the scrolled visibility transition: ${JSON.stringify(observations)}`);
+        }
+        setTimeout(poll, 25);
+      } catch (error) {
+        finish(error);
+      }
+    };
+    setTimeout(poll, 25);
+  } catch (error) {
+    finish(error);
+  }
+</script>

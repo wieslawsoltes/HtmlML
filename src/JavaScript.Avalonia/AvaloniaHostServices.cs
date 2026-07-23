@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using Avalonia;
@@ -165,8 +168,9 @@ internal sealed class AvaloniaHtmlMlDispatcher : IHtmlMlDispatcher
 internal sealed class AvaloniaFrameScheduler : IHtmlMlFrameScheduler, IDisposable
 {
     private readonly TopLevel _topLevel;
-    private readonly HashSet<long> _pending = new();
+    private readonly SortedDictionary<long, Action<TimeSpan>> _pending = new();
     private long _sequence;
+    private bool _frameScheduled;
     private bool _disposed;
 
     public AvaloniaFrameScheduler(TopLevel topLevel) => _topLevel = topLevel;
@@ -176,15 +180,49 @@ internal sealed class AvaloniaFrameScheduler : IHtmlMlFrameScheduler, IDisposabl
         ArgumentNullException.ThrowIfNull(callback);
         ObjectDisposedException.ThrowIf(_disposed, this);
         var id = Interlocked.Increment(ref _sequence);
-        _pending.Add(id);
+        _pending.Add(id, callback);
+        EnsureFrameScheduled();
+        return new HtmlMlFrameRequest(id);
+    }
+
+    private void EnsureFrameScheduled()
+    {
+        if (_frameScheduled || _disposed || _pending.Count == 0)
+        {
+            return;
+        }
+        _frameScheduled = true;
         _topLevel.RequestAnimationFrame(timestamp =>
         {
-            if (!_disposed && _pending.Remove(id))
+            _frameScheduled = false;
+            if (_disposed || _pending.Count == 0)
             {
-                callback(timestamp);
+                return;
             }
+
+            // A browser invokes all callbacks queued for one rendering
+            // opportunity with the same timestamp. Coalescing here avoids a
+            // separate Avalonia frame request for CSS transitions, JavaScript
+            // requestAnimationFrame, and canvas work that are due together.
+            var callbacks = _pending.Values.ToArray();
+            _pending.Clear();
+            ExceptionDispatchInfo? firstFailure = null;
+            foreach (var callback in callbacks)
+            {
+                try
+                {
+                    callback(timestamp);
+                }
+                catch (Exception exception)
+                {
+                    // One animation callback must not prevent the remaining
+                    // callbacks for the same rendering opportunity. Preserve
+                    // the first failure after the batch has been delivered.
+                    firstFailure ??= ExceptionDispatchInfo.Capture(exception);
+                }
+            }
+            firstFailure?.Throw();
         });
-        return new HtmlMlFrameRequest(id);
     }
 
     public bool CancelFrame(HtmlMlFrameRequest request) => _pending.Remove(request.Value);
@@ -192,6 +230,7 @@ internal sealed class AvaloniaFrameScheduler : IHtmlMlFrameScheduler, IDisposabl
     public void Dispose()
     {
         _disposed = true;
+        _frameScheduled = false;
         _pending.Clear();
     }
 }
@@ -269,7 +308,12 @@ internal sealed class AvaloniaViewport : IHtmlMlViewport, IDisposable
     }
 }
 
-internal sealed class AvaloniaResourceLoader : IHtmlMlResourceLoader
+/// <summary>
+/// Loads HtmlML text resources from files, Avalonia assets, data URIs, or HTTP(S).
+/// Runtime adapters can share this service so resource policy stays in HtmlML
+/// instead of being reimplemented by individual samples and host applications.
+/// </summary>
+public sealed class AvaloniaResourceLoader : IHtmlMlResourceLoader
 {
     private static readonly HttpClient s_httpClient = new();
     private readonly List<string> _resourceSearchDirectories = new();
@@ -320,14 +364,103 @@ internal sealed class AvaloniaResourceLoader : IHtmlMlResourceLoader
                 return LoadFile(packagedPath);
             }
 
+            using var message = new HttpRequestMessage(HttpMethod.Get, resolved);
+            message.Version = HttpVersion.Version20;
+            message.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+            if (!string.IsNullOrWhiteSpace(request.IfNoneMatch)
+                && EntityTagHeaderValue.TryParse(request.IfNoneMatch, out var entityTag))
+            {
+                message.Headers.IfNoneMatch.Add(entityTag);
+            }
+            if (request.IfModifiedSince is { } modifiedSince)
+            {
+                message.Headers.IfModifiedSince = modifiedSince;
+            }
+            using var response = s_httpClient.SendAsync(
+                    message,
+                    HttpCompletionOption.ResponseHeadersRead)
+                .GetAwaiter()
+                .GetResult();
+            var responseEntityTag = response.Headers.ETag?.ToString() ?? request.IfNoneMatch;
+            var responseLastModified = response.Content.Headers.LastModified
+                                       ?? request.IfModifiedSince;
+            var cachePolicy = ReadHttpCachePolicy(response, responseLastModified);
+            if (response.StatusCode == HttpStatusCode.NotModified)
+            {
+                return new HtmlMlTextResource(
+                    resolved.ToString(),
+                    string.Empty,
+                    resolved.ToString(),
+                    null)
+                {
+                    EntityTag = responseEntityTag,
+                    LastModified = responseLastModified,
+                    FreshUntil = cachePolicy.FreshUntil,
+                    IsCacheable = cachePolicy.IsCacheable,
+                    NotModified = true
+                };
+            }
+            response.EnsureSuccessStatusCode();
             return new HtmlMlTextResource(
                 resolved.ToString(),
-                s_httpClient.GetStringAsync(resolved).GetAwaiter().GetResult(),
+                response.Content.ReadAsStringAsync().GetAwaiter().GetResult(),
                 resolved.ToString(),
-                null);
+                null)
+            {
+                EntityTag = responseEntityTag,
+                LastModified = responseLastModified,
+                FreshUntil = cachePolicy.FreshUntil,
+                IsCacheable = cachePolicy.IsCacheable
+            };
         }
 
         throw new NotSupportedException($"Unsupported resource scheme '{resolved.Scheme}'.");
+    }
+
+    internal static (DateTimeOffset? FreshUntil, bool IsCacheable) ReadHttpCachePolicy(
+        HttpResponseMessage response,
+        DateTimeOffset? lastModified)
+    {
+        var cacheControl = response.Headers.CacheControl;
+        if (cacheControl?.NoStore == true)
+        {
+            return (null, false);
+        }
+        if (cacheControl?.NoCache == true)
+        {
+            return (null, true);
+        }
+
+        var receivedAt = DateTimeOffset.UtcNow;
+        var responseDate = response.Headers.Date ?? receivedAt;
+        var responseAge = response.Headers.Age ?? TimeSpan.Zero;
+        var apparentAge = receivedAt > responseDate ? receivedAt - responseDate : TimeSpan.Zero;
+        var currentAge = responseAge > apparentAge ? responseAge : apparentAge;
+        TimeSpan? freshnessLifetime = cacheControl?.MaxAge;
+        if (freshnessLifetime is null && response.Content.Headers.Expires is { } expires)
+        {
+            freshnessLifetime = expires - responseDate;
+        }
+        if (freshnessLifetime is null
+            && lastModified is { } modified
+            && responseDate > modified)
+        {
+            // RFC HTTP caches may use heuristic freshness when an origin sends
+            // validators but no explicit lifetime. Ten percent of the resource
+            // age is conventional; the one-hour cap keeps unversioned documents
+            // responsive to origin updates while hashed bundles remain instant
+            // across normal application restarts.
+            var heuristic = TimeSpan.FromTicks((responseDate - modified).Ticks / 10);
+            freshnessLifetime = TimeSpan.FromTicks(Math.Clamp(
+                heuristic.Ticks,
+                TimeSpan.FromMinutes(1).Ticks,
+                TimeSpan.FromHours(1).Ticks));
+        }
+        if (freshnessLifetime is not { } lifetime || lifetime <= currentAge)
+        {
+            return (null, true);
+        }
+        return (receivedAt + lifetime - currentAge, true);
     }
 
     internal async Task<AvaloniaBinaryResource> LoadBytesAsync(

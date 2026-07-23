@@ -873,6 +873,58 @@ public sealed class CssLayoutResizeSpikeTests
     }
 
     [AvaloniaFact]
+    public void UnthemedTextInputUsesInheritedLineHeightAsItsIntrinsicHeight()
+    {
+        var root = new CssLayoutPanel { Width = 200, Height = 100 };
+        var window = new Window { Width = 200, Height = 100, Content = root };
+        using var host = new AvaloniaBrowserHost(window, enableTargetOnlyInlineStyles: true);
+
+        try
+        {
+            var document = host.Document;
+            var style = HostTestUtilities.GetElement(document.createElement("style"));
+            style.textContent = """
+                .control {
+                    display: inline-block;
+                    font-size: 14px;
+                    line-height: 18px;
+                    max-width: 100px;
+                }
+                .shell { display: flex; }
+                .shell input {
+                    font-size: inherit;
+                    line-height: inherit;
+                    width: 100%;
+                }
+                """;
+            document.head.appendChild(style);
+            var control = HostTestUtilities.GetElement(document.createElement("div"));
+            control.className = "control";
+            var shell = HostTestUtilities.GetElement(document.createElement("div"));
+            shell.className = "shell";
+            var input = HostTestUtilities.GetElement(document.createElement("input"));
+            input.value = "00:00";
+            shell.appendChild(input);
+            control.appendChild(shell);
+            HostTestUtilities.GetElement(document.body).appendChild(control);
+
+            window.Show();
+            document.EnsureStylesCurrent();
+            Dispatcher.UIThread.RunJobs();
+
+            var inputRect = input.getBoundingClientRect();
+            Assert.True(inputRect.width >= 70);
+            Assert.Equal(18, inputRect.height);
+            Assert.Equal(18, CssLayout.GetLineHeight(input.Control));
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
+    [AvaloniaFact]
     public void FlexMarginInlineStartAutoPushesDialogButtonsToTheInlineEndInNativeAndPortableLayout()
     {
         var root = new CssLayoutPanel { Width = 500, Height = 100 };
@@ -925,7 +977,7 @@ public sealed class CssLayoutResizeSpikeTests
             var footerRect = footer.getBoundingClientRect();
             var defaultsRect = defaults.getBoundingClientRect();
             var buttonsRect = buttons.getBoundingClientRect();
-            Assert.Equal("auto", document.getComputedStyle(buttons).getPropertyValue("margin-left"));
+            Assert.Equal("210px", document.getComputedStyle(buttons).getPropertyValue("margin-left"));
             Assert.Equal(0, defaultsRect.left - footerRect.left);
             Assert.Equal(210, buttonsRect.left - footerRect.left);
             Assert.Equal(footerRect.right, buttonsRect.right);

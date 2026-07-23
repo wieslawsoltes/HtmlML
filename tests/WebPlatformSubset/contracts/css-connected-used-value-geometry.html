@@ -1,0 +1,98 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Connected CSS used-value geometry</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #absolute-parent { position: relative; width: 200px; height: 200px; padding: 0; border: 0; }
+  #absolute-child { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; }
+  #percentage-parent { width: 400px; }
+  #percentage-right { width: 50%; margin-right: 50%; }
+  #percentage-left { width: 50%; min-width: 300px; margin-left: 25%; }
+  #auto-parent { position: relative; width: 100px; }
+  #auto-child { width: 50px; margin-left: auto; margin-right: auto; }
+  #fractional { width: 33.3px; height: 88.8px; }
+</style>
+<div id="absolute-parent"><div id="absolute-child"></div></div>
+<div id="percentage-parent"><div id="percentage-right"></div><div id="percentage-left"></div></div>
+<div id="auto-parent"><div id="auto-child"></div></div>
+<div id="fractional"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function near(actual, expected, message) {
+    assert(Math.abs(actual - expected) <= 0.05, `${message}: expected ${expected}, got ${actual}`);
+  }
+
+  function pixels(value) {
+    assert(typeof value === "string" && value.endsWith("px"), `expected a pixel value, got ${value}`);
+    return Number(value.slice(0, -2));
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  test("percentage insets resolve to connected containing-block pixels", () => {
+    const parent = document.getElementById("absolute-parent");
+    const child = document.getElementById("absolute-child");
+    const style = getComputedStyle(child);
+    near(pixels(style.left), 100, "left used value");
+    near(pixels(style.top), 100, "top used value");
+    const parentRect = parent.getBoundingClientRect();
+    const childRect = child.getBoundingClientRect();
+    near(childRect.left - parentRect.left, 100, "left geometry");
+    near(childRect.top - parentRect.top, 100, "top geometry");
+  });
+
+  test("percentage margins resolve against the containing-block width", () => {
+    const right = getComputedStyle(document.getElementById("percentage-right"));
+    const left = getComputedStyle(document.getElementById("percentage-left"));
+    near(pixels(right.marginRight), 200, "margin-right used value");
+    near(pixels(left.marginLeft), 100, "margin-left used value");
+  });
+
+  test("opposing automatic margins publish their distributed used values", () => {
+    const child = document.getElementById("auto-child");
+    const style = getComputedStyle(child);
+    near(pixels(style.marginLeft), 25, "automatic left margin");
+    near(pixels(style.marginRight), 25, "automatic right margin");
+    const parentRect = document.getElementById("auto-parent").getBoundingClientRect();
+    const childRect = child.getBoundingClientRect();
+    near(childRect.left - parentRect.left, 25, "centered child geometry");
+  });
+
+  test("fractional connected dimensions retain subpixel precision", () => {
+    const element = document.getElementById("fractional");
+    const style = getComputedStyle(element);
+    near(pixels(style.width), 33.3, "fractional computed width");
+    near(pixels(style.height), 88.8, "fractional computed height");
+    near(element.getBoundingClientRect().width, 33.3, "fractional border-box width");
+    near(element.getBoundingClientRect().height, 88.8, "fractional border-box height");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

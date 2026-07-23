@@ -31,7 +31,7 @@ internal static class AvaloniaCssLayoutProjection
         var measured = new CssMeasurementEngine().Measure(
             portableRoot,
             new HtmlMlSize(availableSize.Width, availableSize.Height),
-            new AvaloniaIntrinsicMeasurer(controls));
+            new AvaloniaIntrinsicMeasurer(controls, pseudoIds));
         return new Size(measured.Width, measured.Height);
     }
 
@@ -158,8 +158,13 @@ internal static class AvaloniaCssLayoutProjection
         {
             IntrinsicSize = intrinsicSize,
             IsText = control is TextBlock,
+            FirstBaseline = CssLayoutPanel.ResolveFirstBaseline(
+                control,
+                viewport.Width,
+                viewport.Height),
             IsCollapsibleWhitespace = control is TextBlock { Text: { } text }
-                                      && string.IsNullOrWhiteSpace(text),
+                                      && string.IsNullOrWhiteSpace(text)
+                                      && control is not DomTextBlockControl { CssAllowsLayout: false },
             CollapsedWhitespaceWidth = control is TextBlock whitespace
                 ? Math.Max(3, whitespace.FontSize * 0.25)
                 : 0,
@@ -195,12 +200,23 @@ internal static class AvaloniaCssLayoutProjection
         CssLayoutStyle hostStyle)
         => generated is not null
            && (!generated.IsInFlow
+               || generated.IsFlowBlock
+               || generated.IsInlineText
                || hostStyle.Display is CssLayoutDisplay.Flex or CssLayoutDisplay.InlineFlex);
+
+    private static bool IsInline(CssLayoutDisplay display)
+        => display is CssLayoutDisplay.Inline
+            or CssLayoutDisplay.InlineBlock
+            or CssLayoutDisplay.InlineFlex
+            or CssLayoutDisplay.InlineGrid
+            or CssLayoutDisplay.InlineTable;
 
     private static CssLayoutNode CreateGeneratedPseudoNode(long id, CssGeneratedPseudoElement generated)
         => new(id, new CssLayoutStyle
         {
-            Display = CssLayoutDisplay.Block,
+            Display = generated.IsInFlow && !generated.IsFlowBlock
+                ? CssLayoutDisplay.Inline
+                : CssLayoutDisplay.Block,
             Position = generated.IsInFlow ? CssLayoutPosition.Static : CssLayoutPosition.Absolute,
             Width = Convert(generated.Width),
             Height = Convert(generated.Height),
@@ -231,6 +247,94 @@ internal static class AvaloniaCssLayoutProjection
     {
         var desiredWidth = double.IsFinite(desired.Width) ? Math.Max(0, desired.Width) : 0;
         var desiredHeight = double.IsFinite(desired.Height) ? Math.Max(0, desired.Height) : 0;
+        if (control is CssLayoutPanel inlinePanel
+            && style.Display is CssLayoutDisplay.Inline or CssLayoutDisplay.InlineBlock)
+        {
+            var inlineWidth = 0d;
+            var inlineHeight = 0d;
+            var blockWidth = 0d;
+            var blockHeight = 0d;
+            var hasFlowContent = false;
+
+            void AccumulateGenerated(CssGeneratedPseudoElement? generated)
+            {
+                if (generated?.IsInFlow != true
+                    || (!generated.IsFlowBlock && !generated.IsInlineText))
+                {
+                    return;
+                }
+
+                hasFlowContent = true;
+                var margin = generated.ResolveMargin(0, 0);
+                var width = generated.IntrinsicSize.Width + margin.Left + margin.Right;
+                var height = generated.IntrinsicSize.Height + margin.Top + margin.Bottom;
+                if (generated.IsFlowBlock)
+                {
+                    blockWidth = Math.Max(blockWidth, inlineWidth);
+                    blockHeight += inlineHeight;
+                    inlineWidth = 0;
+                    inlineHeight = 0;
+                    blockWidth = Math.Max(blockWidth, width);
+                    blockHeight += height;
+                }
+                else
+                {
+                    inlineWidth += width;
+                    inlineHeight = Math.Max(inlineHeight, height);
+                }
+            }
+
+            AccumulateGenerated(inlinePanel.BeforePseudoElement);
+            foreach (var child in inlinePanel.Children)
+            {
+                if (!child.IsVisible
+                    || child is IDomInfrastructureControl)
+                {
+                    continue;
+                }
+
+                var childStyle = CreateStyle(child, isRoot: false, default);
+                if (childStyle.Display == CssLayoutDisplay.None
+                    || childStyle.Position is CssLayoutPosition.Absolute or CssLayoutPosition.Fixed)
+                {
+                    continue;
+                }
+
+                hasFlowContent = true;
+                var childIntrinsic = ResolveProjectedIntrinsicSize(
+                    child,
+                    childStyle,
+                    child.DesiredSize);
+                var margin = childStyle.Margin.Resolve(0, 0);
+                var width = childIntrinsic.Width + margin.Horizontal;
+                var height = childIntrinsic.Height + margin.Vertical;
+                if (child is TextBlock || IsInline(childStyle.Display))
+                {
+                    inlineWidth += width;
+                    inlineHeight = Math.Max(inlineHeight, height);
+                }
+                else
+                {
+                    blockWidth = Math.Max(blockWidth, inlineWidth);
+                    blockHeight += inlineHeight;
+                    inlineWidth = 0;
+                    inlineHeight = 0;
+                    blockWidth = Math.Max(blockWidth, width);
+                    blockHeight += height;
+                }
+            }
+            AccumulateGenerated(inlinePanel.AfterPseudoElement);
+
+            if (hasFlowContent)
+            {
+                var padding = style.Padding.Resolve(0, 0);
+                var border = style.Border.Resolve(0, 0);
+                return new HtmlMlSize(
+                    Math.Max(blockWidth, inlineWidth) + padding.Horizontal + border.Horizontal,
+                    blockHeight + inlineHeight + padding.Vertical + border.Vertical);
+            }
+        }
+
         if (style.Display is not (CssLayoutDisplay.Flex or CssLayoutDisplay.InlineFlex)
             || style.FlexDirection is not (CssLayoutFlexDirection.Row or CssLayoutFlexDirection.RowReverse))
         {
@@ -304,19 +408,6 @@ internal static class AvaloniaCssLayoutProjection
             TemplatedControl templated => templated.BorderThickness,
             _ => default
         };
-        var paddingTop = Convert(CssLayout.GetPaddingTop(control), defaultToZero: true);
-        var paddingBottom = Convert(CssLayout.GetPaddingBottom(control), defaultToZero: true);
-        if (control is CssLayoutPanel generatedHost
-            && CssLayout.GetDisplay(control) is not (CssDisplay.Flex or CssDisplay.InlineFlex))
-        {
-            paddingTop = AddPixels(
-                paddingTop,
-                generatedHost.BeforePseudoElement?.ResolveFlowOuterHeight(viewport.Height) ?? 0);
-            paddingBottom = AddPixels(
-                paddingBottom,
-                generatedHost.AfterPseudoElement?.ResolveFlowOuterHeight(viewport.Height) ?? 0);
-        }
-
         return new CssLayoutStyle
         {
             Display = !control.IsVisible
@@ -399,9 +490,9 @@ internal static class AvaloniaCssLayoutProjection
                 Convert(CssLayout.GetMarginBottom(control), defaultToZero: true),
                 Convert(CssLayout.GetMarginLeft(control), defaultToZero: true)),
             Padding = new CssLayoutEdges(
-                paddingTop,
+                Convert(CssLayout.GetPaddingTop(control), defaultToZero: true),
                 Convert(CssLayout.GetPaddingRight(control), defaultToZero: true),
-                paddingBottom,
+                Convert(CssLayout.GetPaddingBottom(control), defaultToZero: true),
                 Convert(CssLayout.GetPaddingLeft(control), defaultToZero: true)),
             Border = new CssLayoutEdges(
                 CssLayoutLength.Pixels(border.Top),
@@ -520,6 +611,7 @@ internal static class AvaloniaCssLayoutProjection
             "flex-start" or "start" => CssLayoutAlignment.FlexStart,
             "flex-end" or "end" => CssLayoutAlignment.FlexEnd,
             "center" => CssLayoutAlignment.Center,
+            "baseline" or "first baseline" or "last baseline" => CssLayoutAlignment.Baseline,
             _ => defaultValue
         };
 
@@ -538,20 +630,31 @@ internal static class AvaloniaCssLayoutProjection
         };
     }
 
-    private static CssLayoutLength AddPixels(CssLayoutLength length, double pixels)
-        => pixels <= 0
-            ? length
-            : length.Unit == CssLayoutLengthUnit.Percent
-                ? length with { PixelOffset = length.PixelOffset + pixels }
-                : CssLayoutLength.Pixels(length.Value + pixels);
-
-    private sealed class AvaloniaIntrinsicMeasurer(IReadOnlyDictionary<long, Control> controls)
+    private sealed class AvaloniaIntrinsicMeasurer(
+        IReadOnlyDictionary<long, Control> controls,
+        IReadOnlyDictionary<(CssLayoutPanel Host, bool Before), long> pseudoIds)
         : ICssIntrinsicMeasurer
     {
         public HtmlMlSize Measure(long nodeId, HtmlMlSize availableSize)
         {
             if (!controls.TryGetValue(nodeId, out var control))
             {
+                foreach (var pair in pseudoIds)
+                {
+                    if (pair.Value != nodeId)
+                    {
+                        continue;
+                    }
+
+                    var generated = pair.Key.Before
+                        ? pair.Key.Host.BeforePseudoElement
+                        : pair.Key.Host.AfterPseudoElement;
+                    return generated is null
+                        ? HtmlMlSize.Empty
+                        : new HtmlMlSize(
+                            generated.IntrinsicSize.Width,
+                            generated.IntrinsicSize.Height);
+                }
                 return new HtmlMlSize(0, 0);
             }
             control.Measure(new Size(availableSize.Width, availableSize.Height));

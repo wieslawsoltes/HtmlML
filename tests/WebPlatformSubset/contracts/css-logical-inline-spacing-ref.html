@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Reference for LTR logical inline margin and padding</title>
+<style>
+  html,
+  body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: white;
+  }
+
+  .stage {
+    display: flex;
+    width: 240px;
+    height: 70px;
+    background: rgb(255, 0, 0);
+  }
+
+  .box {
+    box-sizing: content-box;
+    width: 80px;
+    height: 40px;
+    padding-left: 20px;
+    padding-right: 10px;
+    margin-left: 30px;
+    margin-right: 40px;
+    border: 5px solid rgb(0, 0, 192);
+    background: rgb(0, 192, 0);
+  }
+
+  .inner {
+    width: 10px;
+    height: 40px;
+    background: rgb(255, 255, 0);
+  }
+
+  .marker {
+    width: 20px;
+    height: 50px;
+    background: rgb(0, 0, 0);
+  }
+</style>
+<div class="stage"><div class="box"><div class="inner"></div></div><div class="marker"></div></div>

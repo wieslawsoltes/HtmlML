@@ -38,13 +38,19 @@ public sealed class V8IframeIdentityRegressionTests
         try
         {
             runtime.Execute("""
+                const frameWrapper = document.createElement('div');
                 const iframe = document.createElement('iframe');
-                document.body.appendChild(iframe);
+                frameWrapper.appendChild(iframe);
+                document.body.appendChild(frameWrapper);
+                const frameWindow = iframe.contentWindow;
                 const frameDocument = iframe.contentDocument;
                 const state = globalThis.__htmlMlIframeIdentity = {
                   hadDocumentSynchronously: !!frameDocument,
                   hadBodySynchronously: !!(frameDocument && frameDocument.body),
-                  initialLocation: frameDocument && frameDocument.location.href
+                  initialLocation: frameDocument && frameDocument.location.href,
+                  contentWindowDocumentSame: frameWindow.document === frameDocument,
+                  defaultViewSame: frameDocument.defaultView === frameWindow,
+                  frameElementSame: frameWindow.frameElement === iframe
                 };
 
                 frameDocument.body.id = 'frame-body';
@@ -59,6 +65,17 @@ public sealed class V8IframeIdentityRegressionTests
                 state.idLookup = frameDocument.getElementById('inside') === input;
                 state.idSelector = frameDocument.querySelector('#inside') === input;
                 state.nameSelector = frameDocument.querySelector('[name="inside-name"]') === input;
+
+                frameDocument.open();
+                frameDocument.write(
+                  "<!doctype html><html><body><div id='written'>Hi</div>" +
+                  "</bo" + "dy></html>");
+                frameDocument.close();
+                state.contentDocumentStable = iframe.contentDocument === frameDocument;
+                state.writtenText = frameDocument.querySelector('#written').textContent;
+                frameWrapper.style.display = 'none';
+                state.hiddenDirection =
+                  frameWindow.getComputedStyle(frameDocument.body).direction;
                 """, "v8-src-less-iframe-identity-regression.js");
 
             using var result = JsonDocument.Parse(Convert.ToString(runtime.Engine.Evaluate(
@@ -67,11 +84,17 @@ public sealed class V8IframeIdentityRegressionTests
             Assert.True(state.GetProperty("hadDocumentSynchronously").GetBoolean());
             Assert.True(state.GetProperty("hadBodySynchronously").GetBoolean());
             Assert.Equal("about:blank", state.GetProperty("initialLocation").GetString());
+            Assert.True(state.GetProperty("contentWindowDocumentSame").GetBoolean());
+            Assert.True(state.GetProperty("defaultViewSame").GetBoolean());
+            Assert.True(state.GetProperty("frameElementSame").GetBoolean());
             Assert.Equal("frame-body", state.GetProperty("bodyId").GetString());
             Assert.Equal("frame-name", state.GetProperty("bodyName").GetString());
             Assert.True(state.GetProperty("idLookup").GetBoolean());
             Assert.True(state.GetProperty("idSelector").GetBoolean());
             Assert.True(state.GetProperty("nameSelector").GetBoolean());
+            Assert.True(state.GetProperty("contentDocumentStable").GetBoolean());
+            Assert.Equal("Hi", state.GetProperty("writtenText").GetString());
+            Assert.Equal("ltr", state.GetProperty("hiddenDirection").GetString());
             Assert.Empty(host.JavaScriptExceptionDiagnostics);
         }
         finally

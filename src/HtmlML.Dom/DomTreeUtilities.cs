@@ -96,12 +96,15 @@ public class DomDocumentFragmentCore<TElement> : DomNodeCore
 public class DomParsedDocumentCore<TElement>
     where TElement : class, IDomContainerElement<TElement>
 {
-    public DomParsedDocumentCore(TElement? documentElement)
+    public DomParsedDocumentCore(TElement? documentElement, TElement? body = null)
     {
         this.documentElement = documentElement;
+        this.body = body;
     }
 
     public TElement? documentElement { get; }
+
+    public TElement? body { get; }
 
     public TElement? firstElementChild => documentElement;
 

@@ -1,0 +1,164 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Font shaping and inline text layout retain CSS geometry</title>
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    font-size: 20px;
+    font-weight: 400;
+    line-height: 24px;
+  }
+  .measure { display: inline-block; white-space: nowrap; }
+  .row { height: 32px; display: flex; align-items: center; }
+  #bold { font-weight: 700; }
+  #tracked { letter-spacing: 2px; }
+  #word-spaced { word-spacing: 6px; }
+  #wrap { width: 92px; line-height: 24px; white-space: normal; overflow: visible; }
+  #legend { display: inline-flex; align-items: center; white-space: nowrap; }
+  #status-dot { width: 10px; height: 10px; border-radius: 50%; background: teal; margin-right: 8px; }
+  #script-samples { width: 260px; line-height: 28px; }
+  #inline-space, #inline-joined { display: inline-block; white-space: nowrap; }
+</style>
+<body>
+  <div>
+    <span id="a" class="measure">A</span><span id="v" class="measure">V</span>
+    <span id="av" class="measure">AV</span>
+  </div>
+  <div><span id="plain-e" class="measure">e</span><span id="combined-e" class="measure">é</span></div>
+  <div><span id="plain" class="measure">ABC</span><span id="tracked" class="measure">ABC</span></div>
+  <div><span id="plain-words" class="measure">A B</span><span id="word-spaced" class="measure">A B</span></div>
+  <div id="inline-space"><span id="left" class="measure">left</span><span id="right" class="measure">right</span></div>
+  <div id="inline-joined"><span id="joined-left">left</span><span id="joined-right">right</span></div>
+  <div><span id="normal">Normal</span> <span id="bold">Bold</span></div>
+  <div id="wrap">shaped words wrap cleanly</div>
+  <div class="row"><span id="legend"><i id="status-dot"></i><span id="legend-text">Market open</span></span></div>
+  <div id="script-samples"><span id="arabic" class="measure" dir="rtl">السوق مفتوح</span> <span id="devanagari" class="measure">बाज़ार खुला</span></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const rect = id => document.getElementById(id).getBoundingClientRect();
+  document.getElementById("inline-space").insertBefore(
+    document.createTextNode(" "), document.getElementById("right"));
+  const close = (a, b, tolerance) => Math.abs(a - b) <= tolerance;
+  const check = (name, assertion) => {
+    const result = { name };
+    try {
+      assertion();
+      result.status = "PASS";
+      result.message = null;
+      result.stack = null;
+    } catch (error) {
+      result.status = "FAIL";
+      result.message = String(error && error.message || error);
+      result.stack = error && error.stack ? String(error.stack) : null;
+    }
+    state.results.push(result);
+  };
+  const require = (condition, message) => { if (!condition) throw new Error(message); };
+
+  check("computed font family, size, weight, line height and spacing are retained", () => {
+    const normal = getComputedStyle(document.getElementById("normal"));
+    const bold = getComputedStyle(document.getElementById("bold"));
+    const tracked = getComputedStyle(document.getElementById("tracked"));
+    const spaced = getComputedStyle(document.getElementById("word-spaced"));
+    require(normal.fontFamily.toLowerCase().includes("arial"), "font family: " + normal.fontFamily);
+    require(normal.fontSize === "20px", "font size: " + normal.fontSize);
+    require(normal.lineHeight === "24px", "line height: " + normal.lineHeight);
+    require(normal.fontWeight === "400", "normal weight: " + normal.fontWeight);
+    require(bold.fontWeight === "700", "bold weight: " + bold.fontWeight);
+    require(tracked.letterSpacing === "2px", "letter spacing: " + tracked.letterSpacing);
+    require(spaced.wordSpacing === "6px", "word spacing: " + spaced.wordSpacing);
+  });
+
+  check("kerning shapes a glyph pair as one run", () => {
+    const separate = rect("a").width + rect("v").width;
+    const together = rect("av").width;
+    require(together > 0 && together < separate - .2,
+      "AV pair was not kerned: together=" + together + ", separate=" + separate);
+  });
+
+  check("combining marks do not receive a full independent glyph advance", () => {
+    const plain = rect("plain-e").width;
+    const combined = rect("combined-e").width;
+    require(close(plain, combined, 2), "combining advance: plain=" + plain + ", combined=" + combined);
+  });
+
+  check("letter-spacing and word-spacing affect intrinsic inline width", () => {
+    const letterDelta = rect("tracked").width - rect("plain").width;
+    const wordDelta = rect("word-spaced").width - rect("plain-words").width;
+    require(letterDelta >= 3.5 && letterDelta <= 7,
+      "letter-spacing width delta: " + letterDelta);
+    require(wordDelta >= 5.5 && wordDelta <= 7,
+      "word-spacing width delta: " + wordDelta);
+  });
+
+  check("collapsed whitespace between adjacent inline elements retains one visual advance", () => {
+    const spacedWidth = rect("right").right - rect("left").left;
+    const joinedWidth = rect("joined-right").right - rect("joined-left").left;
+    const gap = spacedWidth - joinedWidth;
+    const spaceAdvance = rect("plain-words").width - rect("a").width - rect("v").width;
+    require(gap > 1 && gap < 12, "inline whitespace gap: " + gap);
+    require(spaceAdvance > 1, "space glyph had no advance: " + spaceAdvance);
+  });
+
+  check("shaped advances drive wrapping without horizontal text clipping", () => {
+    const box = rect("wrap");
+    const style = getComputedStyle(document.getElementById("wrap"));
+    require(box.height >= 48, "wrapped height: " + box.height);
+    require(style.lineHeight === "24px", "wrapped line height: " + style.lineHeight);
+    require(document.getElementById("wrap").scrollWidth <= document.getElementById("wrap").clientWidth + 1,
+      "wrapped content overflowed: " + document.getElementById("wrap").scrollWidth + "/" + document.getElementById("wrap").clientWidth);
+  });
+
+  check("inline status indicator and text share a stable vertical center", () => {
+    const dot = rect("status-dot");
+    const text = rect("legend-text");
+    const row = rect("legend");
+    const dotCenter = dot.top + dot.height / 2;
+    const textCenter = text.top + text.height / 2;
+    require(close(dotCenter, textCenter, 1), "dot/text centers: " + dotCenter + "/" + textCenter);
+    require(close(dotCenter, row.top + row.height / 2, 1), "dot/row centers are misaligned");
+  });
+
+  check("complex-script runs have finite shaped geometry and remain in their container", () => {
+    const container = rect("script-samples");
+    for (const id of ["arabic", "devanagari"]) {
+      const run = rect(id);
+      require(run.width > 0 && run.height > 0 && Number.isFinite(run.width), id + " has invalid geometry");
+      require(run.left >= container.left - 1 && run.right <= container.right + 1,
+        id + " escaped its text container: " + JSON.stringify(run));
+    }
+  });
+
+  state.diagnostics = [JSON.stringify({
+    av: rect("av"), separate: rect("a").width + rect("v").width,
+    combined: rect("combined-e"), plainE: rect("plain-e"),
+    letterDelta: rect("tracked").width - rect("plain").width,
+    wordDelta: rect("word-spaced").width - rect("plain-words").width,
+    whitespaceGap: (rect("right").right - rect("left").left)
+      - (rect("joined-right").right - rect("joined-left").left),
+    whitespaceChildren: Array.from(document.getElementById("inline-space").childNodes).map(node => ({
+      nodeType: node.nodeType, value: node.nodeValue, text: node.textContent,
+      rect: node.nodeType === 1 ? node.getBoundingClientRect() : null
+    })),
+    pairStyles: {
+      a: getComputedStyle(document.getElementById("a")).letterSpacing,
+      v: getComputedStyle(document.getElementById("v")).letterSpacing,
+      av: getComputedStyle(document.getElementById("av")).letterSpacing
+    },
+    firstRowChildren: Array.from(document.getElementById("a").parentNode.childNodes).map(node => ({
+      nodeType: node.nodeType, id: node.id || "", value: node.nodeValue, text: node.textContent
+    })),
+    avChildren: Array.from(document.getElementById("av").childNodes).map(node => ({
+      nodeType: node.nodeType, value: node.nodeValue, text: node.textContent
+    })),
+    wrap: rect("wrap"), legend: rect("legend"), Arabic: rect("arabic"), Devanagari: rect("devanagari")
+  })];
+  state.harness = {
+    status: state.results.some(result => result.status !== "PASS") ? 1 : 0,
+    message: null, stack: null
+  };
+  state.complete = true;
+</script>

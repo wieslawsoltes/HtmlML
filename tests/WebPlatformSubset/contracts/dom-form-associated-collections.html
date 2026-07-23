@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOM prototype and form-associated collection primitives</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function equal(actual, expected, message) {
+    if (!Object.is(actual, expected)) throw new Error(`${message}: expected ${expected}, got ${actual}`);
+  }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("Element prototype selector methods are generically callable", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<span class="match"></span><span></span>`;
+    document.body.appendChild(root);
+    equal(typeof Element.prototype.querySelectorAll, "function", "prototype querySelectorAll type");
+    equal(Element.prototype.querySelectorAll.call(root, ".match").length, 1, "generic selector result");
+  });
+
+  test("Node prototype removeChild preserves return and tree identity", () => {
+    const root = document.createElement("div");
+    const child = document.createElement("span");
+    root.appendChild(child);
+    document.body.appendChild(root);
+    equal(typeof Node.prototype.removeChild, "function", "prototype removeChild type");
+    assert(Node.prototype.removeChild.call(root, child) === child, "removeChild return identity");
+    equal(child.parentNode, null, "removed parent");
+  });
+
+  test("documentElement supports temporary feature-probe insertion and removal", () => {
+    const probe = document.createElement("div");
+    document.documentElement.appendChild(probe);
+    assert(probe.isConnected, "temporary probe did not connect");
+    assert(Node.prototype.removeChild.call(document.documentElement, probe) === probe,
+      "documentElement removeChild return identity");
+    equal(probe.parentNode, null, "temporary probe parent after removal");
+  });
+
+  test("form.elements exposes descendant controls in tree order", () => {
+    const form = document.createElement("form");
+    form.innerHTML = `<input name="query" value="term"><div><select name="mode"><option value="a">A</option><option value="b">B</option></select></div><button name="submit">Go</button>`;
+    document.body.appendChild(form);
+    equal(form.elements.length, 3, "form control count");
+    equal(Array.from(form.elements).map(control => control.name).join(","), "query,mode,submit", "form control order");
+  });
+
+  test("select.options and selectedIndex expose option state", () => {
+    const select = document.createElement("select");
+    select.innerHTML = `<option value="a">A</option><option value="b">B</option>`;
+    document.body.appendChild(select);
+    equal(select.options.length, 2, "option count");
+    equal(select.options[1].value, "b", "option value");
+    select.selectedIndex = 1;
+    equal(select.selectedIndex, 1, "selected index");
+    equal(select.value, "b", "selected value");
+    assert(select.options[1].selected, "selected option state");
+  });
+
+  test("setting select.value updates selectedIndex and option state", () => {
+    const select = document.createElement("select");
+    select.innerHTML = `<option value="a">A</option><option value="b">B</option>`;
+    document.body.appendChild(select);
+    select.value = "b";
+    equal(select.selectedIndex, 1, "selected index after value setter");
+    assert(!select.options[0].selected && select.options[1].selected, "exclusive option state");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

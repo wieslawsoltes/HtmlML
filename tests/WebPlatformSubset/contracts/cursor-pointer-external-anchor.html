@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pointer cursor inheritance and cancellable external anchor activation</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/resources/testdriver.js"></script>
+<script src="/resources/testdriver-actions.js"></script>
+<script src="/resources/testdriver-vendor.js"></script>
+<style>
+  html,
+  body {
+    margin: 0;
+    width: 400px;
+    height: 160px;
+  }
+
+  #badge {
+    display: block;
+    width: 180px;
+    height: 48px;
+    cursor: pointer;
+  }
+
+  #outside {
+    position: fixed;
+    left: 300px;
+    top: 20px;
+    width: 40px;
+    height: 40px;
+  }
+</style>
+<a id="badge" href="https://example.com/"><span id="label">Hosted chart</span></a>
+<div id="outside">Outside</div>
+<script>
+  const badge = document.getElementById("badge");
+  const label = document.getElementById("label");
+  const outside = document.getElementById("outside");
+  const initialLocation = location.href;
+  let pointerOver = 0;
+  let clickCount = 0;
+
+  badge.addEventListener("pointerover", () => pointerOver++);
+  badge.addEventListener("click", event => {
+    clickCount++;
+    event.preventDefault();
+  });
+
+  promise_test(async () => {
+    assert_equals(getComputedStyle(badge).cursor, "pointer", "author cursor must cascade");
+    assert_equals(getComputedStyle(label).cursor, "pointer", "cursor must inherit into the hit child");
+
+    await new test_driver.Actions().pointerMove(0, 0, { origin: label }).send();
+    assert_equals(pointerOver, 1, "the pointer must enter through the nested badge label");
+    assert_true(badge.contains(document.elementFromPoint(40, 24)), "the badge must own its center hit");
+
+    await test_driver.click(label);
+    assert_equals(clickCount, 1, "the nested label must activate the containing anchor once");
+    assert_equals(location.href, initialLocation, "canceled activation must preserve the hosted document");
+
+    await new test_driver.Actions().pointerMove(0, 0, { origin: outside }).send();
+    assert_not_equals(
+      getComputedStyle(outside).cursor,
+      "pointer",
+      "leaving must not retain the interactive hand-cursor declaration");
+  }, "cursor:pointer inherits through an external-link badge and activation remains cancellable");
+</script>

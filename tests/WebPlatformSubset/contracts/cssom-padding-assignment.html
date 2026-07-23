@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSSOM padding assignment expands, serializes, and invalidates layout</title>
+<div id="target"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name, status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  const target = document.getElementById("target");
+  target.style.width = "100px";
+  target.style.height = "20px";
+
+  test("padding shorthand assignment expands into four computed longhands", () => {
+    target.style.padding = "3px";
+    const style = getComputedStyle(target);
+    assert(target.style.getPropertyValue("padding") === "3px",
+      `authored padding shorthand was not retained: ` +
+      `${JSON.stringify(target.style.getPropertyValue("padding"))}; ${target.style.cssText}`);
+    assert(style.paddingTop === "3px" && style.paddingRight === "3px"
+      && style.paddingBottom === "3px" && style.paddingLeft === "3px",
+      `unexpected computed padding ${style.paddingTop} ${style.paddingRight} ` +
+      `${style.paddingBottom} ${style.paddingLeft}`);
+  });
+
+  test("kebab-case longhand assignment overrides only its edge", () => {
+    target.style.setProperty("padding-left", "7px");
+    const style = getComputedStyle(target);
+    assert(style.paddingLeft === "7px", "padding-left did not update");
+    assert(style.paddingTop === "3px" && style.paddingRight === "3px"
+      && style.paddingBottom === "3px", "padding-left disturbed another edge");
+  });
+
+  test("padding mutations synchronously update border-box geometry", () => {
+    const rect = target.getBoundingClientRect();
+    assert(Math.abs(rect.width - 110) < 0.01,
+      `padding did not contribute to width: ${rect.width}`);
+    assert(Math.abs(rect.height - 26) < 0.01,
+      `padding did not contribute to height: ${rect.height}`);
+  });
+
+  test("computed dimensions retain the content-box size while geometry includes padding", () => {
+    const style = getComputedStyle(target);
+    assert(style.boxSizing === "content-box",
+      `unexpected initial box sizing ${style.boxSizing}`);
+    assert(style.width === "100px" && style.height === "20px",
+      `computed content-box dimensions became ${style.width}x${style.height}`);
+    const rect = target.getBoundingClientRect();
+    assert(Math.abs(rect.width - 110) < 0.01 && Math.abs(rect.height - 26) < 0.01,
+      `border-box geometry became ${rect.width}x${rect.height}`);
+  });
+
+  test("removing the shorthand clears its expanded longhands", () => {
+    target.style.cssText = "width: 100px; height: 20px; padding: 3px;";
+    target.style.padding = "";
+    const style = getComputedStyle(target);
+    assert(style.paddingTop === "0px" && style.paddingRight === "0px"
+      && style.paddingBottom === "0px" && style.paddingLeft === "0px",
+      "padding removal did not restore zero computed edges");
+    const rect = target.getBoundingClientRect();
+    assert(Math.abs(rect.width - 100) < 0.01 && Math.abs(rect.height - 20) < 0.01,
+      `padding removal left stale geometry ${rect.width}x${rect.height}`);
+  });
+
+  state.diagnostics.push(JSON.stringify({
+    cssText: target.style.cssText,
+    width: target.getBoundingClientRect().width,
+    height: target.getBoundingClientRect().height
+  }));
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

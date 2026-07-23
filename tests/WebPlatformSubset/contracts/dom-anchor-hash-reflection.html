@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Anchor fragment reflection</title>
+<a id="link" href="#first">section</a>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const result = { name: "anchor hash reflects and mutates the href fragment" };
+  try {
+    const link = document.getElementById("link");
+    if (link.hash !== "#first") throw new Error(`initial anchor hash was ${JSON.stringify(link.hash)}`);
+    link.hash = "second";
+    if (link.hash !== "#second") throw new Error(`mutated anchor hash was ${JSON.stringify(link.hash)}`);
+    if (!String(link.getAttribute("href")).endsWith("#second")) {
+      throw new Error(`mutated href attribute was ${JSON.stringify(link.getAttribute("href"))}`);
+    }
+    link.hash = "";
+    if (link.hash !== "" || String(link.getAttribute("href")).includes("#")) {
+      throw new Error(`cleared fragment was hash=${JSON.stringify(link.hash)} href=${JSON.stringify(link.getAttribute("href"))}`);
+    }
+    result.status = "PASS";
+    result.message = null;
+    result.stack = null;
+    state.harness = { status: 0, message: null, stack: null };
+  } catch (error) {
+    result.status = "FAIL";
+    result.message = String(error.message || error);
+    result.stack = error.stack || null;
+    state.harness = { status: 1, message: result.message, stack: result.stack };
+  }
+  state.results.push(result);
+  state.complete = true;
+</script>

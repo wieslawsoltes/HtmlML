@@ -80,6 +80,24 @@ public interface IHtmlMlComputedStyleTarget
 }
 
 /// <summary>
+/// Optional browser-shaped named-property catalog for a computed style target.
+/// Kept separate so existing computed-style providers remain source compatible.
+/// </summary>
+public interface IHtmlMlComputedStylePropertySupportTarget
+{
+    bool SupportsPropertyName(string propertyName);
+}
+
+/// <summary>
+/// Optional extension for resolved values that change with presentation time.
+/// Engine bridges must not memoize a property while this returns true.
+/// </summary>
+public interface IHtmlMlLiveComputedStyleTarget
+{
+    bool IsPropertyLive(string propertyName);
+}
+
+/// <summary>
 /// Typed inline-style write used by engine adapters to avoid dynamic member
 /// dispatch while retaining the DOM implementation's normal mutation and
 /// invalidation path.

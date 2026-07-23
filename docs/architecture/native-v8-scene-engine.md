@@ -70,6 +70,13 @@ and cursor presentation. It sends ordered primitive input records to a bounded n
 queue. Move and wheel events may be coalesced without crossing button, capture, or key
 transitions. Down/up/cancel ordering is never coalesced.
 
+Avalonia also submits the compositor's monotonic frame timestamp through
+`HTMLML_INPUT_FRAME`. Each host frame releases the `requestAnimationFrame` callbacks
+that were pending at its start; callbacks queued by those callbacks wait for a later
+frame. Consecutive frame records are latest-wins, and the native runtime retains a
+60 Hz timer only as a fallback for headless or offscreen hosts that do not provide
+frame input.
+
 The engine drains input, runs V8 tasks and microtasks, updates style/layout, and publishes
 at most the useful latest scene for a frame. Managed application API calls are marshalled
 to this same engine queue and may continue to use ClearScript in managed mode; native

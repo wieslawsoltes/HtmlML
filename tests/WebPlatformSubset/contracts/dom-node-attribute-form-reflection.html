@@ -1,0 +1,287 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Node insertion, attribute factories, and form reflection primitives</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  function equal(actual, expected, message) {
+    if (!Object.is(actual, expected)) throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error), stack: error.stack || null });
+    }
+  }
+
+  test("appendChild flattens and empties a DocumentFragment containing text and elements", () => {
+    const host = document.createElement("div");
+    const fragment = document.createDocumentFragment();
+    const text = document.createTextNode("prefix");
+    const marker = document.createElement("span");
+    fragment.appendChild(text);
+    fragment.appendChild(marker);
+    const returned = host.appendChild(fragment);
+    assert(returned === fragment, "appendChild did not return the fragment");
+    equal(fragment.childNodes.length, 0, "fragment child count after insertion");
+    equal(host.childNodes.length, 2, "host child count after insertion");
+    assert(host.firstChild === text && host.lastChild === marker, "fragment children lost identity or order");
+  });
+
+  test("document factories expose Attr and detached XML-document element creation", () => {
+    const attribute = document.createAttribute("data-state");
+    equal(attribute.nodeType, 2, "Attr node type");
+    equal(attribute.name, "data-state", "Attr name");
+    equal(attribute.value, "", "Attr initial value");
+    const xml = document.implementation.createDocument("", "", null);
+    const element = xml.createElement("data");
+    assert(element && element.nodeType === 1, "detached XML document did not create an element");
+    const comment = xml.createComment("note");
+    equal(comment.nodeType, 8, "Comment node type");
+    equal(comment.data, "note", "Comment data");
+    equal(xml.createDocumentFragment().nodeType, 11, "detached DocumentFragment node type");
+  });
+
+  test("HTML fragments and XML parsing preserve generic, empty, and non-ASCII attributes", () => {
+    const host = document.createElement("div");
+    host.innerHTML = "<details open></details><div value='t' Ω='omega'></div>";
+    equal(host.firstElementChild.getAttribute("open"), "", "empty HTML attribute");
+    equal(host.lastElementChild.getAttribute("value"), "t", "generic HTML attribute");
+    equal(host.lastElementChild.getAttribute("Ω"), "omega", "non-ASCII HTML attribute");
+
+    const parsed = new DOMParser().parseFromString(
+      "<dashboard><locations class='foo'><tab title='Location'/></locations></dashboard>",
+      "text/xml");
+    equal(parsed.querySelector("locations").getAttribute("class"), "foo", "XML class attribute");
+    equal(parsed.querySelector("tab").getAttribute("title"), "Location", "XML title attribute");
+  });
+
+  test("DOMParser document factories retain parsed nodes through DocumentFragment transfer", () => {
+    const context = new DOMParser().parseFromString("", "text/html");
+    const fragment = context.createDocumentFragment();
+    const staging = fragment.appendChild(context.createElement("div"));
+    staging.innerHTML = "<details open></details><div value='t' Ω='omega'></div><progress max='10' value='1.5'></progress>";
+    const parsedNodes = Array.from(staging.childNodes);
+    staging.textContent = "";
+    fragment.textContent = "";
+    for (const node of parsedNodes) fragment.appendChild(node);
+    equal(fragment.childNodes.length, 3, "transferred fragment child count");
+    equal(fragment.childNodes[0].getAttribute("open"), "", "transferred empty attribute");
+    equal(fragment.childNodes[1].getAttribute("value"), "t", "transferred generic attribute");
+    equal(fragment.childNodes[1].getAttribute("Ω"), "omega", "transferred non-ASCII attribute");
+    equal(typeof fragment.childNodes[2].value, "number", "transferred progress value type");
+    equal(fragment.childNodes[2].value, 1.5, "transferred progress value");
+  });
+
+  test("reflected input properties retain authored defaults and coerce tabIndex", () => {
+    const input = document.createElement("input");
+    input.setAttribute("value", "initial");
+    input.value = "edited";
+    input.setAttribute("maxlength", "30");
+    input.tabIndex = "2";
+    equal(input.defaultValue, "initial", "input defaultValue");
+    equal(input.maxLength, 30, "input maxLength");
+    equal(input.tabIndex, 2, "input tabIndex");
+  });
+
+  test("boolean reflection, default checkbox value, and ordinary expandos remain distinct", () => {
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    equal(input.value, "on", "default checkbox value");
+    input.checked = "checked";
+    equal(input.getAttribute("checked"), null, "live checkedness changed the authored attribute");
+    equal(input.checked, true, "truthy Web IDL checkedness conversion");
+    input.readOnly = true;
+    assert(input.hasAttribute("readonly"), "readOnly did not create the reflected attribute");
+    input.removeAttribute("readonly");
+    equal(input.readOnly, false, "readOnly after attribute removal");
+    const span = document.createElement("span");
+    span.value = "asdf";
+    equal(span.value, "asdf", "ordinary HTMLElement expando value");
+  });
+
+  test("contextual table parsing and legacy table IDL reflection retain structure", () => {
+    const tbody = document.createElement("tbody");
+    tbody.innerHTML = "<tr><td>cell</td></tr>";
+    const cell = tbody.querySelector("td");
+    assert(cell !== null, "tbody fragment parsing discarded the table cell");
+    cell.setAttribute("rowspan", "2");
+    cell.setAttribute("colspan", "3");
+    equal(cell.rowSpan, 2, "rowSpan reflection");
+    equal(cell.colSpan, 3, "colSpan reflection");
+    const table = document.createElement("table");
+    table.setAttribute("cellspacing", "4");
+    equal(table.cellSpacing, "4", "cellSpacing reflection");
+  });
+
+  test("absent attributes do not reflect unrelated native control properties", () => {
+    const element = document.createElement("div");
+    equal(element.getAttribute("height"), null, "absent height attribute");
+    const host = document.createElement("div");
+    host.innerHTML = "<form id='attribute-form' action='formaction'></form>";
+    equal(host.firstElementChild.getAttribute("action"), "formaction", "parsed form action attribute");
+    host.firstElementChild.setAttribute("enctype", "multipart/form-data");
+    equal(host.firstElementChild.enctype, "multipart/form-data", "form enctype reflection");
+  });
+
+  test("progress and meter expose numeric value IDL properties", () => {
+    const progress = document.createElement("progress");
+    progress.setAttribute("max", "10");
+    progress.setAttribute("value", "1.5");
+    const meter = document.createElement("meter");
+    meter.setAttribute("min", "0");
+    meter.setAttribute("max", "10");
+    meter.setAttribute("value", "5.6");
+    equal(typeof progress.value, "number", "progress value type");
+    equal(progress.value, 1.5, "progress value");
+    equal(typeof meter.value, "number", "meter value type");
+    equal(meter.value, 5.6, "meter value");
+  });
+
+  test("the first option is selected by default through an optgroup", () => {
+    const select = document.createElement("select");
+    const group = document.createElement("optgroup");
+    const option = document.createElement("option");
+    group.appendChild(option);
+    select.appendChild(group);
+    assert(option.selected, "first option was not selected by default");
+    equal(select.selectedIndex, 0, "default selectedIndex");
+  });
+
+  test("option selectedness applies Web IDL boolean conversion and clears a single-select peer", () => {
+    const select = document.createElement("select");
+    select.innerHTML = "<option selected>one</option><option>two</option>";
+    select.options[1].selected = "selected";
+    equal(select.options[0].selected, false, "first option selectedness");
+    equal(select.options[1].selected, true, "truthy selectedness conversion");
+    equal(select.selectedIndex, 1, "selectedIndex after selectedness assignment");
+  });
+
+  test("select and option value algorithms preserve explicit no-selection and normalize text", () => {
+    const select = document.createElement("select");
+    const option = document.createElement("option");
+    option.textContent = "  one\t two\n";
+    select.appendChild(option);
+    equal(option.value, "one two", "implicit option value");
+    select.value = "missing";
+    equal(select.selectedIndex, -1, "selectedIndex after a non-matching value");
+    equal(select.value, "", "select value after a non-matching value");
+  });
+
+  test("form reset restores authored option selection", () => {
+    const form = document.createElement("form");
+    form.innerHTML = "<select><option>one</option><option selected>two</option></select>";
+    const select = form.firstElementChild;
+    select.selectedIndex = 0;
+    form.reset();
+    equal(select.selectedIndex, 1, "selectedIndex after reset");
+  });
+
+  test("form reset restores every authored selection in a multiple select", () => {
+    const form = document.createElement("form");
+    form.innerHTML = "<select multiple><option selected>one</option><option selected>two</option></select>";
+    const select = form.firstElementChild;
+    select.selectedIndex = 0;
+    form.reset();
+    equal(select.options[0].selected, true, "first authored option after reset");
+    equal(select.options[1].selected, true, "second authored option after reset");
+  });
+
+  test("dynamic checkbox state remains visible through form controls", () => {
+    const form = document.createElement("form");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.name = "test";
+    checkbox.value = "2";
+    form.appendChild(checkbox);
+    checkbox.checked = true;
+    equal(checkbox.elements, undefined, "non-form elements property");
+    equal(checkbox.checked, true, "checkbox checked state");
+    equal(checkbox.name, "test", "checkbox name");
+    equal(checkbox.value, "2", "checkbox value");
+    equal(form.elements.length, 1, "form controls length");
+    assert(form.elements[0] === checkbox, "form controls identity");
+  });
+
+  test("HTMLDocument named properties resolve named forms", () => {
+    const form = document.createElement("form");
+    form.name = "certificationForm";
+    document.body.appendChild(form);
+    assert(document.certificationForm === form, "named form was not exposed on document");
+    form.remove();
+  });
+
+  test("document identity and label reflection expose their Web-IDL names", () => {
+    equal(document.nodeName, "#document", "Document nodeName");
+    const label = document.createElement("label");
+    label.setAttribute("for", "action");
+    equal(label.htmlFor, "action", "label htmlFor getter");
+    label.htmlFor = "next";
+    equal(label.getAttribute("for"), "next", "label htmlFor setter");
+  });
+
+  test("HTML parsing folds ASCII attribute names and decodes numeric character references", () => {
+    const host = document.createElement("div");
+    host.innerHTML = "<input Case='mixed' value='attr&#09;'><div class='&#xA0;test'></div>";
+    equal(host.firstElementChild.getAttribute("case"), "mixed", "ASCII-folded attribute lookup");
+    equal(host.firstElementChild.value, "attr\t", "numeric character reference in value");
+    assert(host.lastElementChild.classList.contains("\u00a0test"), "non-breaking space was treated as HTML whitespace");
+  });
+
+  test("CSSStyleDeclaration mutations synchronize cssText and the style attribute", () => {
+    const element = document.createElement("div");
+    element.style.background = "url(UPPERlower.gif)";
+    assert(element.getAttribute("style").includes("UPPERlower.gif"), "CSSOM mutation did not establish the style attribute");
+    assert(element.style.cssText.includes("UPPERlower.gif"), "cssText did not serialize authored declarations");
+    element.removeAttribute("style");
+    equal(element.getAttribute("style"), null, "style attribute after removal");
+    equal(element.style.cssText, "", "cssText after style attribute removal");
+  });
+
+  test("non-JavaScript script types do not fetch or execute their src", () => {
+    const script = document.createElement("script");
+    script.type = "application/json";
+    script.src = "#must-not-load";
+    document.body.appendChild(script);
+    assert(script.parentNode === document.body, "inert data block was not inserted");
+    script.remove();
+  });
+
+  test("XML attributes preserve case for lookup and removal", () => {
+    const xml = new DOMParser().parseFromString(
+      "<root><item normal='ab' mixedCase='yes'/></root>", "text/xml");
+    const item = xml.querySelector("item");
+    item.removeAttribute("Normal");
+    equal(item.getAttribute("normal"), "ab", "case-distinct XML removal");
+    equal(item.getAttribute("mixedCase"), "yes", "case-preserved XML lookup");
+    equal(item.getAttribute("mixedcase"), null, "case-folded XML lookup");
+  });
+
+  test("removing an authored style attribute restores attribute absence", () => {
+    const element = document.createElement("div");
+    element.setAttribute("style", "display:block");
+    element.removeAttribute("style");
+    equal(element.getAttribute("style"), null, "removed style attribute");
+  });
+
+  test("class reflection distinguishes absence and uses only HTML whitespace", () => {
+    const element = document.createElement("div");
+    equal(element.getAttribute("class"), null, "initial class attribute");
+    element.className = `alpha\f beta\vchar`;
+    assert(element.classList.contains("alpha"), "form-feed did not separate class tokens");
+    assert(element.classList.contains("beta\vchar"), "vertical-tab incorrectly separated a class token");
+    element.removeAttribute("class");
+    equal(element.getAttribute("class"), null, "removed class attribute");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

@@ -1,0 +1,279 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Related DOM tree-mutation invariants</title>
+<body>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  function test(name, body) {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function element(name) {
+    const value = document.createElement("span");
+    value.id = name;
+    return value;
+  }
+
+  function childIds(parent) {
+    return Array.from(parent.children).map(child => child.id).join(",");
+  }
+
+  test("appendChild returns and reparents an existing node", () => {
+    const source = document.createElement("div");
+    const target = document.createElement("div");
+    const moved = element("moved");
+    const last = element("last");
+    source.appendChild(moved);
+    target.appendChild(last);
+    document.body.appendChild(source);
+    document.body.appendChild(target);
+
+    const returned = target.appendChild(moved);
+    assert(returned === moved, "appendChild returned the wrong node");
+    assert(source.children.length === 0, "source retained the reparented node");
+    assert(moved.parentNode === target, "node did not acquire the target parent");
+    assert(childIds(target) === "last,moved", `target order was ${childIds(target)}`);
+  });
+
+  test("removeChild returns a detached child", () => {
+    const parent = document.createElement("div");
+    const removed = element("removed");
+    parent.appendChild(removed);
+    document.body.appendChild(parent);
+
+    const returned = parent.removeChild(removed);
+    assert(returned === removed, "removeChild returned the wrong node");
+    assert(removed.parentNode === null, "removed child retained its parent");
+    assert(parent.children.length === 0, "parent retained the removed child");
+  });
+
+  test("rejected removeChild is atomic and throws", () => {
+    const parent = document.createElement("div");
+    const retained = element("retained");
+    const foreign = element("foreign");
+    parent.appendChild(retained);
+    document.body.appendChild(parent);
+
+    let threw = false;
+    try {
+      parent.removeChild(foreign);
+    } catch (_error) {
+      threw = true;
+    }
+    assert(threw, "removeChild accepted a node that was not its child");
+    assert(retained.parentNode === parent, "failed removal changed parent identity");
+    assert(childIds(parent) === "retained", `failed removal changed order to ${childIds(parent)}`);
+  });
+
+  test("replaceChild(node, node) is an identity-preserving no-op", () => {
+    const parent = document.createElement("div");
+    const first = element("first");
+    const node = element("node");
+    const last = element("last");
+    parent.appendChild(first);
+    parent.appendChild(node);
+    parent.appendChild(last);
+    document.body.appendChild(parent);
+
+    const returned = parent.replaceChild(node, node);
+    assert(returned === node, "replaceChild self-reference returned the wrong node");
+    assert(node.parentNode === parent, "replaceChild self-reference detached the node");
+    assert(childIds(parent) === "first,node,last",
+      `replaceChild self-reference changed order to ${childIds(parent)}`);
+  });
+
+  test("replaceChild atomically reparents and detaches the replaced child", () => {
+    const source = document.createElement("div");
+    const target = document.createElement("div");
+    const replacement = element("replacement");
+    const previous = element("previous");
+    source.appendChild(replacement);
+    target.appendChild(previous);
+    document.body.appendChild(source);
+    document.body.appendChild(target);
+
+    const returned = target.replaceChild(replacement, previous);
+    assert(returned === previous, "replaceChild returned the wrong previous child");
+    assert(source.children.length === 0, "source retained the replacement");
+    assert(replacement.parentNode === target, "replacement did not acquire target parent");
+    assert(previous.parentNode === null, "replaced child retained its parent");
+    assert(childIds(target) === "replacement", `target order was ${childIds(target)}`);
+  });
+
+  test("replaceChild handles an existing sibling in both directions", () => {
+    const forward = document.createElement("div");
+    const fa = element("a");
+    const fb = element("b");
+    const fc = element("c");
+    forward.appendChild(fa);
+    forward.appendChild(fb);
+    forward.appendChild(fc);
+    document.body.appendChild(forward);
+    const forwardReturned = forward.replaceChild(fa, fc);
+    assert(forwardReturned === fc && fc.parentNode === null,
+      "forward sibling replacement did not return/detach the replaced child");
+    assert(childIds(forward) === "b,a", `forward sibling replacement produced ${childIds(forward)}`);
+
+    const backward = document.createElement("div");
+    const ba = element("a");
+    const bb = element("b");
+    const bc = element("c");
+    backward.appendChild(ba);
+    backward.appendChild(bb);
+    backward.appendChild(bc);
+    document.body.appendChild(backward);
+    const backwardReturned = backward.replaceChild(bc, ba);
+    assert(backwardReturned === ba && ba.parentNode === null,
+      "backward sibling replacement did not return/detach the replaced child");
+    assert(childIds(backward) === "c,b", `backward sibling replacement produced ${childIds(backward)}`);
+  });
+
+  test("rejected replaceChild leaves both trees intact", () => {
+    const source = document.createElement("div");
+    const target = document.createElement("div");
+    const replacement = element("replacement");
+    const retained = element("retained");
+    const foreign = element("foreign");
+    source.appendChild(replacement);
+    target.appendChild(retained);
+    document.body.appendChild(source);
+    document.body.appendChild(target);
+
+    let threw = false;
+    try {
+      target.replaceChild(replacement, foreign);
+    } catch (_error) {
+      threw = true;
+    }
+    assert(threw, "replaceChild accepted a previous node from another parent");
+    assert(replacement.parentNode === source, "failed replacement detached its replacement");
+    assert(retained.parentNode === target, "failed replacement detached the retained child");
+    assert(childIds(source) === "replacement" && childIds(target) === "retained",
+      "failed replacement changed one of the trees");
+  });
+
+  test("replaceChildren reorders retained nodes and detaches omitted nodes", () => {
+    const parent = document.createElement("div");
+    const a = element("a");
+    const b = element("b");
+    const omitted = element("omitted");
+    parent.appendChild(a);
+    parent.appendChild(b);
+    parent.appendChild(omitted);
+    document.body.appendChild(parent);
+
+    parent.replaceChildren(b, a);
+    assert(childIds(parent) === "b,a", `replaceChildren produced ${childIds(parent)}`);
+    assert(a.parentNode === parent && b.parentNode === parent,
+      "replaceChildren lost retained-node parent identity");
+    assert(omitted.parentNode === null, "replaceChildren did not detach the omitted node");
+  });
+
+  test("remove is idempotent and clears query/tree membership", () => {
+    const parent = document.createElement("div");
+    const removed = element("remove-target");
+    parent.appendChild(removed);
+    document.body.appendChild(parent);
+
+    removed.remove();
+    removed.remove();
+    assert(removed.parentNode === null, "remove retained parent identity");
+    assert(parent.children.length === 0, "remove retained child membership");
+    assert(document.querySelector("#remove-target") === null,
+      "removed element remained query-visible");
+  });
+
+  test("prepend, before, and after preserve identity and sibling order", () => {
+    const parent = document.createElement("div");
+    const a = element("a");
+    const b = element("b");
+    const c = element("c");
+    parent.appendChild(a);
+    parent.appendChild(b);
+    parent.appendChild(c);
+    document.body.appendChild(parent);
+
+    parent.prepend(c);
+    assert(childIds(parent) === "c,a,b", `prepend produced ${childIds(parent)}`);
+    c.after(b);
+    assert(childIds(parent) === "c,b,a", `after produced ${childIds(parent)}`);
+    c.before(a);
+    assert(childIds(parent) === "a,c,b", `before produced ${childIds(parent)}`);
+    assert(a.parentNode === parent && b.parentNode === parent && c.parentNode === parent,
+      "sibling mutation corrupted parent identity");
+  });
+
+  test("insertAdjacentElement moves an existing node to the requested edge", () => {
+    const parent = document.createElement("div");
+    const a = element("a");
+    const b = element("b");
+    const c = element("c");
+    parent.appendChild(a);
+    parent.appendChild(b);
+    parent.appendChild(c);
+    document.body.appendChild(parent);
+
+    const returned = b.insertAdjacentElement("afterend", a);
+    assert(returned === a, "insertAdjacentElement returned the wrong node");
+    assert(childIds(parent) === "b,a,c",
+      `insertAdjacentElement produced ${childIds(parent)}`);
+    assert(a.parentNode === parent, "insertAdjacentElement corrupted parent identity");
+  });
+
+  test("ancestor insertion is rejected without changing either tree", () => {
+    const root = document.createElement("div");
+    const child = element("child");
+    const grandchild = element("grandchild");
+    root.id = "root";
+    root.appendChild(child);
+    child.appendChild(grandchild);
+    document.body.appendChild(root);
+
+    let appendThrew = false;
+    try {
+      grandchild.appendChild(root);
+    } catch (_error) {
+      appendThrew = true;
+    }
+    assert(appendThrew, "appendChild allowed an ancestor cycle");
+    assert(root.parentNode === document.body && child.parentNode === root
+      && grandchild.parentNode === child, "rejected ancestor append changed the tree");
+
+    let replaceThrew = false;
+    try {
+      child.replaceChild(root, grandchild);
+    } catch (_error) {
+      replaceThrew = true;
+    }
+    assert(replaceThrew, "replaceChild allowed an ancestor cycle");
+    assert(root.parentNode === document.body && child.parentNode === root
+      && grandchild.parentNode === child, "rejected ancestor replacement changed the tree");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

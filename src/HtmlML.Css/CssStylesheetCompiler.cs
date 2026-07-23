@@ -44,6 +44,7 @@ public static class CssStylesheetCompiler
 {
     public const string ProtectedVariableShorthandPrefix = "--htmlml-var-shorthand-";
     private const string ProtectedCssWideValuePrefix = "-htmlml-css-wide-";
+    private const string ProtectedCustomPropertyNamePrefix = "--htmlml-custom-name-";
 
     public static CssStylesheetCompilation Compile(
         string css,
@@ -54,6 +55,7 @@ public static class CssStylesheetCompiler
         var started = collectPerformanceMetrics ? Stopwatch.GetTimestamp() : 0;
         var allocationStarted = collectPerformanceMetrics ? GC.GetAllocatedBytesForCurrentThread() : 0;
         var normalized = Normalize(CssSupportsProcessor.Process(css), disableNormalizationGuards);
+        var parserInput = ProtectCustomPropertyNamesForParser(normalized);
         var normalizationTicks = collectPerformanceMetrics ? Stopwatch.GetTimestamp() - started : 0;
         var normalizationAllocated = collectPerformanceMetrics
             ? GC.GetAllocatedBytesForCurrentThread() - allocationStarted
@@ -61,7 +63,7 @@ public static class CssStylesheetCompiler
 
         started = collectPerformanceMetrics ? Stopwatch.GetTimestamp() : 0;
         allocationStarted = collectPerformanceMetrics ? GC.GetAllocatedBytesForCurrentThread() : 0;
-        var sheet = new CssParser().ParseStyleSheet(normalized);
+        var sheet = new CssParser().ParseStyleSheet(parserInput);
         var parserTicks = collectPerformanceMetrics ? Stopwatch.GetTimestamp() - started : 0;
         var parserAllocated = collectPerformanceMetrics
             ? GC.GetAllocatedBytesForCurrentThread() - allocationStarted
@@ -161,6 +163,18 @@ public static class CssStylesheetCompiler
             },
             RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant);
 
+        // AngleSharp exposes `all` as a shorthand but does not enumerate the
+        // authored declaration in every CSS-wide-keyword case. Preserve it as
+        // an opaque custom declaration so HtmlML can expand it at the
+        // per-property cascade boundary with its original source order.
+        css = Regex.Replace(
+            css,
+            @"(?<prefix>^|[;{])(?<space>\s*)all\s*:\s*(?<value>[^;{}]+?)(?=\s*[;}])",
+            match => match.Groups["prefix"].Value + match.Groups["space"].Value
+                     + ProtectedVariableShorthandPrefix + "all:"
+                     + match.Groups["value"].Value.Trim(),
+            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant);
+
         // AngleSharp's background shorthand grammar currently accepts the
         // declaration but drops a currentColor color component while retaining
         // the shorthand's resets. Preserve the authored shorthand so HtmlML can
@@ -249,6 +263,26 @@ public static class CssStylesheetCompiler
         return css;
     }
 
+    private static string ProtectCustomPropertyNamesForParser(string css)
+    {
+        // AngleSharp's declaration map compares custom-property names without
+        // the case sensitivity required by CSS Variables. Protect declaration
+        // names and var() references with an ASCII-lowercase encoding before
+        // parsing, then restore the exact code units in CollectRules.
+        css = Regex.Replace(
+            css,
+            @"(?<prefix>^|[;{])(?<space>\s*)(?<name>--[-_a-zA-Z0-9\u0080-\uFFFF]+)(?=\s*:)",
+            match => match.Groups["prefix"].Value + match.Groups["space"].Value
+                     + ProtectCustomPropertyDeclarationName(match.Groups["name"].Value),
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
+        return Regex.Replace(
+            css,
+            @"(?<prefix>\bvar\(\s*)(?<name>--[-_a-zA-Z0-9\u0080-\uFFFF]+)",
+            match => match.Groups["prefix"].Value
+                     + ProtectCustomPropertyName(match.Groups["name"].Value),
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
     private static void CollectRules(
         ICssRuleList rules,
         ICollection<CssCompiledStyleRule> result,
@@ -280,12 +314,22 @@ public static class CssStylesheetCompiler
                     var declarations = new List<CssCascadeDeclaration>();
                     foreach (var property in styleRule.Style)
                     {
-                        var name = NormalizePropertyName(property.Name);
+                        var name = NormalizePropertyName(
+                            RestoreCustomPropertyNames(property.Name));
                         if (name.StartsWith(ProtectedVariableShorthandPrefix, StringComparison.Ordinal))
                         {
                             name = name[ProtectedVariableShorthandPrefix.Length..];
                         }
-                        var value = styleRule.Style.GetPropertyValue(property.Name)?.Trim();
+                        var rawValue = styleRule.Style.GetPropertyValue(property.Name);
+                        if (rawValue is not null)
+                        {
+                            rawValue = RestoreCustomPropertyNames(rawValue);
+                        }
+                        var value = rawValue is null
+                            ? null
+                            : name.StartsWith("--", StringComparison.Ordinal)
+                                ? CssCustomPropertySyntax.TrimWhitespace(rawValue)
+                                : rawValue.Trim();
                         if (name == "list-style"
                             && value?.StartsWith(ProtectedCssWideValuePrefix, StringComparison.Ordinal) == true)
                         {
@@ -394,10 +438,54 @@ public static class CssStylesheetCompiler
         return result;
     }
 
+    private static string ProtectCustomPropertyName(string name)
+    {
+        var builder = new StringBuilder(
+            ProtectedCustomPropertyNamePrefix.Length + name.Length * 4);
+        builder.Append(ProtectedCustomPropertyNamePrefix);
+        foreach (var character in name)
+        {
+            builder.Append(((int)character).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        return builder.ToString();
+    }
+
+    private static string ProtectCustomPropertyDeclarationName(string name)
+        // These names are HtmlML's parser-transport declarations rather than
+        // authored custom properties. They must remain recognizable so
+        // CollectRules can restore the corresponding ordinary CSS property.
+        => name.StartsWith(ProtectedVariableShorthandPrefix, StringComparison.Ordinal)
+            ? name
+            : ProtectCustomPropertyName(name);
+
+    private static string RestoreCustomPropertyNames(string value)
+        => Regex.Replace(
+            value,
+            Regex.Escape(ProtectedCustomPropertyNamePrefix) + @"(?<hex>(?:[0-9a-f]{4})+)",
+            match =>
+            {
+                var hex = match.Groups["hex"].Value;
+                var builder = new StringBuilder(hex.Length / 4);
+                for (var index = 0; index < hex.Length; index += 4)
+                {
+                    builder.Append((char)int.Parse(
+                        hex.AsSpan(index, 4),
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture));
+                }
+                return builder.ToString();
+            },
+            RegexOptions.CultureInvariant);
+
     private static string NormalizePropertyName(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return string.Empty;
-        return name.Trim().ToLowerInvariant() switch
+        name = name.Trim();
+        if (name.StartsWith("--", StringComparison.Ordinal))
+        {
+            return CssCustomPropertySyntax.IsValidName(name) ? name : string.Empty;
+        }
+        return name.ToLowerInvariant() switch
         {
             "grid-gap" => "gap",
             "grid-row-gap" => "row-gap",

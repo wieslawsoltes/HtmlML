@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Font shorthand inherit preserves all inherited font components</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #host {
+    font-family: HtmlMlFontProbe, sans-serif;
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 30px;
+  }
+  #control {
+    font: inherit;
+    width: 180px;
+    height: 38px;
+    padding: 4px 8px;
+    border: 1px solid black;
+    box-sizing: border-box;
+  }
+</style>
+<body>
+<div id="host"><button id="control">Inherited control text</button></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false,
+    harness: null,
+    results: [],
+    errors: [],
+    diagnostics: []
+  };
+
+  function test(name, callback) {
+    try {
+      callback();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({
+        name,
+        status: "FAIL",
+        message: String(error && error.message || error),
+        stack: error && error.stack ? String(error.stack) : null
+      });
+    }
+  }
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  const host = document.getElementById("host");
+  const control = document.getElementById("control");
+
+  function assertInheritedFont(expectedWeight) {
+    const hostStyle = getComputedStyle(host);
+    const controlStyle = getComputedStyle(control);
+    assert(controlStyle.fontSize === hostStyle.fontSize && controlStyle.fontSize === "20px",
+      "font-size did not inherit: " + controlStyle.fontSize + " vs " + hostStyle.fontSize);
+    assert(controlStyle.lineHeight === hostStyle.lineHeight && controlStyle.lineHeight === "30px",
+      "line-height did not inherit: " + controlStyle.lineHeight + " vs " + hostStyle.lineHeight);
+    assert(controlStyle.fontWeight === expectedWeight,
+      "font-weight did not inherit: " + controlStyle.fontWeight);
+    assert(controlStyle.fontFamily === hostStyle.fontFamily
+        && controlStyle.fontFamily.includes("HtmlMlFontProbe"),
+      "font-family did not inherit: " + controlStyle.fontFamily
+        + " vs " + hostStyle.fontFamily);
+    assert(controlStyle.getPropertyValue("font-weight") === expectedWeight,
+      "getPropertyValue(font-weight) disagreed: "
+        + controlStyle.getPropertyValue("font-weight"));
+    assert(controlStyle.getPropertyValue("font-family").includes("HtmlMlFontProbe"),
+      "getPropertyValue(font-family) lost the inherited family: "
+        + controlStyle.getPropertyValue("font-family"));
+  }
+
+  test("font: inherit copies size, line-height, weight, and family into a control", () => {
+    assertInheritedFont("700");
+    const rect = control.getBoundingClientRect();
+    assert(rect.width === 180 && rect.height === 38,
+      "the inherited font disturbed the declared control border box: "
+        + rect.width + "x" + rect.height);
+  });
+
+  test("inherited font components remain live after an ancestor mutation", () => {
+    host.style.fontWeight = "400";
+    assertInheritedFont("400");
+  });
+
+  const failure = state.results.find(result => result.status !== "PASS");
+  state.harness = failure
+    ? { status: 1, message: failure.message, stack: failure.stack }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>
+</body>

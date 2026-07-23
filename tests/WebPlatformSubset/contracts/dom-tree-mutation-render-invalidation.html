@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DOM tree mutation removes vacated layout and paint</title>
+<style>
+  html, body { margin: 0; background: #fff; }
+  #chart { width: 320px; border: 4px solid #111; }
+  .pane { box-sizing: border-box; height: 80px; position: relative; }
+  #target { background: #cde; }
+  #source { background: #f99; border-top: 8px solid #900; }
+  #study { position: absolute; inset: 20px 30px; background: #06c; }
+</style>
+<div id="chart">
+  <div class="pane" id="target"></div>
+  <div class="pane" id="source"><div id="study"></div></div>
+</div>
+<script>
+  const chart = document.querySelector("#chart");
+  const target = document.querySelector("#target");
+  const source = document.querySelector("#source");
+  const study = document.querySelector("#study");
+
+  target.appendChild(study);
+  source.remove();
+
+  if (study.parentNode !== target
+      || source.parentNode !== null
+      || chart.children.length !== 1
+      || chart.getBoundingClientRect().height !== 88
+      || target.getBoundingClientRect().height !== 80) {
+    document.documentElement.style.background = "red";
+  }
+</script>

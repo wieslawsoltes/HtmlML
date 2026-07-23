@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Rounded multi-colour spinner border</title>
+<style>
+  html, body { margin: 0; background: white; }
+  #spinner {
+    position: absolute;
+    left: 40px;
+    top: 40px;
+    box-sizing: border-box;
+    width: 56px;
+    height: 56px;
+    border: 4px solid rgb(0, 188, 174);
+    border-right-color: rgb(128, 128, 128);
+    border-bottom-color: rgb(128, 128, 128);
+    border-radius: 50%;
+  }
+</style>
+<div id="spinner"></div>
+<script>
+  const state = window.__htmlMlWptState = {
+    complete: false, harness: null, results: [], errors: [], diagnostics: []
+  };
+  const check = (name, body) => {
+    try {
+      body();
+      state.results.push({ name, status: "PASS", message: null, stack: null });
+    } catch (error) {
+      state.results.push({ name, status: "FAIL", message: String(error.message || error),
+        stack: error.stack ? String(error.stack) : null });
+    }
+  };
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const spinner = document.getElementById("spinner");
+  const style = getComputedStyle(spinner);
+  check("square spinner retains a non-zero percentage corner radius", () => {
+    const rect = spinner.getBoundingClientRect();
+    assert(Math.abs(rect.width - 56) < .01 && Math.abs(rect.height - 56) < .01,
+      `spinner geometry differs: ${rect.width}x${rect.height}`);
+    assert(parseFloat(style.borderTopLeftRadius) > 0
+      && parseFloat(style.borderTopRightRadius) > 0
+      && parseFloat(style.borderBottomRightRadius) > 0
+      && parseFloat(style.borderBottomLeftRadius) > 0,
+      `resolved radii differ: ${style.borderRadius}`);
+  });
+  check("rounded spinner preserves per-side widths and two colour groups", () => {
+    assert([style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth,
+      style.borderLeftWidth].every(value => value === "4px"),
+      `border widths differ: ${style.borderWidth}`);
+    assert(style.borderTopColor === "rgb(0, 188, 174)"
+      && style.borderLeftColor === "rgb(0, 188, 174)",
+      `leading colours differ: ${style.borderTopColor}, ${style.borderLeftColor}`);
+    assert(style.borderRightColor === "rgb(128, 128, 128)"
+      && style.borderBottomColor === "rgb(128, 128, 128)",
+      `trailing colours differ: ${style.borderRightColor}, ${style.borderBottomColor}`);
+  });
+  state.harness = state.results.some(result => result.status !== "PASS")
+    ? { status: 1, message: "spinner primitive failed", stack: null }
+    : { status: 0, message: null, stack: null };
+  state.complete = true;
+</script>

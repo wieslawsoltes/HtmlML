@@ -33,13 +33,16 @@ public readonly record struct ExternalSyntheticEventData(
     string Type,
     bool Bubbles,
     bool Cancelable,
-    object? Detail);
+    object? Detail,
+    object? SourceEvent);
 
 public interface IExternalSyntheticEventAdapter
 {
     bool TryReadSyntheticEvent(object eventValue, out ExternalSyntheticEventData data);
 
     void SetDefaultPrevented(object eventValue, bool defaultPrevented);
+
+    void CompleteDispatch(object eventValue);
 }
 
 /// <summary>

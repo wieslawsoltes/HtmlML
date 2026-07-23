@@ -15,6 +15,53 @@ namespace JavaScript.Avalonia.Tests;
 public sealed class CssFlexWrapMarginAuthorityTests
 {
     [AvaloniaFact]
+    public void BlockMarginsAndConsecutiveFloatsHaveSingleFormattingContextAuthority()
+    {
+        var root = new CssLayoutPanel { Width = 300, Height = 120 };
+        CssLayout.SetNativeLayoutHotPath(root, true);
+        var window = new Window { Width = 300, Height = 120, Content = root };
+        using var browser = new AvaloniaBrowserHost(window, enableTargetOnlyInlineStyles: true);
+        var document = browser.Document;
+        var style = HostTestUtilities.GetElement(document.createElement("style"));
+        style.textContent = """
+            html, body { margin: 0; }
+            .host { width: 100px; height: 12px; }
+            .item { width: 48px; height: 10px; border: 1px solid blue; }
+            .offset { margin-left: 80px; }
+            .left { float: left; }
+            .right { float: right; }
+            """;
+        document.head.appendChild(style);
+
+        var marginHost = CreateBlockHost(document, "item offset", 1);
+        var leftHost = CreateBlockHost(document, "item left", 2);
+        var rightHost = CreateBlockHost(document, "item right", 2);
+
+        try
+        {
+            window.Show();
+            document.EnsureStylesCurrent();
+            Dispatcher.UIThread.RunJobs();
+
+            AssertBlockItem(marginHost, 0, x: 80, y: 0, width: 50, height: 12);
+            AssertBlockItem(leftHost, 0, x: 0, y: 0, width: 50, height: 12);
+            AssertBlockItem(leftHost, 1, x: 50, y: 0, width: 50, height: 12);
+            AssertBlockItem(rightHost, 0, x: 50, y: 0, width: 50, height: 12);
+            AssertBlockItem(rightHost, 1, x: 0, y: 0, width: 50, height: 12);
+            Assert.Equal(CssFloat.Left, CssLayout.GetFloat(leftHost.Items[0].Control));
+            Assert.Equal(CssFloat.Right, CssLayout.GetFloat(rightHost.Items[0].Control));
+            Assert.Equal(
+                "left",
+                document.getComputedStyle(leftHost.Items[0]).getPropertyValue("float"));
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
+    [AvaloniaFact]
     public void WrappedFlexMarginsAffectLineCollectionWithoutDeflatingTheItemTwice()
     {
         var root = new CssLayoutPanel { Width = 220, Height = 100 };
@@ -101,6 +148,41 @@ public sealed class CssFlexWrapMarginAuthorityTests
         }
         HostTestUtilities.GetElement(document.body).appendChild(host);
         return new Fixture(host, items);
+    }
+
+    private static Fixture CreateBlockHost(
+        AvaloniaDomDocument document,
+        string itemClass,
+        int itemCount)
+    {
+        var host = HostTestUtilities.GetElement(document.createElement("div"));
+        host.className = "host";
+        var items = new AvaloniaDomElement[itemCount];
+        for (var index = 0; index < itemCount; index++)
+        {
+            var item = HostTestUtilities.GetElement(document.createElement("div"));
+            item.className = itemClass;
+            host.appendChild(item);
+            items[index] = item;
+        }
+        HostTestUtilities.GetElement(document.body).appendChild(host);
+        return new Fixture(host, items);
+    }
+
+    private static void AssertBlockItem(
+        Fixture fixture,
+        int index,
+        double x,
+        double y,
+        double width,
+        double height)
+    {
+        var host = fixture.Host.getBoundingClientRect();
+        var item = fixture.Items[index].getBoundingClientRect();
+        Assert.Equal(x, item.left - host.left, 9);
+        Assert.Equal(y, item.top - host.top, 9);
+        Assert.Equal(width, item.width, 9);
+        Assert.Equal(height, item.height, 9);
     }
 
     private static void AssertItem(
