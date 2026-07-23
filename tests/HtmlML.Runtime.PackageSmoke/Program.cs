@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using HtmlML.Core;
 using JavaScript.Avalonia;
 
@@ -30,6 +31,13 @@ foreach (var required in new[] { nativePath, icuPath, manifestPath })
 var library = NativeLibrary.Load(nativePath);
 try
 {
+    using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+    if (!manifest.RootElement.TryGetProperty("abiVersion", out var manifestAbiProperty)
+        || !manifestAbiProperty.TryGetUInt32(out var manifestAbiVersion))
+    {
+        return Fail("The native runtime manifest does not contain a valid numeric 'abiVersion'.");
+    }
+
     var export = NativeLibrary.GetExport(library, "htmlml_engine_get_abi_version");
     var getAbiVersion = Marshal.GetDelegateForFunctionPointer<GetAbiVersion>(export);
     var abiVersion = getAbiVersion();
@@ -37,9 +45,15 @@ try
     {
         return Fail($"The native runtime reported ABI {abiVersion}; expected 2.");
     }
+    if (manifestAbiVersion != abiVersion)
+    {
+        return Fail(
+            $"The native runtime manifest declares ABI {manifestAbiVersion}, " +
+            $"but the library exports ABI {abiVersion}.");
+    }
     Console.WriteLine(
         $"HtmlML package smoke: pass; backend={typeof(AvaloniaBrowserHost).Assembly.GetName().Name}; " +
-        $"runtime={Path.GetFileName(nativePath)}; abi={abiVersion}");
+        $"runtime={Path.GetFileName(nativePath)}; abi={abiVersion}; manifestAbi={manifestAbiVersion}");
 }
 finally
 {
