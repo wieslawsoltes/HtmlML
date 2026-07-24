@@ -57,7 +57,16 @@ if [[ -z "$v8_root" ]]; then
   mkdir -p "$v8_workspace"
 
   if [[ ! -d "$depot_tools/.git" ]]; then
-    git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$depot_tools"
+    clone_attempt=1
+    while ! git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$depot_tools"; do
+      if ((clone_attempt >= 3)); then
+        echo "Unable to clone depot_tools after $clone_attempt attempts." >&2
+        exit 1
+      fi
+      echo "depot_tools clone failed; retrying (attempt $((clone_attempt + 1))/3)." >&2
+      rm -rf "$depot_tools"
+      clone_attempt=$((clone_attempt + 1))
+    done
   fi
   export PATH="$depot_tools:$PATH"
   if [[ ! -f "$depot_tools/python3_bin_reldir.txt" ]]; then

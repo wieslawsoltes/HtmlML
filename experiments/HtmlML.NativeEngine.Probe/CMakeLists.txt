@@ -116,12 +116,19 @@ else()
 endif()
 
 if(MSVC)
+    # The pinned V8 Windows monolith is built with the static MSVC runtime
+    # (/MT). Match it here so the DLL does not mix CRT/STL implementations
+    # and fail with LNK2038/LNK2005 at link time.
+    set_property(TARGET htmlml_native_engine PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     # MSVC reports the historical C++98 value through __cplusplus unless this
     # conformance switch is enabled. V8 checks __cplusplus directly when
     # enforcing its C++20 embedder requirement.
     target_compile_options(htmlml_native_engine PRIVATE
         /W4 /permissive- /GR- /wd4996 /std:c++20 /Zc:__cplusplus)
     if(TARGET htmlml_native_engine_tests)
+        set_property(TARGET htmlml_native_engine_tests PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
         target_compile_options(htmlml_native_engine_tests PRIVATE
             /std:c++20 /Zc:__cplusplus)
     endif()
